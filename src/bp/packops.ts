@@ -22,13 +22,21 @@ export type RenameCode = 'OK' | 'EMPTY' | 'UNCHANGED' | 'MISSING';
 /** pack 显示名长度上限 */
 export const MAX_PACK_NAME = 48;
 
-/** 新建 pack 的最小可用 `definePack` 骨架：一个 struct + 一个 structNode */
+/** 新建 pack 的最小可用骨架：一个结构体、一条链表 */
 export const TEMPLATE_PACK_SOURCE = `/// <reference path="../types/memlink-bp.d.ts" />
 
+// 结构体：名字、总长度、字段（偏移从 0 开始）
 const Head = struct('Head', 8, [
   u16('magic', 0, { format: 'hex' }),
   u16('version', 2),
   u32('size', 4),
+]);
+
+// 链表节点：next 是下一条记录的地址，0 表示结束
+const Item = struct('Item', 12, [
+  u32('next', 0),
+  u32('id', 4),
+  u32('value', 8),
 ]);
 
 export default definePack({
@@ -36,9 +44,18 @@ export default definePack({
   endian: 'little',
   pointerSize: 4,
   constants: {},
-  types: { Head },
+  types: { Head, Item },
   nodes: {
     head: structNode(Head, { label: 'Head 头部' }),
+    items: listNode(Item, {
+      label: 'Item 链表',
+      // 返回下一条的地址；返回 null 表示到此结束
+      next: (e) => {
+        const v = Number(e.value.next);
+        return v > 0 ? v : null;
+      },
+      max: 256,
+    }),
   },
 });
 `;
