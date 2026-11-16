@@ -7,6 +7,7 @@
 import type { Endian, Problem } from '../core/types';
 import type { FieldDef, TypeDef } from '../core/pack';
 import type { Memory } from '../core/mem';
+import type { AssetTable } from './assets';
 
 export type PortType =
   | 'number'
@@ -182,6 +183,8 @@ export interface BPDoc {
 
 /** Runtime value carried on a `buffer` edge. */
 export interface BufferValue {
+  /** 内容哈希（见 assets.ts）；名称与基址都不参与身份 */
+  assetId: string;
   name: string;
   base: number;
   bytes: Uint8Array;
@@ -215,6 +218,8 @@ export interface InstanceView {
 /** Where a node got its buffer from, and the chain it inherited through. */
 export interface SourceInfo {
   buffer?: BufferValue;
+  /** 实际读到的字节的身份；与上游 File 一致（内容相同即相同） */
+  assetId?: string;
   /** id of the File node that actually supplied the bytes */
   fileId?: string;
   /** override = pinned in the inspector, explicit = a source wire,
@@ -284,6 +289,8 @@ export interface BPResult {
   sources: Map<string, SourceInfo>;
   /** node id -> input port -> value actually used (mirrors wires into the UI) */
   inputs: Map<string, Record<string, InputValue>>;
+  /** 本次求值登记的全部资产：内容哈希 → 共享字节 */
+  assets: AssetTable;
   problems: Problem[];
   ms: number;
 }

@@ -7,7 +7,8 @@ import Canvas, { type CanvasApi, type DragPreview } from './Canvas';
 import Inspector from './Inspector';
 import { evaluateGraph, valueAsBuffer } from './eval';
 import { loadBlueprintPack } from './load';
-import { canConnect, displayTitle, dropPosition, NODE_WIDTH, type BPEdge, type BPNode, type BPResult, type BufferValue } from './types';
+import { canConnect, displayTitle, dropPosition, NODE_WIDTH, type BPEdge, type BPNode, type BPResult } from './types';
+import { uniqueBuffers } from './assets';
 import { builtinDefaults, getBuiltin, inheritOptions } from './builtins';
 import {
   backLabel, canBack, canForward, emptyNav, forwardLabel, goBack, goForward, pushNav,
@@ -229,20 +230,8 @@ export default function BlueprintApp() {
     [result, packIssues],
   );
 
-  /** 跟随可用的缓冲区（同一文件可能被多个节点共享，按内容去重） */
-  const buffers = useMemo(() => {
-    const seen = new Set<string>();
-    const out: BufferValue[] = [];
-    for (const info of fullResult.sources.values()) {
-      const b = info.buffer;
-      if (!b) continue;
-      const key = `${b.name}:${b.base}:${b.bytes.length}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(b);
-    }
-    return out;
-  }, [fullResult]);
+  /** 跟随可用的缓冲区（同一份字节可能被多个节点共享；基址不同则是两条引用） */
+  const buffers = useMemo(() => uniqueBuffers(fullResult.sources.values()), [fullResult]);
 
   /**
    * 画布用它判断一个来源能否接进「数据源」：真正携带文件的节点才可以。

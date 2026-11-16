@@ -3,6 +3,7 @@ import demoSource from '../samples/demo.bp.ts?raw';
 import { loadBlueprintPack } from '../src/bp/load';
 import type { BPNode, BufferValue, InstanceView, NodeView } from '../src/bp/types';
 import { brandInstance } from '../src/bp/types';
+import { assetIdOf, uniqueBuffers } from '../src/bp/assets';
 import {
   bufferIssue, buildFollowItems, elementFollowItem, followAddress, followBuiltinIds, followHint,
   inferFollowType, knownTypesAt,
@@ -14,7 +15,8 @@ function inst(addr: number, typeName = 'Sqe', size = 64): InstanceView {
 }
 
 function buf(name: string, base: number, size: number): BufferValue {
-  return { name, base, bytes: new Uint8Array(size) };
+  const bytes = new Uint8Array(size);
+  return { assetId: assetIdOf(bytes), name, base, bytes };
 }
 
 describe('followAddress', () => {
@@ -183,5 +185,33 @@ describe('在此地址解析：类型推断', () => {
     expect(at.get(0)).toMatchObject({ packId: 'p', typeName: 'Header' });
     expect(at.get(0x130)).toMatchObject({ packId: 'p', typeName: 'Entry' });
     expect(at.get(0x1a8)).toMatchObject({ packId: 'p', typeName: 'Entry' });
+  });
+});
+
+describe('跟随地址的缓冲区去重', () => {
+  const bytes = new Uint8Array([1, 2, 3]);
+  const id = assetIdOf(bytes);
+  const info = (base: number, name = 'a.bin') => ({
+    mode: 'file' as const,
+    chain: ['f'],
+    buffer: { assetId: id, name, base, bytes },
+  });
+
+  it('同内容同基址合并为一条（重命名不影响身份）', () => {
+    expect(uniqueBuffers([info(0), info(0, 'b.bin')])).toHaveLength(1);
+  });
+
+  it('同内容不同基址各留一条', () => {
+    const out = uniqueBuffers([info(0), info(0x1000)]);
+    expect(out.map((b) => b.base)).toEqual([0, 0x1000]);
+  });
+
+  it('同名同长不同内容不互相顶替', () => {
+    const other = new Uint8Array([3, 2, 1]);
+    const out = uniqueBuffers([
+      info(0),
+      { mode: 'file', chain: ['g'], buffer: { assetId: assetIdOf(other), name: 'a.bin', base: 0, bytes: other } },
+    ]);
+    expect(out).toHaveLength(2);
   });
 });

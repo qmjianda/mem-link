@@ -35,6 +35,7 @@ import type {
   SourceInfo, StoredMemory,
 } from './types';
 import { fieldPortType, fieldPorts, builtinLabel, displayTitle, isInstanceView, brandInstance, looksLikeInstance } from './types';
+import { createAssetTable, assetIdOf } from './assets';
 import { getBuiltin, makeBuiltinCtx } from './builtins';
 import { base64ToBytes } from './doc';
 
@@ -92,9 +93,12 @@ function isBufferValue(v: unknown): v is BufferValue {
  */
 export function valueAsBuffer(v: unknown): BufferValue | undefined {
   if (typeof v === 'string') {
-    return { name: `字符串 ${v.length} 字符`, base: 0, bytes: new TextEncoder().encode(v) };
+    const bytes = new TextEncoder().encode(v);
+    return { assetId: assetIdOf(bytes), name: `字符串 ${v.length} 字符`, base: 0, bytes };
   }
-  if (v instanceof Uint8Array) return { name: `字节 ${v.length} B`, base: 0, bytes: v };
+  if (v instanceof Uint8Array) {
+    return { assetId: assetIdOf(v), name: `字节 ${v.length} B`, base: 0, bytes: v };
+  }
   // 整块缓冲区（File 的 buffer 输出）不在这里接管：它要沿文件来源路径
   // 走，才能保留 fileId 与「上游冲突」的判断。
   return undefined;
@@ -464,12 +468,15 @@ export function evaluateGraph(
   };
 
   /* ---------------------------------------------------------- source trace */
+  const assets = createAssetTable();
   const fileBuffers = new Map<string, BufferValue>();
   const bufferOfFile = (n: BPNode): BufferValue | undefined => {
     if (!n.source) return undefined;
     const hit = fileBuffers.get(n.id);
     if (hit) return hit;
-    const value: BufferValue = { name: n.source.name, base: n.source.base, bytes: decodeBuffer(n.source) };
+    // 同内容只保留一份字节：第二次解码的数组被资产表里的第一份替换掉
+    const asset = assets.ensure(decodeBuffer(n.source));
+    const value: BufferValue = { assetId: asset.id, name: n.source.name, base: n.source.base, bytes: asset.bytes };
     fileBuffers.set(n.id, value);
     return value;
   };
@@ -621,7 +628,7 @@ export function evaluateGraph(
     }
     ports.set(node.id, portsFor(node, packs, view));
     const info = sourceOf(node);
-    sources.set(node.id, info);
+    sources.set(node.id, info.buffer?.assetId ? { ...info, assetId: info.buffer.assetId } : info);
     if (info.conflict && !isFile(node)) {
       add(node, 'warn', '数据源：上游连到了不同的输入文件', 'SOURCE_CONFLICT',
         `候选 ${(info.candidates ?? []).join('、')}；当前使用 ${info.buffer?.name ?? '?'}`);
@@ -729,8 +736,11 @@ export function evaluateGraph(
             out.base = 0;
             out.size = 0;
           } else {
+            // 与 bufferOfFile 共用同一份资产：File 节点的 buffer 输出
+            // 和"数据源继承"必须指向同一个 assetId，否则跟随列表会出现两条
             const bytes = decodeBuffer(src);
-            const value: BufferValue = { name: src.name, base: src.base, bytes };
+            const asset = assets.ensure(bytes);
+            const value: BufferValue = { assetId: asset.id, name: src.name, base: src.base, bytes: asset.bytes };
             out[SOURCE_PORT] = value;
             out.base = src.base;
             out.size = bytes.length;
@@ -1054,7 +1064,7 @@ export function evaluateGraph(
     );
   }
 
-  return { outputs, views, ports, sources, inputs: inputValues, problems, ms: performance.now() - started };
+  return { outputs, views, ports, sources, inputs: inputValues, assets, problems, ms: performance.now() - started };
 }
 
 /** Rough node height for layout; the canvas can use this for auto placement. */

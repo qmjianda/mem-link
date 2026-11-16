@@ -8,11 +8,13 @@ import {
   builtinSubtitle, evalExpression, getBuiltin, inheritOptions, makeBuiltinCtx, parseOffsetChain,
 } from '../src/bp/builtins';
 import { evaluateGraph, portsFor } from '../src/bp/eval';
+import { assetIdOf } from '../src/bp/assets';
 import { bytesToBase64 } from '../src/bp/doc';
 import type { BPNode, BufferValue } from '../src/bp/types';
 
 function buffer(bytes: number[] | Uint8Array, base = 0): BufferValue {
-  return { name: 't.bin', base, bytes: bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes) };
+  const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  return { assetId: assetIdOf(arr), name: 't.bin', base, bytes: arr };
 }
 function ctx(bytes: number[], params: Record<string, string> = {}, base = 0) {
   return makeBuiltinCtx(buffer(bytes, base), params);
@@ -155,7 +157,7 @@ describe('built-in evaluation', () => {
       for (let i = 0; i < 8; i++) img[off + i] = Number((BigInt(v) >> BigInt(8 * i)) & 0xffn);
     };
     [0x1400, 0x1600, 0x1800, 0x1a00, 0x1c00].forEach((a, i) => put(0x100 + i * 8, a));
-    const bctx = makeBuiltinCtx({ name: 't.bin', base: 0x1000, bytes: img }, { pageSize: '512' });
+    const bctx = makeBuiltinCtx({ assetId: assetIdOf(img), name: 't.bin', base: 0x1000, bytes: img }, { pageSize: '512' });
     const prp = getBuiltin('prp')!.run!({ prp1: 0x1200, prp2: 0x1100, count: 6 }, bctx);
     expect(prp.pages).toBe(6);
     expect(prp.p0).toBe(0x1200);

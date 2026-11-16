@@ -19,8 +19,9 @@ const cacheDir = join(root, '.cache', 'bench');
 const bundlePath = join(cacheDir, 'eval-bundle.mjs');
 
 const SIZES = [50, 200, 800];
-const RUNS = 20;
-const WARMUP = 3;
+// 20 次时 p95 就是"第二慢的一次"，抖动可达 ±1 ms；50 次让 p50/p95 稳定下来
+const RUNS = 50;
+const WARMUP = 5;
 
 async function loadEvaluator() {
   mkdirSync(cacheDir, { recursive: true });

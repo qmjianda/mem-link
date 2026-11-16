@@ -19,12 +19,12 @@
 
 ## 3. 资产身份
 
-- [ ] 3.1 新增同步 64 位 FNV-1a 哈希函数，输出 `a1:` 前缀的 16 位十六进制串。验证：用例覆盖空输入、已知向量、跨块输入一致性；1 MiB 输入耗时断言小于 10 ms。
-- [ ] 3.2 引入运行时 `AssetTable`，`BufferValue` 增加 `assetId`，`bufferOfFile` 按节点缓存哈希结果。验证：用例证明「同名同长不同内容 → 不同 assetId」与「同内容两节点 → 同 assetId 且只有一份 `Uint8Array`」。
-- [ ] 3.3 跟随地址列表改用 `assetId@base` 去重，替换 `BlueprintApp.tsx` 的 `${name}:${base}:${length}` 键。验证：`tests/follow.test.ts` 新增两条用例——同内容不同基址保留两条、同内容同基址合并为一条。
-- [ ] 3.4 旧文档与旧缓存中的内联 base64 在载入时自动登记为资产，导出仍内联。验证：`tests/persist.test.ts` 覆盖旧 payload 载入后 `AssetTable` 非空；打开 `samples/demo.blueprint.json` 后跟随列表可用。
-- [ ] 3.5 `SourceInfo` 暴露 `assetId` 与资产名称，供检查器「数据源」区块显示。验证：用例断言下游节点读到的 `assetId` 与上游 File 一致。
-- [ ] 3.6 在 `docs/` 增加资产模型说明（身份规则、基址不属于身份、运行时表与文档内联的关系）。验证：文档被 `docs/README.md` 索引收录且描述与实现一致。
+- [x] 3.1 新增同步 64 位 FNV-1a 哈希函数，输出 `a1:` 前缀的 16 位十六进制串。验证：用例覆盖空输入、已知向量、跨块输入一致性；1 MiB 输入耗时断言小于 10 ms。
+- [x] 3.2 引入运行时 `AssetTable`，`BufferValue` 增加 `assetId`，`bufferOfFile` 按节点缓存哈希结果。验证：用例证明「同名同长不同内容 → 不同 assetId」与「同内容两节点 → 同 assetId 且只有一份 `Uint8Array`」。
+- [x] 3.3 跟随地址列表改用 `assetId@base` 去重，替换 `BlueprintApp.tsx` 的 `${name}:${base}:${length}` 键。验证：`tests/follow.test.ts` 新增两条用例——同内容不同基址保留两条、同内容同基址合并为一条。
+- [x] 3.4 旧文档与旧缓存中的内联 base64 在载入时自动登记为资产，导出仍内联。验证：`tests/persist.test.ts` 覆盖旧 payload 载入后 `AssetTable` 非空；打开 `samples/demo.blueprint.json` 后跟随列表可用。
+- [x] 3.5 `SourceInfo` 暴露 `assetId` 与资产名称，供检查器「数据源」区块显示。验证：用例断言下游节点读到的 `assetId` 与上游 File 一致。
+- [x] 3.6 在 `docs/` 增加资产模型说明（身份规则、基址不属于身份、运行时表与文档内联的关系）。验证：文档被 `docs/README.md` 索引收录且描述与实现一致。
 
 ## 4. 数据源解析解耦
 
