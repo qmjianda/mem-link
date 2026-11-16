@@ -262,6 +262,17 @@ export interface InputValue {
   invalid?: boolean;
 }
 
+/**
+ * 截断的位置信息：区分"恰好等于上限且自然结束"（不产生本对象）与
+ * "因上限停止"。`unit` 决定 `at` 是字节地址还是元素下标。
+ */
+export interface Truncation {
+  limit: number;
+  at: number;
+  unit: 'index' | 'address';
+  canContinue: boolean;
+}
+
 export type NodeView =
   | { kind: 'file'; name: string; size: number; base: number; error?: string }
   | { kind: 'number'; value: number; error?: string }
@@ -271,10 +282,11 @@ export type NodeView =
       items: InstanceView[];
       count: number;
       truncated?: boolean;
+      trunc?: Truncation;
       cycle?: boolean;
       error?: string;
     }
-  | { kind: 'array'; items: InstanceView[]; count: number; error?: string }
+  | { kind: 'array'; items: InstanceView[]; count: number; truncated?: boolean; trunc?: Truncation; error?: string }
   | { kind: 'element'; inst?: InstanceView; error?: string }
   | { kind: 'calc'; outputs: Record<string, unknown>; detail?: string; error?: string };
 

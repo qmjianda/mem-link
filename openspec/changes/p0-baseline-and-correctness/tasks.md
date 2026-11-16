@@ -37,19 +37,19 @@
 
 ## 5. 截断语义
 
-- [ ] 5.1 列表分支改用循环下标判定是否走完（`i === max`），删除 `items.length >= max` 判断。验证：用例「上限 256、链恰好 256 项且末项 next 为空」断言 `truncated` 为假。
-- [ ] 5.2 新增 `Truncation { limit, at, unit, canContinue }` 并挂到列表/数组视图与 `SourceInfo` 之外的求值结果上。验证：用例断言截断时 `limit=256`、`at` 为未访问的下一地址、`unit='address'`、`canContinue` 为真。
-- [ ] 5.3 数组分支对齐同一语义：`count > limit` 才算截断，`at` 为未读到的下标、`unit='index'`。验证：用例覆盖 `count = limit` 与 `count = limit + 1` 两种边界。
-- [ ] 5.4 画布与检查器的截断提示区分「自然结束」与「因上限停止」，后者显示可继续位置。验证：截断用例对应的视图在检查器中显示上限与位置文案；自然结束不显示任何截断提示。
-- [ ] 5.5 截断产生结构化问题条目（原因码 `TRUNCATED`，携带 `limit`/`at`）。验证：`tests/problems.test.ts` 断言问题条目字段，且不再依赖文案匹配。
+- [x] 5.1 列表分支改用循环下标判定是否走完（`i === max`），删除 `items.length >= max` 判断。验证：用例「上限 256、链恰好 256 项且末项 next 为空」断言 `truncated` 为假。
+- [x] 5.2 新增 `Truncation { limit, at, unit, canContinue }` 并挂到列表/数组视图与 `SourceInfo` 之外的求值结果上。验证：用例断言截断时 `limit=256`、`at` 为未访问的下一地址、`unit='address'`、`canContinue` 为真。
+- [x] 5.3 数组分支对齐同一语义：`count > limit` 才算截断，`at` 为未读到的下标、`unit='index'`。验证：用例覆盖 `count = limit` 与 `count = limit + 1` 两种边界。
+- [x] 5.4 画布与检查器的截断提示区分「自然结束」与「因上限停止」，后者显示可继续位置。验证：截断用例对应的视图在检查器中显示上限与位置文案；自然结束不显示任何截断提示。
+- [x] 5.5 截断产生结构化问题条目（原因码 `TRUNCATED`，携带 `limit`/`at`）。验证：`tests/problems.test.ts` 断言问题条目字段，且不再依赖文案匹配。
 
 ## 6. 问题结构化
 
-- [ ] 6.1 扩展 `Problem`：新增 `code`、`nodeId?`、`port?`、`addr?`、`fix?`；`add()` 不再把原因码拼进 `detail`。验证：`pnpm exec tsc --noEmit` 通过；用例断言 `p.code === 'NO_SOURCE'` 且 `detail` 不以原因码开头。
+- [x] 6.1 扩展 `Problem`：新增 `code`、`nodeId?`、`port?`、`addr?`、`fix?`；`add()` 不再把原因码拼进 `detail`。验证：`pnpm exec tsc --noEmit` 通过；用例断言 `p.code === 'NO_SOURCE'` 且 `detail` 不以原因码开头。
 - [ ] 6.2 逐个更新 `add()` 调用点，补齐原因码与定位信息（端口、地址）。验证：源码中不再存在 `${code} · ${detail}` 形式；所有调用点都传 `code`。
 - [ ] 6.3 问题面板支持按原因码过滤与点击定位（选中节点、高亮地址所在字节）。验证：`NO_SOURCE` 三条问题可一次筛出；点击带 `addr` 的问题后画布选中对应节点且字节高亮。
 - [ ] 6.4 保留 `detail` 兼容读取一版：旧缓存与旧导出中的问题文本仍可展示。验证：`tests/problems.test.ts` 覆盖只带 `detail` 的旧条目仍能渲染出消息。
-- [ ] 6.5 在 `docs/` 增加原因码表，与 `ProblemCode` 联合类型逐项对应。验证：文档条目数与联合类型成员数一致，且每条有触发条件说明。
+- [x] 6.5 在 `docs/` 增加原因码表，与 `ProblemCode` 联合类型逐项对应。验证：文档条目数与联合类型成员数一致，且每条有触发条件说明。
 
 ## 7. 信任边界
 

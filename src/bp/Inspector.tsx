@@ -399,7 +399,12 @@ function NodeBody({
       <>
         <div className="bp-kv"><span>元素</span><b className="mono">{view.count}</b></div>
         {view.kind === 'list' && view.cycle && <div className="bp-banner">检测到回环，已停止遍历</div>}
-        {view.kind === 'list' && view.truncated && <div className="bp-banner">超过最大条数，已截断</div>}
+        {view.trunc && (
+          <div className="bp-banner">
+            {`达到上限 ${view.trunc.limit} 条，可继续：`}
+            {view.trunc.unit === 'address' ? `0x${view.trunc.at.toString(16)}` : `第 ${view.trunc.at} 项`}
+          </div>
+        )}
         {view.error && <div className="bp-banner">{view.error}</div>}
         <div className="bp-items">
           {view.items.map((it, i) => (

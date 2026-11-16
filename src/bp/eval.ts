@@ -32,7 +32,7 @@ import type { Problem } from '../core/types';
 import type {
   BPEdge, BPNode, BlueprintPack, BPResult, EntryView, EvalCtx, FieldView,
   BufferValue, InputValue, InstanceView, NodeDef, NodeView, PortSpec, PortType,
-  SourceInfo, StoredMemory,
+  SourceInfo, StoredMemory, Truncation,
 } from './types';
 import { fieldPortType, fieldPorts, builtinLabel, displayTitle, isInstanceView, brandInstance, looksLikeInstance } from './types';
 import { createAssetTable, assetIdOf } from './assets';
@@ -420,7 +420,6 @@ export type ProblemCode =
   | 'CYCLE'
   | 'NO_SOURCE'
   | 'BAD_INPUT'
-  | 'NO_INSTANCE'
   | 'INDEX_OUT_OF_RANGE'
   | 'UNKNOWN_NODE'
   | 'NODE_MISSING'
@@ -429,6 +428,7 @@ export type ProblemCode =
   | 'OUT_OF_BOUNDS'
   | 'SOURCE_CONFLICT'
   | 'INVALID_VALUE'
+  | 'TRUNCATED'
   | 'PORT_MISSING';
 
 export function evaluateGraph(
@@ -454,8 +454,8 @@ export function evaluateGraph(
   const state = new Map<string, 0 | 1 | 2>();
 
   /**
-   * 问题条目：`message` 只写「对象：事实」，可执行建议与稳定原因码放 `detail`。
-   * 原因码是测试与问题面板的稳定锚点（`PORT_MISSING` / `NO_SOURCE` …）。
+   * 问题条目：`message` 只写「对象：事实」，可执行建议放 `detail`，原因码放
+   * `code` 字段（不再拼进字符串）。UI 与测试都用 `code` 过滤。
    */
   const add = (
     node: BPNode,
@@ -464,7 +464,7 @@ export function evaluateGraph(
     code: ProblemCode,
     detail?: string,
   ) => {
-    problems.push({ severity, nodeKey: node.id, message, detail: detail ? `${code} · ${detail}` : code });
+    problems.push({ severity, code, nodeKey: node.id, message, ...(detail ? { detail } : {}) });
   };
 
   /* ---------------------------------------------------------- source trace */
@@ -921,9 +921,9 @@ export function evaluateGraph(
           return out;
         }
         const items: InstanceView[] = [];
-        let truncated = false;
         let cycle = false;
         let error: string | undefined;
+        let trunc: Truncation | undefined;
 
         if (def.kind === 'array') {
           const count = def.count ?? requireNumber('count');
@@ -941,14 +941,21 @@ export function evaluateGraph(
               break;
             }
           }
-          if (count > limit) truncated = true;
-          setView({ kind: 'array', items, count: items.length, error });
+          // 只有"没被错误打断、且请求数量超过上限"才算因上限停止
+          if (!error && count > limit) {
+            trunc = { limit, at: limit, unit: 'index', canContinue: true };
+            add(node, 'warn', `数组：达到上限 ${limit} 项`, 'TRUNCATED', `从第 ${limit} 项继续`);
+          }
+          setView({ kind: 'array', items, count: items.length, truncated: !!trunc, trunc, error });
         } else {
           const seen = new Set<number>();
           let addr = address;
           const max = Math.min(def.max ?? 4096, 4096);
           const nulls = new Set(def.nulls ?? []);
-          for (let i = 0; i < max; i++) {
+          // 用下标判定是否走完：循环正常结束说明"还有下一项但被上限拦住"，
+          // 任何 break（本轮结束/回环/出错）都意味着不是因上限停止。
+          let i = 0;
+          for (; i < max; i++) {
             if (seen.has(addr)) { cycle = true; break; }
             seen.add(addr);
             let entry: EntryView;
@@ -972,8 +979,11 @@ export function evaluateGraph(
             if (nulls.has(n)) break;
             addr = n;
           }
-          if (items.length >= max) truncated = true;
-          setView({ kind: 'list', items, count: items.length, truncated, cycle, error });
+          if (i === max) {
+            trunc = { limit: max, at: addr, unit: 'address', canContinue: true };
+            add(node, 'warn', `列表：达到上限 ${max} 条`, 'TRUNCATED', `从 0x${addr.toString(16)} 继续`);
+          }
+          setView({ kind: 'list', items, count: items.length, truncated: !!trunc, trunc, cycle, error });
         }
 
         out.list = items;

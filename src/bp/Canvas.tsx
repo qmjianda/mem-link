@@ -260,7 +260,10 @@ function metaFor(
     const hidden = view.count - dyn.length;
     if (hidden > 0) footer += `还有 ${hidden} 项`;
     if (view.kind === 'list' && view.cycle) footer += `${footer ? ' · ' : ''}回环`;
-    if (view.kind === 'list' && view.truncated) footer += `${footer ? ' · ' : ''}已截断`;
+    if (view.trunc) {
+      const where = view.trunc.unit === 'address' ? `0x${view.trunc.at.toString(16)}` : `第 ${view.trunc.at} 项`;
+      footer += `${footer ? ' · ' : ''}截断@${where}`;
+    }
     if (view.error) { footer += `${footer ? ' · ' : ''}${view.error}`; footerError = true; }
   } else if (view && 'error' in view && view.error) {
     footer = view.error;

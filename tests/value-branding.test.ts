@@ -66,7 +66,7 @@ describe('计算节点返回伪元素', () => {
   const result = evaluateGraph(nodes, edges, new Map([['p1', fakePack()]]));
 
   it('产生 INVALID_VALUE 告警并定位到产出节点', () => {
-    const p = result.problems.find((x) => x.detail?.includes('INVALID_VALUE'));
+    const p = result.problems.find((x) => x.code === 'INVALID_VALUE');
     expect(p?.severity).toBe('warn');
     expect(p?.nodeKey).toBe('fake');
   });
@@ -74,7 +74,7 @@ describe('计算节点返回伪元素', () => {
   it('不按 addr 解码：下游把它当成非法数字而不是 0x1234', () => {
     // 0x1234 一旦被当成地址，expr 的 a 会等于它；这里必须拿不到这个值
     expect(result.outputs.get('calc')?.value).not.toBe(0x1234);
-    expect(result.problems.some((p) => p.nodeKey === 'calc' && p.detail?.includes('BAD_INPUT'))).toBe(true);
+    expect(result.problems.some((p) => p.nodeKey === 'calc' && p.code === 'BAD_INPUT')).toBe(true);
   });
 
   it('降级后的值不再携带可继续解码的地址', () => {

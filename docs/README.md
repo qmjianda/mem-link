@@ -8,6 +8,7 @@
 | [`data-model-review.md`](data-model-review.md) | 维护者 | 数据模型审阅：对象清单、访问路径、16 条问题（D1–D16，带 `file:line`）、目标五层模型、迁移步骤与验收指标 | 改求值器、持久化或选择模型之前 |
 | [`value-branding.md`](value-branding.md) | 维护者 / pack 作者 | 元素值为什么用 WeakSet 品牌、未登记对象如何降级、升级后哪些 pack 会开始告警 | 写 `calcNode` 或排查"字段全错"之前 |
 | [`assets.md`](assets.md) | 维护者 | 资产 id 如何由内容决定、基址为什么不算身份、运行时资产表与文档内联的关系 | 改载入、去重、跟随地址之前 |
+| [`problem-codes.md`](problem-codes.md) | 维护者 / pack 作者 | 13 个稳定原因码的触发条件与定位能力，以及"哪些还靠正则/文案"的已知不足 | 加原因码、写断言、排查告警之前 |
 | [`optimization-research.md`](optimization-research.md) | 产品 / 架构 | 商业化方向调研：竞品坐标、六大优化方向、目标架构、三阶段路线图、定价与 UI 方向 | 排优先级、对外讲路线时 |
 | [`optimization-plan.md`](optimization-plan.md) | 维护者 | 把上述两份分析与代码复核结果合并后的可执行方案：12 项缺口、六周顺序、验收指标、不做清单 | 决定"下一步做什么"时 |
 | [`perf-baseline.md`](perf-baseline.md) | 维护者 | 求值基准（50/200/800 节点，p50/p95），由 `node scripts/bench-eval.mjs --write` 生成 | 改动求值路径前后对比 |

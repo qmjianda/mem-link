@@ -7,8 +7,9 @@ import type { BPEdge, BPNode } from '../src/bp/types';
 import { demoBinary } from '../src/core/project';
 
 const CODES = [
-  'CYCLE', 'NO_SOURCE', 'BAD_INPUT', 'NO_INSTANCE', 'INDEX_OUT_OF_RANGE', 'UNKNOWN_NODE',
-  'NODE_MISSING', 'PACK_DISABLED', 'EVAL_FAILED', 'OUT_OF_BOUNDS', 'SOURCE_CONFLICT', 'PORT_MISSING',
+  'CYCLE', 'NO_SOURCE', 'BAD_INPUT', 'INDEX_OUT_OF_RANGE', 'UNKNOWN_NODE',
+  'NODE_MISSING', 'PACK_DISABLED', 'EVAL_FAILED', 'OUT_OF_BOUNDS', 'SOURCE_CONFLICT',
+  'INVALID_VALUE', 'TRUNCATED', 'PORT_MISSING',
 ];
 
 function pack() {
@@ -32,7 +33,7 @@ function edge(id: string, from: [string, string], to: [string, string]): BPEdge 
   return { id, from: { node: from[0], port: from[1] }, to: { node: to[0], port: to[1] } };
 }
 
-const codeOf = (p: { detail?: string }) => (p.detail ?? '').split(' · ')[0];
+const codeOf = (p: { code?: string }) => p.code;
 
 describe('问题原因码与文案格式', () => {
   it('缺少缓冲区 → NO_SOURCE，消息仍含「需要缓冲区」', () => {
@@ -101,7 +102,7 @@ describe('问题原因码与文案格式', () => {
     expect(JSON.stringify(r.problems)).not.toContain('即可');
   });
 
-  it('所有 problem 的 detail 都以已知原因码开头，消息不含禁用词', () => {
+  it('所有 problem 都带已知原因码，消息不含禁用词', () => {
     const r = evaluateGraph(
       [node('h', 'p', 'header', { address: '0x0' }), node('x', 'gone', 'header', {})],
       [edge('e9', ['x', 'head'], ['h', 'address'])],
