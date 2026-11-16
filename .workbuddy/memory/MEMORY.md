@@ -11,10 +11,11 @@
 - 因此不要提议「让用户不写代码」的方案；要改善这条路径，只能改善 TS 本身（类型声明、模板、报错、样例）。
 - 样例 `samples/*.bp.ts` 已纳入 `tsc` 范围（`tsconfig.json` 的 `include`），改坏会直接报错。
 
-## 入口与遗留
+## 入口
 
-- 默认入口是 `src/bp/BlueprintApp.tsx`；`#v1` → `src/App.tsx`（C 声明 + 图），`#v2` → `src/v2/PackApp.tsx`（旧 pack 编辑器）。
-- v1/v2 与新入口是三代实现，各自有 pack 格式（`types/memlink.d.ts` vs `types/memlink-bp.d.ts`）。删除需单独立项，不要顺手清理。
+- 唯一入口：`src/main.tsx` → `src/bp/BlueprintApp.tsx`。
+- v1（`#v1`，C 声明 + 图）与 v2（`#v2`，旧 pack 编辑器）已于 2026-11-17 整体删除，连同 `v2/*`、`ui/{GraphCanvas,LeftPanel,RightPanel,format}`、`core/{cparse,edit,expr,graph,packedit,program,project}`、`types/memlink.d.ts`、`samples/{demo.pack.ts,demo.json}`。不要再按「三代实现」理解仓库。
+- `styles.css` 里仍有 v2 段落未清理（与蓝图共享 `.btn`/`.ft-*` 等类名），要删需先做视觉核对。
 
 ## 常用命令
 
