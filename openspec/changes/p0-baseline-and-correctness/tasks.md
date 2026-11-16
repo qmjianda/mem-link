@@ -2,13 +2,13 @@
 
 ## 1. 工程底盘与基线
 
-- [ ] 1.1 初始化 git 仓库并提交当前状态；确认 `.gitignore` 已排除 `node_modules`、`dist`、`.cache`。验证：`git log --oneline -1` 有提交，`git status --short` 无未跟踪的构建产物。
-- [ ] 1.2 消除 `vitest run` 默认 reporter 在本机不退出的问题（在 `vite.config.ts` 固定 `test.reporters` 或改 `package.json` 的 test 脚本）。验证：`pnpm test` 在 120 秒内退出且退出码为 0，连续跑三次不挂起。
-- [ ] 1.3 新增 CI 工作流，依次执行 `pnpm exec tsc --noEmit`、`pnpm lint`、`pnpm test`、`pnpm build`。验证：本地按同顺序跑通四条命令；推送后工作流为绿。
-- [ ] 1.4 引入 ESLint 与格式化配置，规则集只拦真实缺陷（未使用变量、`any` 外的类型漏洞、hooks 依赖），不对现有代码做大规模改写。验证：`pnpm lint` 输出 0 error，warning 数量记录在提交说明里。
-- [ ] 1.5 编写求值基准脚本（节点规模 50/200/800，重复 20 次），输出 p50/p95 与全量求值耗时，结果写入 `docs/perf-baseline.md`。验证：`node scripts/bench-eval.mjs` 打印三档数据，文件内含本次基线数值与运行环境。
-- [ ] 1.6 补 LICENSE 与 EULA 草案、新建 `docs/README.md` 索引（指向 `data-model-review.md`、`description-format.md`、`optimization-research.md`、`optimization-plan.md`、`perf-baseline.md`）。验证：索引中每条链接都能打开对应文件。
-- [ ] 1.7 修正 `docs/data-model-review.md` 中已过期的结论（D8「primary 可为空但集合非空」已由 `selection.ts` 的 `retainSelection` 兜底），并统一 README 与 `description-format.md` 的构造器表为单向引用。验证：文档中不再出现该过期判定；构造器表只在一处维护，另一处为链接。
+- [x] 1.1 初始化 git 仓库并提交当前状态；确认 `.gitignore` 已排除 `node_modules`、`dist`、`.cache`。验证：`git log --oneline -1` 有提交，`git status --short` 无未跟踪的构建产物。
+- [x] 1.2 消除 `vitest run` 默认 reporter 在本机不退出的问题（在 `vite.config.ts` 固定 `test.reporters` 或改 `package.json` 的 test 脚本）。验证：`pnpm test` 在 120 秒内退出且退出码为 0，连续跑三次不挂起。
+- [x] 1.3 新增 CI 工作流，依次执行 `pnpm exec tsc --noEmit`、`pnpm lint`、`pnpm test`、`pnpm build`。验证：本地按同顺序跑通四条命令；推送后工作流为绿。
+- [x] 1.4 引入 ESLint 与格式化配置，规则集只拦真实缺陷（未使用变量、`any` 外的类型漏洞、hooks 依赖），不对现有代码做大规模改写。验证：`pnpm lint` 输出 0 error，warning 数量记录在提交说明里。
+- [x] 1.5 编写求值基准脚本（节点规模 50/200/800，重复 20 次），输出 p50/p95 与全量求值耗时，结果写入 `docs/perf-baseline.md`。验证：`node scripts/bench-eval.mjs` 打印三档数据，文件内含本次基线数值与运行环境。
+- [x] 1.6 补 LICENSE 与 EULA 草案、新建 `docs/README.md` 索引（指向 `data-model-review.md`、`description-format.md`、`optimization-research.md`、`optimization-plan.md`、`perf-baseline.md`）。验证：索引中每条链接都能打开对应文件。
+- [x] 1.7 修正 `docs/data-model-review.md` 中已过期的结论（D8「primary 可为空但集合非空」已由 `selection.ts` 的 `retainSelection` 兜底），并统一 README 与 `description-format.md` 的构造器表为单向引用。验证：文档中不再出现该过期判定；构造器表只在一处维护，另一处为链接。
 
 ## 2. 值类别显式化
 

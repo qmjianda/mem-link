@@ -127,7 +127,7 @@ HexView 再从 result.sources.get(node.id)?.buffer 取 bytes
 | --- | --- | --- | --- |
 | D6 | 同一个 pack 集合派生出三个 Map：`packsMap`（仅启用）/ `allPacks`（全量）/ `packNames` | `BlueprintApp.tsx:217-222` | 求值用 `packsMap`、标签用 `allPacks`、状态栏用 `packNames`；任一处用错就是"禁用的 pack 还能解析"这类 bug |
 | D7 | `Problem` 的结构化码被拼进字符串 | `eval.ts:442`：`detail: `${code} · ${detail}`` | UI 要 `split`、无法统计、无法一键修复；`ProblemCode` 类型形同注释 |
-| D8 | 选择有双重表示，且 `primary` 不变量可被破坏 | `selection.ts:5-7` 声明"primary 为空 ⇔ 集合都空"；`selection.ts:77-88` 删除 edge 后 `primary=null`，但 `nodes` 可能非空 | 检查器显示空、状态栏显示"已选 N"；批量删除后主选中丢失 |
+| D8 | 选择有双重表示，且 `primary` 不变量可被破坏 | ~~`selection.ts:77-88` 删除 edge 后 `primary=null`~~ **已修**：`selection.ts:110-126` 的 `retainSelection` 在提交、撤销/重做、删除与 pack 操作后把 `primary` 收敛到仍存在的对象（5 处调用点，见 `BlueprintApp.tsx:289/324/1041/1166/1178`） | 残留风险：`primary` 仍是存储字段而非派生，新增变更路径若忘记调用 `retainSelection` 会再次破坏不变量 |
 | D9 | `params` 是 `Record<string,string>`，且混入魔法键 | `types.ts:119-124`（`__title`）、`eval.ts:516`（`sourceId`） | 拼错键名静默变 `undefined` → 落到默认值；"显式清空"与"未设置"无法区分；迁移只能手写分支 |
 | D10 | 端口名即协议，解析逻辑分散 | `eval.ts:42-44`（`elem:`）、`eval.ts:141/162/168`（三种拼接）、`Canvas.tsx:197-200`（只认 `^elem:(\d+)$`） | `elem:field:3` 这类端口在画布上取不到 index；新增端口形态要改三处 |
 | D11 | 三套并行的图模型 | `core/types.ts:117`（GraphNode）、`bp/types.ts:111`（BPNode）、`App.tsx`（Project + positions + frozen + undoRef） | 概念同名不同义；v1/v2 的 undo 是 `Memory[]` 快照，v3 是文档快照，两套语义并存 |
@@ -187,7 +187,7 @@ HexView 再从 result.sources.get(node.id)?.buffer 取 bytes
 
 **D7 Problem 结构化**：`{ code, severity, at:{node,port?,addr?}, message, detail?, fix? }`。`fix` 直接携带一条命令（"断开这条线"/"给该 File 载入文件"），把现有的文字建议变成可执行入口。
 
-**D8 选择**：`primary` 改为**派生**（`primaryOf(state)`：优先 entry，其次唯一选中项），不再存储，不变量自动成立。
+**D8 选择**（部分已修）：`primary` 已由 `retainSelection` 在每次文档变更后规范化，删除/撤销不再出现"集合非空但 primary 为空"。**仍需做**的是把它改成**派生**（`primaryOf(state)`：优先 entry，其次唯一选中项），从根上消除"忘记调用就破不变量"的可能。
 
 **D9 params**：`config: Record<string, Json>` + `meta { title?, sourcePin? }` 分离；每个节点定义声明 `paramSchema`（type/default/validate），加载时校验、Inspector 自动生成表单。序列化格式向后兼容（读旧 `params` 时按 schema 迁移）。
 

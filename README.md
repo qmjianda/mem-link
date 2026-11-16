@@ -255,12 +255,7 @@ export default definePack({
 
 ### 节点构造器
 
-| 构造器 | 输入 | 输出 |
-| --- | --- | --- |
-| `structNode(type)` | `buffer`（可选数据源）、`address` | 类型的每个字段 + 嵌套 `array`/`record` 的每个成员 |
-| `listNode(type,{next,nulls?,max?})` | `buffer`（可选数据源）、`address` | `list`、`count` + 每个元素一个端口 |
-| `arrayNode(type,{count?,stride?})` | `buffer`（可选数据源）、`address`、`count` | `list`、`count` + 每个元素一个端口 |
-| `calcNode({inputs,outputs,run})` | `buffer`（可选数据源）+ 自定义 typed 输入 | `run` 返回的对象 |
+`structNode` / `listNode` / `arrayNode` / `calcNode` 的签名、输入输出与各自选项只在一处维护：[`.bp.ts` pack 参考 §4 节点](docs/description-format.md#4-节点)。
 
 `buffer` 输入是**可选的数据源端口**：接上就直连该文件，不接就沿上游依次继承；它不参与节点的值计算，所以保持为空也能正常工作。只有携带文件的输出（File、切片、解析节点等）能接进来；常量类输出会被拒绝并提示。节点已经从上游继承时，这个圆点会暂时隐藏（行上仍显示继承的文件），断开上游连线后重新出现。
 
@@ -313,7 +308,7 @@ src/bp/types.ts 端口/节点/图的数据模型
 src/core/       pack 布局、内存、hex、字段写回
 samples/        NVMe 示例与 v1/v2 索引链表示例
 scripts/        示例生成、性能基准、真实浏览器回归
-docs/           pack 参考 + 截图
+docs/           设计文档与 pack 参考（索引见 docs/README.md）
 ```
 
 ## 已知限制

@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import { viteSingleFile } from 'vite-plugin-singlefile';
 
@@ -13,4 +13,10 @@ export default defineConfig({
     chunkSizeWarningLimit: 4000,
   },
   server: { host: '127.0.0.1' },
+  // `default` reporter 在非交互终端下不退出（本机实测 600s 仍在等待），
+  // CI 与本地都必须能拿到退出码，因此固定为 basic。
+  test: {
+    reporters: ['basic'],
+    include: ['tests/**/*.test.ts'],
+  },
 });
