@@ -427,6 +427,7 @@ export type ProblemCode =
   | 'EVAL_FAILED'
   | 'OUT_OF_BOUNDS'
   | 'SOURCE_CONFLICT'
+  | 'SOURCE_CYCLE'
   | 'INVALID_VALUE'
   | 'TRUNCATED'
   | 'PORT_MISSING';
@@ -494,19 +495,40 @@ export function evaluateGraph(
   const chainOf = (self: BPNode, from: SourceInfo): string[] =>
     [self.id, ...from.chain.filter((id) => id !== self.id)];
 
+  /**
+   * 数据源线是否是"值依赖"：上游端口本身产出字符串/字节。
+   * 这类线要把那个值当作基址 0 的内存镜像，而它必须求值上游端口——
+   * 但那是**值**依赖，环检测交给求值状态机，不再与来源遍历共用访问集。
+   * 判定只看端口声明类型，不执行任何节点。
+   */
+  const handsBytes = (src: BPNode, port: string): boolean => {
+    const spec = portsFor(src, packs).outputs.find((p) => p.name === port);
+    return spec?.type === 'string' || spec?.type === 'bytes';
+  };
+
+  const infoCache = new Map<string, SourceInfo>();
+  const cacheKey = (id: string, root: boolean) => `${root ? 'r' : 'c'}:${id}`;
+
   // `root` is true only for the node whose source we are resolving. A node
   // visited while walking upstream must NOT inject the graph's default file:
   // a Number constant, for example, carries no file context at all. Otherwise
   // one stray constant edge would make a two-file graph look like a conflict.
-  const trace = (node: BPNode, stack: Set<string>, root: boolean): SourceInfo => {
-    if (stack.has(node.id)) return { mode: 'none', chain: [node.id] };
-    stack.add(node.id);
-    const result = resolveSource(node, stack, root);
-    stack.delete(node.id);
+  const trace = (node: BPNode, visiting: Set<string>, root: boolean): SourceInfo => {
+    const key = cacheKey(node.id, root);
+    const hit = infoCache.get(key);
+    if (hit) return hit;
+    if (visiting.has(node.id)) {
+      // 继承链自环：不复用 CYCLE（那是值依赖的环），也不缓存
+      return { mode: 'none', chain: [node.id], sourceCycle: true };
+    }
+    visiting.add(node.id);
+    const result = resolveSource(node, visiting, root);
+    visiting.delete(node.id);
+    if (!result.sourceCycle) infoCache.set(key, result);
     return result;
   };
 
-  const resolveSource = (node: BPNode, stack: Set<string>, root: boolean): SourceInfo => {
+  const resolveSource = (node: BPNode, visiting: Set<string>, root: boolean): SourceInfo => {
     const inc = incoming.get(node.id);
 
     // 1. an explicit source wire beats everything else: it is the connection
@@ -517,19 +539,16 @@ export function evaluateGraph(
     const wire = inc?.get(SOURCE_PORT);
     if (wire) {
       const src = byId.get(wire.from.node);
-      // 端口的值本身就是字符串/字节时，直接把它当作缓冲区（基址 0），
-      // 优先于「沿用上游节点的文件」——用户接上这段内容就是要读它。
-      const handed = src ? evalNode(src)[wire.from.port] : undefined;
-      const handedBuffer = valueAsBuffer(handed);
-      if (handedBuffer) {
+      if (src && handsBytes(src, wire.from.port)) {
+        // 值依赖：字节在求值该节点时才算（见 resolvePendingValue）
         return {
-          buffer: handedBuffer,
           mode: 'explicit',
-          chain: chainOf(node, { mode: 'none', chain: [src!.id] }),
+          chain: [node.id, src.id],
           via: { node: wire.from.node, port: wire.from.port },
+          pendingValue: true,
         };
       }
-      const r = src ? trace(src, stack, false) : undefined;
+      const r = src ? trace(src, visiting, false) : undefined;
       return {
         buffer: r?.buffer,
         fileId: r?.fileId,
@@ -537,6 +556,7 @@ export function evaluateGraph(
         chain: chainOf(node, r ?? { mode: 'none', chain: src ? [src.id] : [] }),
         via: { node: wire.from.node, port: wire.from.port },
         wireMissing: !r?.buffer,
+        sourceCycle: r?.sourceCycle,
       };
     }
 
@@ -562,7 +582,7 @@ export function evaluateGraph(
       if (e.to.port === SOURCE_PORT) continue;
       const src = byId.get(e.from.node);
       if (!src) continue;
-      const r = trace(src, stack, false);
+      const r = trace(src, visiting, false);
       if (r.buffer) found.push({ info: r, edge: e });
     }
     if (found.length) {
@@ -577,6 +597,7 @@ export function evaluateGraph(
         via: { node: found[0].edge.from.node, port: found[0].edge.from.port },
         conflict,
         candidates: conflict ? [...new Set(names)] : undefined,
+        sourceCycle: found.some((f) => f.info.sourceCycle),
       };
     }
 
@@ -597,14 +618,49 @@ export function evaluateGraph(
     };
   };
 
-  const sourceCache = new Map<string, SourceInfo>();
-  const sourceOf = (node: BPNode): SourceInfo => {
-    let s = sourceCache.get(node.id);
-    if (!s) {
-      s = trace(node, new Set(), true);
-      sourceCache.set(node.id, s);
+  /**
+   * 求值前把全图来源算完：这一步只读图结构、节点参数与资产表，不执行任何
+   * 节点，因此 `sources` 在某个节点求值失败时也是完整的。
+   */
+  const resolveAllSources = () => {
+    for (const n of nodes) trace(n, new Set(), true);
+  };
+
+  const sourceOf = (node: BPNode): SourceInfo => trace(node, new Set(), true);
+
+  /** 值依赖的数据源线：在求值该节点时才算上游端口，环由状态机判定 */
+  const resolvePendingValue = (node: BPNode, info: SourceInfo): SourceInfo => {
+    if (!info.pendingValue) return info;
+    const wire = incoming.get(node.id)?.get(SOURCE_PORT);
+    const src = wire && byId.get(wire.from.node);
+    if (!wire || !src) return info;
+    const handed = evalNode(src)?.[wire.from.port];
+    const buffer = valueAsBuffer(handed);
+    if (buffer) {
+      return { ...info, buffer, pendingValue: undefined, chain: [node.id, src.id] };
     }
-    return s;
+    // 上游没有给出字节：退回"沿该节点的来源上下文"的解释，并标记这条线是空的
+    const r = trace(src, new Set(), false);
+    return {
+      buffer: r.buffer,
+      fileId: r.fileId,
+      mode: 'explicit',
+      chain: chainOf(node, r),
+      via: { node: src.id, port: wire.from.port },
+      wireMissing: !r.buffer,
+      sourceCycle: r.sourceCycle,
+    };
+  };
+
+  /** 同一节点的有效来源只算一次：evalBody 与发布 `sources` 都读它 */
+  const resolvedSources = new Map<string, SourceInfo>();
+  const effectiveSourceOf = (node: BPNode): SourceInfo => {
+    const hit = resolvedSources.get(node.id);
+    if (hit) return hit;
+    const info = resolvePendingValue(node, sourceOf(node));
+    const withAsset = info.buffer?.assetId ? { ...info, assetId: info.buffer.assetId } : info;
+    resolvedSources.set(node.id, withAsset);
+    return withAsset;
   };
 
   /* ------------------------------------------------------------- node eval */
@@ -627,8 +683,12 @@ export function evaluateGraph(
       if (!(name in out)) out[name] = value;
     }
     ports.set(node.id, portsFor(node, packs, view));
-    const info = sourceOf(node);
-    sources.set(node.id, info.buffer?.assetId ? { ...info, assetId: info.buffer.assetId } : info);
+    const info = effectiveSourceOf(node);
+    sources.set(node.id, info);
+    if (info.sourceCycle) {
+      add(node, 'warn', '数据源：继承链形成环', 'SOURCE_CYCLE',
+        '断开其中一条连线，或在检查器里指定数据源');
+    }
     if (info.conflict && !isFile(node)) {
       add(node, 'warn', '数据源：上游连到了不同的输入文件', 'SOURCE_CONFLICT',
         `候选 ${(info.candidates ?? []).join('、')}；当前使用 ${info.buffer?.name ?? '?'}`);
@@ -711,7 +771,7 @@ export function evaluateGraph(
     };
 
     const setView = (v: NodeView) => views.set(node.id, v);
-    const sourceInfo = sourceOf(node);
+    const sourceInfo = effectiveSourceOf(node);
     // Passed to built-ins so a missing buffer explains *why*: "wire has no
     // file" is actionable, "needs a buffer" sounds like nothing is wired.
     const sourceNote = sourceInfo.wireMissing
@@ -1046,6 +1106,10 @@ export function evaluateGraph(
     return out;
   };
 
+  // 来源与值求值分离：先只读图结构算完全图来源，再开始求值
+  const sourceStart = performance.now();
+  resolveAllSources();
+  const msSource = performance.now() - sourceStart;
   for (const n of nodes) evalNode(n);
 
   // A port can disappear when an Element starts following a different element
@@ -1074,7 +1138,7 @@ export function evaluateGraph(
     );
   }
 
-  return { outputs, views, ports, sources, inputs: inputValues, assets, problems, ms: performance.now() - started };
+  return { outputs, views, ports, sources, inputs: inputValues, assets, problems, ms: performance.now() - started, msSource };
 }
 
 /** Rough node height for layout; the canvas can use this for auto placement. */

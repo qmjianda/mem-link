@@ -230,6 +230,10 @@ export interface SourceInfo {
   chain: string[];
   /** the edge that carried the file context into this node */
   via?: { node: string; port: string };
+  /** 数据源由上游的字符串/字节输出提供：字节要等求值该端口时才算（值依赖） */
+  pendingValue?: boolean;
+  /** 继承链自身成环：没有可用的数据源，且与值依赖环是两回事 */
+  sourceCycle?: boolean;
   /** incoming edges point at different files */
   conflict?: boolean;
   /** names of the disagreeing files */
@@ -305,6 +309,8 @@ export interface BPResult {
   assets: AssetTable;
   problems: Problem[];
   ms: number;
+  /** 其中"只读图结构算来源"的耗时；用于确认它没有随规模失控 */
+  msSource?: number;
 }
 
 /**

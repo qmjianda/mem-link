@@ -28,12 +28,12 @@
 
 ## 4. 数据源解析解耦
 
-- [ ] 4.1 新增静态分类器：按上游端口声明的 `PortType` 判定该数据源线是「值依赖」还是「来源依赖」，不执行任何节点。验证：用例覆盖 `text`/`bytes`/`buffer` → 值依赖，`number`/`instance`/未知端口 → 来源依赖。
-- [ ] 4.2 实现 `resolveAllSources`：一次遍历算出全图来源，自带访问集，来源环返回 `mode:'none'` 且 `sourceCycle: true`。验证：用例覆盖来源环报 `SOURCE_CYCLE` 且不产生 `CYCLE`。
-- [ ] 4.3 删除 `resolveSource` 内对 `evalNode` 的调用，`evalBody` 改读预计算结果；保留 `explicit > override > file > upstream > default` 四级优先级。验证：源码中来源解析路径不再出现 `evalNode`；四级优先级矩阵用例逐条通过。
-- [ ] 4.4 值依赖环走求值状态机：A 的缓冲区来自 File、B 的数据源线来自 A、A 的字段输入来自 B 时，不误报环且两者都有结果。验证：新增用例复现该拓扑，断言 `problems` 无 `CYCLE`。
-- [ ] 4.5 字符串与字节作为数据源时以基址 0 生效，并登记为值依赖。验证：用例断言 `sourceInfo.mode === 'explicit'`、`base === 0`，且该边计入值依赖集合。
-- [ ] 4.6 把来源解析耗时并入基准脚本输出（与 1.5 同口径）。验证：`docs/perf-baseline.md` 增列「来源解析」一行，数值可复现。
+- [x] 4.1 新增静态分类器：按上游端口声明的 `PortType` 判定该数据源线是「值依赖」还是「来源依赖」，不执行任何节点。验证：用例覆盖 `text`/`bytes`/`buffer` → 值依赖，`number`/`instance`/未知端口 → 来源依赖。
+- [x] 4.2 实现 `resolveAllSources`：一次遍历算出全图来源，自带访问集，来源环返回 `mode:'none'` 且 `sourceCycle: true`。验证：用例覆盖来源环报 `SOURCE_CYCLE` 且不产生 `CYCLE`。
+- [x] 4.3 删除 `resolveSource` 内对 `evalNode` 的调用，`evalBody` 改读预计算结果；保留 `explicit > override > file > upstream > default` 四级优先级。验证：源码中来源解析路径不再出现 `evalNode`；四级优先级矩阵用例逐条通过。
+- [x] 4.4 值依赖环走求值状态机：A 的缓冲区来自 File、B 的数据源线来自 A、A 的字段输入来自 B 时，不误报环且两者都有结果。验证：新增用例复现该拓扑，断言 `problems` 无 `CYCLE`。
+- [x] 4.5 字符串与字节作为数据源时以基址 0 生效，并登记为值依赖。验证：用例断言 `sourceInfo.mode === 'explicit'`、`base === 0`，且该边计入值依赖集合。
+- [x] 4.6 把来源解析耗时并入基准脚本输出（与 1.5 同口径）。验证：`docs/perf-baseline.md` 增列「来源解析」一行，数值可复现。
 
 ## 5. 截断语义
 

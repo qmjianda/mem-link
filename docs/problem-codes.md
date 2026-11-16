@@ -14,6 +14,7 @@
 | `EVAL_FAILED` | error | 节点求值抛错，且错误不像越界 | 节点 |
 | `OUT_OF_BOUNDS` | error | 求值抛错且消息匹配"越界/超出/不在缓冲/out of range" | 节点 |
 | `SOURCE_CONFLICT` | warn | 上游连到了不同的输入文件 | 节点 |
+| `SOURCE_CYCLE` | warn | 数据源继承链自身成环（与值依赖的 `CYCLE` 是两件事） | 节点 |
 | `INVALID_VALUE` | warn | 计算节点返回了形似元素但未登记的对象，已降级为 JSON（见 `value-branding.md`） | 节点 |
 | `TRUNCATED` | warn | 列表/数组因达到上限停止（自然结束不算） | 节点 |
 | `PORT_MISSING` | warn | 连线一端指向已不存在的端口 | 目标节点 |

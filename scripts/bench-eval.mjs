@@ -91,17 +91,20 @@ for (const size of SIZES) {
   const run = () => {
     const t = performance.now();
     const r = evaluateGraph(nodes, edges, packs, {});
-    return { ms: performance.now() - t, problems: r.problems.length };
+    return { ms: performance.now() - t, msSource: r.msSource ?? 0, problems: r.problems.length };
   };
   for (let i = 0; i < WARMUP; i++) run();
   const times = [];
+  const sourceTimes = [];
   let problems = 0;
   for (let i = 0; i < RUNS; i++) {
     const r = run();
     times.push(r.ms);
+    sourceTimes.push(r.msSource);
     problems = r.problems;
   }
   times.sort((a, b) => a - b);
+  sourceTimes.sort((a, b) => a - b);
   rows.push({
     size,
     nodes: nodes.length,
@@ -110,6 +113,7 @@ for (const size of SIZES) {
     p95: percentile(times, 95),
     min: times[0],
     max: times[times.length - 1],
+    src50: percentile(sourceTimes, 50),
     problems,
   });
 }
@@ -117,11 +121,11 @@ for (const size of SIZES) {
 const f = (n) => n.toFixed(2).padStart(8);
 console.log(`\n求值基准 · ${platform()} ${release()} · node ${process.version} · ${cpus()[0]?.model ?? '?'}`);
 console.log(`每档 ${RUNS} 次，预热 ${WARMUP} 次\n`);
-console.log('  目标节点   实际节点   边      p50(ms)   p95(ms)   min(ms)   max(ms)   问题数');
+console.log('  目标节点   实际节点   边      p50(ms)   p95(ms)   来源(ms)   min(ms)   max(ms)   问题数');
 for (const r of rows) {
   console.log(
     `${String(r.size).padStart(9)}${String(r.nodes).padStart(11)}${String(r.edges).padStart(7)}` +
-    `${f(r.p50)}${f(r.p95)}${f(r.min)}${f(r.max)}${String(r.problems).padStart(9)}`,
+    `${f(r.p50)}${f(r.p95)}${f(r.src50)}${f(r.min)}${f(r.max)}${String(r.problems).padStart(9)}`,
   );
 }
 
@@ -136,9 +140,9 @@ if (process.argv.includes('--write')) {
     `- 负载：\`samples/demo.blueprint.json\` 的 pack 与 File，按 3 节点一条链复制；每档 ${RUNS} 次、预热 ${WARMUP} 次。`,
     '- 口径：`evaluateGraph` 全量求值，含端口、视图、数据源与问题收集。',
     '',
-    '| 目标节点 | 实际节点 | 边 | p50 (ms) | p95 (ms) | min | max | 问题数 |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- |',
-    ...rows.map((r) => `| ${r.size} | ${r.nodes} | ${r.edges} | ${r.p50.toFixed(2)} | ${r.p95.toFixed(2)} | ${r.min.toFixed(2)} | ${r.max.toFixed(2)} | ${r.problems} |`),
+    '| 目标节点 | 实际节点 | 边 | p50 (ms) | p95 (ms) | 来源解析 p50 (ms) | min | max | 问题数 |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+    ...rows.map((r) => `| ${r.size} | ${r.nodes} | ${r.edges} | ${r.p50.toFixed(2)} | ${r.p95.toFixed(2)} | ${r.src50.toFixed(2)} | ${r.min.toFixed(2)} | ${r.max.toFixed(2)} | ${r.problems} |`),
     '',
     '> 本文件由脚本生成。基准用于横向比较同一台机器上的改动前后，不用于跨机器比较绝对值。',
     '',

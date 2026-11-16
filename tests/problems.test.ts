@@ -9,7 +9,7 @@ import { demoBinary } from '../src/core/project';
 const CODES = [
   'CYCLE', 'NO_SOURCE', 'BAD_INPUT', 'INDEX_OUT_OF_RANGE', 'UNKNOWN_NODE',
   'NODE_MISSING', 'PACK_DISABLED', 'EVAL_FAILED', 'OUT_OF_BOUNDS', 'SOURCE_CONFLICT',
-  'INVALID_VALUE', 'TRUNCATED', 'PORT_MISSING',
+  'SOURCE_CYCLE', 'INVALID_VALUE', 'TRUNCATED', 'PORT_MISSING',
 ];
 
 function pack() {
