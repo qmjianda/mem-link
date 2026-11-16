@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "source": "// mem-link 示例：索引式链表（next/prev 是池下标，不是指针）\n#pragma pack(push, 4)\n\ntypedef struct {\n    uint16_t magic;   // 0xBEEF\n    uint16_t head;    // 头节点在池中的下标\n    uint16_t tail;\n    uint16_t count;\n} Header;\n\ntypedef struct {\n    int16_t  next;     // 下一个节点的池下标，-1 = 结束\n    int16_t  prev;\n    uint16_t flags;\n    uint16_t refcount;\n    char     name[12];\n    uint32_t ts;\n} Entry;\n\n#pragma pack(pop)\n\n// 位域 + 紧凑布局（1 字节）\ntypedef struct {\n    uint8_t kind  : 3;\n    uint8_t dirty : 1;\n    uint8_t flags : 4;\n    uint8_t refs;\n} Meta;\n",
+  "ptrSize": 4,
+  "endian": "little",
+  "pools": [
+    {
+      "name": "Entries",
+      "base": "0x100",
+      "stride": 24,
+      "count": 8,
+      "type": "Entry"
+    }
+  ],
+  "roots": [
+    {
+      "id": "r1",
+      "label": "Header",
+      "type": "Header",
+      "addr": "0x0"
+    },
+    {
+      "id": "r2",
+      "label": "head",
+      "type": "Entry",
+      "addr": "0x100 + u16(2) * 24"
+    },
+    {
+      "id": "r3",
+      "label": "坏链示例",
+      "type": "Entry",
+      "addr": "0x100 + 4 * 24"
+    }
+  ],
+  "links": {
+    "Entry.next": {
+      "target": "Entries",
+      "expr": "v"
+    }
+  },
+  "memory": {
+    "name": "demo.bin",
+    "base": 0,
+    "size": 512,
+    "data": "774CAAcABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP////8BAAAAZnJlZS0wAAAAAAAAAPFTZQcABQAAAAIAYmV0YQAAAAAAAAAAJfFTZQUAAAACAAEAYWxwaGEAAAAAAAAASvFTZf////8BAAAAZnJlZS0xAAAAAAAAb/FTZQwA//8IAAkAYnJva2VuAAAAAAAAlPFTZQEAAgAAAAMAZ2FtbWEAAAAAAAAAufFTZf////8BAAAAZnJlZS0yAAAAAAAA3vFTZf//AQAAAAEAZGVsdGEAAAAAAAAAA/JTZQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAnQMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+  }
+}

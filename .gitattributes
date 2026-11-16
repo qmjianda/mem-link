@@ -1,0 +1,8 @@
+# 统一换行：仓库内一律 LF，避免 Windows 上每次 checkout 都产生伪改动
+* text=auto eol=lf
+
+# 二进制资源不做行尾转换
+*.bin binary
+*.png binary
+*.ico binary
+*.woff2 binary

@@ -1,0 +1,295 @@
+{
+  "format": "memlink-blueprint/1",
+  "packs": [
+    {
+      "id": "p1",
+      "name": "nvme-sq",
+      "source": "/// <reference path=\"../types/memlink-bp.d.ts\" />\n\n// NVMe Submission Queue：SQE → PRP1 / PRP2 → PRP 列表 → 数据页\n// 地址均为绝对物理地址；文件基址 0x1000，页大小 512 B。\n\nconst SQE_SIZE = 64;\nconst SQ_DEPTH = 4;\nconst PRP_DEPTH = 5;\nconst LBA_SIZE = 512;\nconst DATA_MAGIC = 0x454d564e; // \"NVME\"\n\n// NVMe 1.4 提交队列项，64 B。CDW0 低 8 位为 OPC，高 16 位为 CID；\n// CDW12 低 16 位为 NLB（0-based 块数）。\nconst Sqe = struct('Sqe', 64, [\n  u32('cdw0', 0, { label: 'CDW0', format: 'hex' }),\n  bits('opc', 0, 1, 0, 8, { label: 'OPC 操作码', format: 'hex' }),\n  bits('fuse', 0, 2, 8, 2, { label: 'FUSE' }),\n  bits('psdt', 0, 2, 14, 2, { label: 'PSDT' }),\n  bits('cid', 0, 4, 16, 16, { label: 'CID 命令标识' }),\n  u32('nsid', 4, { label: 'NSID 命名空间' }),\n  u32('reserved0', 8, { label: '保留 [8]' }),\n  u32('reserved1', 12, { label: '保留 [12]' }),\n  u64('mptr', 16, { label: 'MPTR 元数据指针', format: 'hex' }),\n  u64('prp1', 24, { label: 'PRP1 首数据页', format: 'hex' }),\n  u64('prp2', 32, { label: 'PRP2 / 列表指针', format: 'hex' }),\n  u32('cdw10', 40, { label: 'SLBA 低 32 位', format: 'hex' }),\n  u32('cdw11', 44, { label: 'SLBA 高 32 位', format: 'hex' }),\n  u32('cdw12', 48, { label: 'CDW12', format: 'hex' }),\n  bits('nlb', 48, 2, 0, 16, { label: 'NLB 块数 − 1' }),\n  u32('cdw13', 52, { label: 'CDW13', format: 'hex' }),\n  u32('cdw14', 56, { label: 'CDW14', format: 'hex' }),\n  u32('cdw15', 60, { label: 'CDW15', format: 'hex' }),\n]);\n\n// PRP 表项：低 12 位是页内偏移，其余为页基址。\nconst PrpEntry = struct('PrpEntry', 8, [\n  u64('addr', 0, { label: '数据页地址', format: 'hex' }),\n  bits('pageOffset', 0, 2, 0, 12, { label: '页内偏移' }),\n]);\n\n// 每个数据页带一个便于阅读的头，随后是 LBA 载荷。\nconst DataBlock = struct('DataBlock', LBA_SIZE, [\n  u32('magic', 0, { label: 'Magic', format: 'hex' }),\n  u32('lba', 4, { label: 'LBA' }),\n  u32('seq', 8, { label: '序号' }),\n  u32('crc32', 12, { label: '载荷校验', format: 'hex' }),\n  str('payload', 16, LBA_SIZE - 16, { label: '数据' }),\n]);\n\nexport default definePack({\n  name: 'nvme-sq',\n  endian: 'little',\n  pointerSize: 8,\n  constants: { SQE_SIZE, SQ_DEPTH, PRP_DEPTH, LBA_SIZE, DATA_MAGIC },\n  types: { Sqe, PrpEntry, DataBlock },\n  nodes: {\n    sq: arrayNode(Sqe, { label: '提交队列 SQ', count: SQ_DEPTH, stride: SQE_SIZE }),\n    sqe: structNode(Sqe, { label: 'SQE 命令' }),\n    prpList: arrayNode(PrpEntry, { label: 'PRP 列表', count: PRP_DEPTH, stride: 8 }),\n    prpEntry: structNode(PrpEntry, { label: 'PRP 表项' }),\n    data: structNode(DataBlock, { label: '数据页' }),\n    transfer: calcNode({\n      label: '传输长度 / 页数',\n      inputs: { nlb: 'number', lbaSize: 'number' },\n      outputs: { bytes: 'number', pages: 'number' },\n      run: ({ nlb, lbaSize }) => {\n        const size = Number(lbaSize) || LBA_SIZE;\n        const bytes = (Number(nlb) + 1) * size;\n        return { bytes, pages: Math.ceil(bytes / LBA_SIZE) };\n      },\n    }),\n  },\n});\n"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "n_file",
+      "packId": "",
+      "nodeId": "file",
+      "x": 0,
+      "y": 40,
+      "params": {
+        "name": "nvme-sq.bin"
+      },
+      "source": {
+        "name": "nvme-sq.bin",
+        "base": 4096,
+        "data": "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bnRyb2xsZXIgfCBWSUQgMHg4MDg2IHwgU04gTUxOSy0wMDAxIHwgTU4gbWVtLWxpbmsgTlZNZSBkZW1vAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+      }
+    },
+    {
+      "id": "n_sq",
+      "packId": "p1",
+      "nodeId": "sq",
+      "x": 330,
+      "y": 0,
+      "params": {
+        "address": "0x1000"
+      }
+    },
+    {
+      "id": "n_sqe",
+      "packId": "",
+      "nodeId": "element",
+      "x": 660,
+      "y": 0,
+      "params": {
+        "index": "0",
+        "packId": "p1",
+        "typeId": "Sqe"
+      }
+    },
+    {
+      "id": "n_opc",
+      "packId": "",
+      "nodeId": "enum",
+      "x": 1000,
+      "y": 0,
+      "params": {
+        "value": "0",
+        "mapping": "0=Flush,1=Write,2=Read,4=Write Uncorrectable,6=Identify,8=Abort,9=Set Features,10=Get Features"
+      }
+    },
+    {
+      "id": "n_transfer",
+      "packId": "p1",
+      "nodeId": "transfer",
+      "x": 1000,
+      "y": 190,
+      "params": {
+        "nlb": "0",
+        "lbaSize": "512"
+      }
+    },
+    {
+      "id": "n_prp",
+      "packId": "",
+      "nodeId": "prp",
+      "x": 1000,
+      "y": 380,
+      "params": {
+        "prp1": "0x0",
+        "prp2": "0x0",
+        "count": "1",
+        "pageSize": "512",
+        "pointerSize": "8",
+        "endian": "little"
+      }
+    },
+    {
+      "id": "n_prpList",
+      "packId": "p1",
+      "nodeId": "prpList",
+      "x": 660,
+      "y": 660,
+      "params": {
+        "address": "0x0"
+      }
+    },
+    {
+      "id": "n_prp0",
+      "packId": "",
+      "nodeId": "element",
+      "x": 1000,
+      "y": 660,
+      "params": {
+        "index": "0",
+        "packId": "p1",
+        "typeId": "PrpEntry"
+      }
+    },
+    {
+      "id": "n_data1",
+      "packId": "p1",
+      "nodeId": "data",
+      "x": 1340,
+      "y": 0,
+      "params": {
+        "address": "0x0"
+      }
+    },
+    {
+      "id": "n_data2",
+      "packId": "p1",
+      "nodeId": "data",
+      "x": 1340,
+      "y": 340,
+      "params": {
+        "address": "0x0"
+      }
+    },
+    {
+      "id": "n_dump",
+      "packId": "",
+      "nodeId": "slice",
+      "x": 1340,
+      "y": 660,
+      "params": {
+        "address": "0x0",
+        "length": "64"
+      }
+    },
+    {
+      "id": "n_sum",
+      "packId": "",
+      "nodeId": "checksum",
+      "x": 1680,
+      "y": 0,
+      "params": {
+        "address": "0x0",
+        "length": "512"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "from": {
+        "node": "n_file",
+        "port": "buffer"
+      },
+      "to": {
+        "node": "n_sq",
+        "port": "buffer"
+      }
+    },
+    {
+      "id": "e2",
+      "from": {
+        "node": "n_sq",
+        "port": "elem:0"
+      },
+      "to": {
+        "node": "n_sqe",
+        "port": "instance"
+      }
+    },
+    {
+      "id": "e3",
+      "from": {
+        "node": "n_sqe",
+        "port": "opc"
+      },
+      "to": {
+        "node": "n_opc",
+        "port": "value"
+      }
+    },
+    {
+      "id": "e4",
+      "from": {
+        "node": "n_sqe",
+        "port": "nlb"
+      },
+      "to": {
+        "node": "n_transfer",
+        "port": "nlb"
+      }
+    },
+    {
+      "id": "e5",
+      "from": {
+        "node": "n_transfer",
+        "port": "pages"
+      },
+      "to": {
+        "node": "n_prp",
+        "port": "count"
+      }
+    },
+    {
+      "id": "e6",
+      "from": {
+        "node": "n_sqe",
+        "port": "prp1"
+      },
+      "to": {
+        "node": "n_prp",
+        "port": "prp1"
+      }
+    },
+    {
+      "id": "e7",
+      "from": {
+        "node": "n_sqe",
+        "port": "prp2"
+      },
+      "to": {
+        "node": "n_prp",
+        "port": "prp2"
+      }
+    },
+    {
+      "id": "e8",
+      "from": {
+        "node": "n_sqe",
+        "port": "prp2"
+      },
+      "to": {
+        "node": "n_prpList",
+        "port": "address"
+      }
+    },
+    {
+      "id": "e9",
+      "from": {
+        "node": "n_prpList",
+        "port": "elem:0"
+      },
+      "to": {
+        "node": "n_prp0",
+        "port": "instance"
+      }
+    },
+    {
+      "id": "e10",
+      "from": {
+        "node": "n_sqe",
+        "port": "prp1"
+      },
+      "to": {
+        "node": "n_data1",
+        "port": "address"
+      }
+    },
+    {
+      "id": "e11",
+      "from": {
+        "node": "n_prp0",
+        "port": "addr"
+      },
+      "to": {
+        "node": "n_data2",
+        "port": "address"
+      }
+    },
+    {
+      "id": "e12",
+      "from": {
+        "node": "n_sqe",
+        "port": "prp1"
+      },
+      "to": {
+        "node": "n_dump",
+        "port": "address"
+      }
+    },
+    {
+      "id": "e13",
+      "from": {
+        "node": "n_sqe",
+        "port": "prp1"
+      },
+      "to": {
+        "node": "n_sum",
+        "port": "address"
+      }
+    }
+  ]
+}
