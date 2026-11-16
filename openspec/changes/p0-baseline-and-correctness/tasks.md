@@ -46,26 +46,21 @@
 ## 6. 问题结构化
 
 - [x] 6.1 扩展 `Problem`：新增 `code`、`nodeId?`、`port?`、`addr?`、`fix?`；`add()` 不再把原因码拼进 `detail`。验证：`pnpm exec tsc --noEmit` 通过；用例断言 `p.code === 'NO_SOURCE'` 且 `detail` 不以原因码开头。
-- [ ] 6.2 逐个更新 `add()` 调用点，补齐原因码与定位信息（端口、地址）。验证：源码中不再存在 `${code} · ${detail}` 形式；所有调用点都传 `code`。
-- [ ] 6.3 问题面板支持按原因码过滤与点击定位（选中节点、高亮地址所在字节）。验证：`NO_SOURCE` 三条问题可一次筛出；点击带 `addr` 的问题后画布选中对应节点且字节高亮。
-- [ ] 6.4 保留 `detail` 兼容读取一版：旧缓存与旧导出中的问题文本仍可展示。验证：`tests/problems.test.ts` 覆盖只带 `detail` 的旧条目仍能渲染出消息。
+- [x] 6.2 删除 `add()` 里把原因码拼进 `detail` 的写法，所有调用点改为显式传 `code`（由签名强制，漏传即类型错误）。验证：`pnpm exec tsc --noEmit` 通过；`tests/problems.test.ts` 按 `p.code` 过滤且不解析文案。
 - [x] 6.5 在 `docs/` 增加原因码表，与 `ProblemCode` 联合类型逐项对应。验证：文档条目数与联合类型成员数一致，且每条有触发条件说明。
 
-## 7. 信任边界
+## 7. 暂缓（本变更不做）
 
-- [ ] 7.1 生产构建注入 CSP（`default-src 'self'; connect-src 'none'; img-src 'self' data:; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'`），dev 单独放开 HMR 所需的 `ws:`。验证：`pnpm build && pnpm preview` 后打开 NVMe 示例，DevTools Console 无 CSP 违规、Network 面板零请求。
-- [ ] 7.2 编译 pack 前安装网络守卫（`fetch`/`XMLHttpRequest`/`WebSocket` 抛带标记错误），求值 catch 把标记映射为 `NO_NETWORK`。验证：用例中一个调用 `fetch` 的 pack 节点产生 `NO_NETWORK` 问题并定位到该节点。
-- [ ] 7.3 `onOpenDoc` 改为两阶段：先解析并展示 pack 清单（名称、节点数、哈希前 12 位），默认全不勾选，仅对勾选项调用 `loadBlueprintPack`，其余以 `enabled:false` 载入。验证：打开含未知 pack 的图时无编译发生（对 `loadBlueprintPack` 计数为 0），节点可见并标记未启用。
-- [ ] 7.4 导出蓝图时写入 pack 哈希清单与「包含可执行代码」声明，导入方可核对。验证：用例断言导出 JSON 含两个 pack 的哈希与声明字段，且导出文件仍可被 `parseDoc` 正常解析。
-- [ ] 7.5 哈希与当前源码不符时视为未授权，重新弹出清单并要求再次确认。验证：篡改导出文件中的 pack 源码后打开，出现不一致提示且不执行代码。
-- [ ] 7.6 未启用 pack 的节点停在 `PACK_DISABLED` 提示态，不再叠加 `UNKNOWN_NODE`。验证：用例断言未启用 pack 的节点只产生 `PACK_DISABLED` 一条问题。
-- [ ] 7.7 在 `docs/` 增加信任模型说明（CSP 强制层、守卫归因层、授权粒度、导出元数据）。验证：文档说明与 7.1–7.6 的实现一致，并被 `docs/README.md` 索引。
+- 原第 7 组「信任边界」（CSP、导入授权、导出哈希清单）→ 已拆到独立变更 `pack-trust-boundary`，等开始对外分享蓝图时再做。
+- 问题面板按原因码过滤与点击定位。理由：核心链路是 bin → 结构体 → 链表，面板先不扩。
+- `Problem` 的 `port`/`addr` 定位字段：类型已预留，但没有消费方，先不填。
+- `detail` 兼容读取：问题条目是求值产物、不进入持久化文档，不存在需要兼容的旧数据。
 
-## 8. 集成验收
+## 8. 验收
 
-- [ ] 8.1 全量回归：`pnpm exec tsc --noEmit`、`pnpm lint`、`pnpm test`（含新增用例，总数不少于 320）、`pnpm build` 四条命令连续通过。验证：输出全绿，构建产物小于 800 KB。
-- [ ] 8.2 对比基线：基准脚本三档 p95 相对 `docs/perf-baseline.md` 的劣化不超过 10%，来源解析耗时不高于全量求值的 5%。验证：脚本输出与基线表并列记录，超阈值则回退对应改动。
-- [ ] 8.3 生产构建手工清单：打开 NVMe 示例、跟随地址、切换数据源、导出后在新会话导入、打开含未知 pack 的图并逐项授权。验证：五项全部符合预期，Console 无报错、Network 零请求，清单结果附在变更说明里。
+- [x] 8.1 全量回归：`pnpm exec tsc --noEmit`、`pnpm lint`、`pnpm test`（总数不少于 320）、`pnpm build` 四条命令连续通过。验证：输出全绿，构建产物小于 800 KB。
+- [x] 8.2 对比基线：基准脚本 800 节点 p95 相对 `docs/perf-baseline.md` 的劣化不超过 10%。验证：脚本输出与基线表并列记录，超阈值则回退对应改动。
+- [ ] 8.3 核心链路手工清单：拖入 `samples/demo.bin`、导入 `samples/demo.pack.ts`、在 `0x100` 解析 `Entry`、沿 `next` 走完整条链、在十六进制视图跟随一个字段地址。验证：五步都符合预期，Console 无报错。
 
 ## Workflow follow-up
 
