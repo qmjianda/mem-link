@@ -1145,7 +1145,7 @@ svg.canvas:active { cursor: grabbing; }
 .ve-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 6px; }
 
 /* ------------------------------------------------------- blueprint (v3) */
-/* 三栏栅格与折叠态变量：作用域限定在 .bp-app，v1/v2 的 .workspace 不受影响 */
+/* 三栏栅格与折叠态变量：作用域限定在 .bp-app */
 .bp-app {
   --bp-node:#101822; --bp-node-2:#0d141d;
   --bp-left-w: 330px;

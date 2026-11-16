@@ -1643,7 +1643,7 @@ export default function BlueprintApp() {
       ? '有未保存的改动（Ctrl+S 立即持久化）'
       : '已写入浏览器缓存';
 
-  // 栅格轨道由 CSS 变量驱动，作用域限定在 .bp-app 内，不触碰 v1/v2 的 .workspace。
+  // 栅格轨道由 CSS 变量驱动，作用域限定在 .bp-app 内。
   const gridStyle = {
     '--bp-left-w': `${layout.leftCollapsed ? COLLAPSED_W : layout.leftWidth}px`,
     '--bp-right-w': `${layout.rightCollapsed ? COLLAPSED_W : layout.rightWidth}px`,
