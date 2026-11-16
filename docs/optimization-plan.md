@@ -112,7 +112,7 @@
 | G5 | 性能不可验收 | 只有缩放 FPS 脚本 | `scripts/cdp-perf.mjs:2` | 文档 KPI 表无法判定是否达成 | P0-9 |
 | G6 | 测试入口不稳 | `vitest run` 默认 reporter 在本机 600 s 未退出；`--reporter=basic` 2.2 s 通过 293/293 | 本轮实测 | CI 会随机挂起 | 加 `vitest.config.ts`（固定 environment/reporter/cacheDir），并保留一次重试 |
 | G7 | 文档双源 | README 与 `description-format.md` 重复节点表/构造器表；README 写 685 KB，实际 742 KB | README:22、README:256-267 | 两处必然漂移（尺寸数字已经漂了） | README 只留"是什么/怎么用/限制"，pack 参考单一来源放 docs；尺寸改为构建后自动写 |
-| G8 | 遗留代码 | 三个入口都在 `main.tsx` 静态导入 | `main.tsx:1-6` | v1（`App.tsx`）+ v2（`v2/*` + `ui/{Left,Right,Graph}Panel` + `core/cparse`）约 4.5k 行（26%）仍打进单文件 | 先删 v1（已被 v2 完全取代），v2 保留到字段写回迁进蓝图检查器；CLI 可复用 `evaluateGraph` 而不带 UI |
+| G8 | 遗留代码 | ~~三个入口都在 `main.tsx` 静态导入~~ **已处理**：v1 / v2 连同 `#v1` `#v2` 路由整体删除 | `main.tsx`（现只渲染蓝图编辑器） | 已删除约 4.5k 行与第二套 pack 格式 | — |
 | G9 | 领域逻辑泄漏 | NVMe 专用 `prp` 在内置注册表 | `builtins.ts:554` | 每加一个领域就要改内核注册表 + 画布 + 检查器 + 迁移 | 内置层只留通用原语；`prp` 下沉到 pack 或标准库，作为"格式即测试"的第一个样板 |
 | G10 | 端口命名 | 画布只解析 `elem:(\d+)` | `Canvas.tsx` 的 `elementIndex()` | `elem:field:3` 这类端口取不到 index，画布行为与端口语义不一致 | 与 D10 一起做：唯一 `parsePort()`，三种形态共用 |
 | G11 | 持久化 | localStorage 同步写 + base64 膨胀 33% + 2 MB 上限 | `persist.ts:17/63-80`、`doc.ts:5-19` | 稍大的 dump 就被裁剪，重载后要重新载入；每次编辑防抖写盘会卡主线程 | 字节进 IndexedDB（Blob/Uint8Array），文档仍走 localStorage；导出时再内联 base64 保持单文件可移植 |

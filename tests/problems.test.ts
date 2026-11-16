@@ -4,7 +4,7 @@ import { loadBlueprintPack } from '../src/bp/load';
 import { evaluateGraph } from '../src/bp/eval';
 import { bytesToBase64 } from '../src/bp/doc';
 import type { BPEdge, BPNode } from '../src/bp/types';
-import { demoBinary } from '../src/core/project';
+import { demoBinary } from './demo-bin';
 
 const CODES = [
   'CYCLE', 'NO_SOURCE', 'BAD_INPUT', 'INDEX_OUT_OF_RANGE', 'UNKNOWN_NODE',

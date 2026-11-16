@@ -8,7 +8,7 @@ import {
   storageAvailable, trimForQuota,
 } from '../src/bp/persist';
 import { migrateNode, type BPNode } from '../src/bp/types';
-import { demoBinary } from '../src/core/project';
+import { demoBinary } from './demo-bin';
 
 function demoPack(): LoadedPack {
   const r = loadBlueprintPack(demoSource);

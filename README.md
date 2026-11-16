@@ -36,7 +36,7 @@ pnpm build      # dist/index.html（单文件，约 685 KB）
 - `samples/nvme-sq.bp.ts` — 默认示例的 pack：NVMe 提交队列（SQE / PRP 表项 / 数据页）
 - `samples/nvme-sq.bin` — 4 KiB 示例镜像，基址 `0x1000`
 - `samples/nvme-sq.blueprint.json` — 默认图与「示例」按钮共用的蓝图，可直接「打开图」
-- `samples/demo.bp.ts` / `demo.bin` / `demo.blueprint.json` — `#v1` / `#v2` 路由使用的索引链表示例
+- `samples/demo.bp.ts` / `demo.bin` / `demo.blueprint.json` — 索引链表的最小示例：结构体 + 链表节点
 - `docs/description-format.md` — pack 与节点参考
 
 重新生成 NVMe 示例资产：`node scripts/gen-nvme.mjs`；真实浏览器回归：`node scripts/cdp-verify.mjs`、`node scripts/cdp-verify-follow.mjs`（覆盖跟随地址 / 元素解析 / 就地重命名 / 标注缩放）。
@@ -306,7 +306,7 @@ src/bp/load.ts  .bp.ts 编译、执行、校验
 src/bp/eval.ts  图求值：端口、字段解码、list/array/element/calc
 src/bp/types.ts 端口/节点/图的数据模型
 src/core/       pack 布局、内存、hex、字段写回
-samples/        NVMe 示例与 v1/v2 索引链表示例
+samples/        NVMe 示例与索引链表最小示例
 scripts/        示例生成、性能基准、真实浏览器回归
 docs/           设计文档与 pack 参考（索引见 docs/README.md）
 ```
@@ -314,5 +314,5 @@ docs/           设计文档与 pack 参考（索引见 docs/README.md）
 ## 已知限制
 
 - 图是纯 DAG；任意 `if/for` 请写进 `calcNode.run` 或 pack 的普通函数。
-- 当前 v3 聚焦解析与查看；字段写回/转换器仍可走旧版 `#v2` 路由，后续会迁到蓝图检查器。
+- 只读解析：字段写回（在十六进制视图直接改值）随旧版路由一并移除。
 - 多级指针、union 的 tag 自动判别、跨 pack 类型引用还没做。

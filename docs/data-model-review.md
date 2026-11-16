@@ -2,6 +2,8 @@
 
 > 范围：`src/` 全部运行时数据结构（节点、边、端口、值、缓存、索引、问题、选择、历史、持久化）。
 > 方法：逐个读取 `bp/types.ts`、`bp/docstate.ts`、`bp/eval.ts`、`bp/history.ts`、`bp/selection.ts`、`bp/persist.ts`、`core/*`、`v2/*`，沿真实调用路径追踪持有者与失效点。
+>
+> **历史文档（2026-11-17 注）**：v1 / v2 两代入口与 `v2/*`、`core/{cparse,edit,expr,graph,project,program,packedit}` 已删除。下文涉及这些路径的定位仅作当时记录；与蓝图编辑器（`src/bp`）相关的结论仍然有效。
 > 结论只针对"数据怎么组织"，不涉及视觉设计；文末单列一小节说明数据变更对 UI 的直接影响。
 
 ---

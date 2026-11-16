@@ -58,9 +58,9 @@
 
 ## 8. 验收
 
-- [x] 8.1 全量回归：`pnpm exec tsc --noEmit`、`pnpm lint`、`pnpm test`（总数不少于 320）、`pnpm build` 四条命令连续通过。验证：输出全绿，构建产物小于 800 KB。
+- [x] 8.1 全量回归：`pnpm exec tsc --noEmit`、`pnpm lint`、`pnpm test`（总数不少于 290——v1/v2 用例随入口删除后基线为 294）、`pnpm build` 四条命令连续通过。验证：输出全绿，构建产物小于 800 KB。
 - [x] 8.2 对比基线：基准脚本 800 节点 p95 相对 `docs/perf-baseline.md` 的劣化不超过 10%。验证：脚本输出与基线表并列记录，超阈值则回退对应改动。
-- [ ] 8.3 核心链路手工清单：拖入 `samples/demo.bin`、导入 `samples/demo.pack.ts`、在 `0x100` 解析 `Entry`、沿 `next` 走完整条链、在十六进制视图跟随一个字段地址。验证：五步都符合预期，Console 无报错。
+- [ ] 8.3 核心链路手工清单：拖入 `samples/demo.bin`、导入 `samples/demo.bp.ts`、在 `0x100` 解析 `Entry`、沿 `next` 走完整条链、在十六进制视图跟随一个字段地址。验证：五步都符合预期，Console 无报错。
 
 ## Workflow follow-up
 

@@ -837,16 +837,6 @@ async function main() {
       `${row.slice(0, 30)} · 连线 ${edgesBefore}→${edgesAfter}`);
   }
 
-  /* ------------------------------------------------- 7. v1 / v2 isolation */
-  await evaluate(`location.hash = '#v1'`);
-  await sleep(280);
-  const isolation = await evaluate(`({ bp: !!document.querySelector('.bp-app'), workspace: !!document.querySelector('.workspace') })`);
-  check('#v1 未受蓝图样式影响', !isolation.bp && isolation.workspace, JSON.stringify(isolation));
-  await evaluate(`location.hash = '#v2'`);
-  await sleep(280);
-  const isolation2 = await evaluate(`({ bp: !!document.querySelector('.bp-app'), workspace: !!document.querySelector('.workspace') })`);
-  check('#v2 未受蓝图样式影响', !isolation2.bp && isolation2.workspace, JSON.stringify(isolation2));
-
   /* -------------------------------------------------------- console errors */
   const severe = events.filter((e) =>
     e.method === 'Log.entryAdded' && e.params?.entry?.level === 'error'

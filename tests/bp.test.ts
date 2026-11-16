@@ -5,7 +5,7 @@ import { evaluateGraph, portsFor } from '../src/bp/eval';
 import { bytesToBase64, makeDoc, parseDoc } from '../src/bp/doc';
 import type { BPEdge, BPNode } from '../src/bp/types';
 import { canConnect, dropPosition } from '../src/bp/types';
-import { demoBinary } from '../src/core/project';
+import { demoBinary } from './demo-bin';
 
 function loadDemo() {
   const r = loadBlueprintPack(demoSource);
