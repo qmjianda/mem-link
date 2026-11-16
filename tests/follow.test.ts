@@ -2,13 +2,15 @@ import { describe, expect, it } from 'vitest';
 import demoSource from '../samples/demo.bp.ts?raw';
 import { loadBlueprintPack } from '../src/bp/load';
 import type { BPNode, BufferValue, InstanceView, NodeView } from '../src/bp/types';
+import { brandInstance } from '../src/bp/types';
 import {
   bufferIssue, buildFollowItems, elementFollowItem, followAddress, followBuiltinIds, followHint,
   inferFollowType, knownTypesAt,
 } from '../src/bp/follow';
 
-function inst(addr: number): InstanceView {
-  return { addr, typeName: 'Sqe', size: 64, fields: [] };
+/** 实例必须带品牌，形状相同也不等于真实元素（见 types.ts 的 WeakSet 登记） */
+function inst(addr: number, typeName = 'Sqe', size = 64): InstanceView {
+  return brandInstance({ addr, typeName, size, fields: [] });
 }
 
 function buf(name: string, base: number, size: number): BufferValue {
@@ -132,7 +134,7 @@ describe('在此地址解析：类型推断', () => {
 
   it('来源是元素时沿用它的类型', () => {
     const hint = inferFollowType({
-      value: { addr: 0x130, typeName: 'Entry', size: 24, fields: [] },
+      value: inst(0x130, 'Entry', 24),
       address: 0x130,
       packs,
       sourcePackId: 'p',
@@ -158,8 +160,8 @@ describe('在此地址解析：类型推断', () => {
       { id: 'b', packId: 'p', nodeId: 'header', x: 0, y: 0, params: {} },
     ] as BPNode[];
     const views = new Map<string, NodeView>([
-      ['a', { kind: 'struct', inst: { addr: 0x1000, typeName: 'Header', size: 8, fields: [] } }],
-      ['b', { kind: 'struct', inst: { addr: 0x1000, typeName: 'Entry', size: 24, fields: [] } }],
+      ['a', { kind: 'struct', inst: inst(0x1000, 'Header', 8) }],
+      ['b', { kind: 'struct', inst: inst(0x1000, 'Entry', 24) }],
     ]);
     const at = knownTypesAt(nodes, views);
     expect(at.get(0x1000)?.ambiguous).toBe(true);
@@ -173,9 +175,9 @@ describe('在此地址解析：类型推断', () => {
       { id: 'e', packId: '', nodeId: 'element', x: 0, y: 0, params: { packId: 'p' } },
     ] as BPNode[];
     const views = new Map<string, NodeView>([
-      ['h', { kind: 'struct', inst: { addr: 0, typeName: 'Header', size: 8, fields: [] } }],
-      ['l', { kind: 'list', items: [{ addr: 0x130, typeName: 'Entry', size: 24, fields: [] }], count: 1 }],
-      ['e', { kind: 'element', inst: { addr: 0x1a8, typeName: 'Entry', size: 24, fields: [] } }],
+      ['h', { kind: 'struct', inst: inst(0, 'Header', 8) }],
+      ['l', { kind: 'list', items: [inst(0x130, 'Entry', 24)], count: 1 }],
+      ['e', { kind: 'element', inst: inst(0x1a8, 'Entry', 24) }],
     ]);
     const at = knownTypesAt(nodes, views);
     expect(at.get(0)).toMatchObject({ packId: 'p', typeName: 'Header' });

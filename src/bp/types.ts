@@ -288,12 +288,33 @@ export interface BPResult {
   ms: number;
 }
 
-/** A decoded element travels on `instance` edges together with its own Memory. */
+/**
+ * A decoded element travels on `instance` edges together with its own Memory.
+ *
+ * 真实性由品牌登记表决定，而不是字段形状：pack 代码与宿主同 realm，
+ * 只要拿到任意一个真实元素就能用 `Object.getOwnPropertySymbols` 复制品牌
+ * 符号，而 WeakSet 只在模块内可见，外部无法把自己造的对象登记进来。
+ */
+const brandedInstances = new WeakSet<object>();
+
+/** 由 `makeView` 调用；pack 代码拿不到这个函数。 */
+export function brandInstance<T extends InstanceView>(view: T): T {
+  brandedInstances.add(view);
+  return view;
+}
+
 export function isInstanceView(v: unknown): v is InstanceView {
-  return !!v && typeof v === 'object'
-    && typeof (v as InstanceView).addr === 'number'
-    && typeof (v as InstanceView).typeName === 'string'
-    && Array.isArray((v as InstanceView).fields);
+  return !!v && typeof v === 'object' && brandedInstances.has(v as object);
+}
+
+/**
+ * 形状像元素、但未经登记的值（典型来源：calc 节点自行拼出一个对象）。
+ * 仅用于产生告警，判定结果本身不构成"这是元素"。
+ */
+export function looksLikeInstance(v: unknown): boolean {
+  if (!v || typeof v !== 'object' || isInstanceView(v)) return false;
+  const o = v as Partial<InstanceView>;
+  return typeof o.addr === 'number' && typeof o.typeName === 'string' && Array.isArray(o.fields);
 }
 
 /**

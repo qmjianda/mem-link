@@ -34,7 +34,7 @@ import type {
   BufferValue, InputValue, InstanceView, NodeDef, NodeView, PortSpec, PortType,
   SourceInfo, StoredMemory,
 } from './types';
-import { fieldPortType, fieldPorts, builtinLabel, displayTitle, isInstanceView } from './types';
+import { fieldPortType, fieldPorts, builtinLabel, displayTitle, isInstanceView, brandInstance, looksLikeInstance } from './types';
 import { getBuiltin, makeBuiltinCtx } from './builtins';
 import { base64ToBytes } from './doc';
 
@@ -367,10 +367,23 @@ function makeView(entry: EntryView, compat: Pick<Pack, 'pointerSize' | 'types'>,
         : formatPackValue(f, value),
     };
   });
-  return { addr: entry.addr, index: entry.index, typeName: entry.type.name, size: entry.type.size, fields, mem };
+  return brandInstance({ addr: entry.addr, index: entry.index, typeName: entry.type.name, size: entry.type.size, fields, mem });
 }
 
 /* ------------------------------------------------------------------- eval */
+
+/**
+ * 把非品牌的"形似元素"对象降级为纯 JSON：断开 Memory 引用与原型，
+ * 下游即使误接也拿不到可继续解码的地址。
+ */
+function toPlainJson(v: unknown, depth = 0): unknown {
+  if (depth > 4 || v == null || typeof v !== 'object') return v;
+  if (v instanceof Uint8Array || isInstanceView(v)) return v;
+  if (Array.isArray(v)) return v.map((x) => toPlainJson(x, depth + 1));
+  const out: Record<string, unknown> = {};
+  for (const [k, x] of Object.entries(v as Record<string, unknown>)) out[k] = toPlainJson(x, depth + 1);
+  return out;
+}
 
 function toNumber(v: unknown): number | undefined {
   if (typeof v === 'number' && Number.isFinite(v)) return v;
@@ -411,6 +424,7 @@ export type ProblemCode =
   | 'EVAL_FAILED'
   | 'OUT_OF_BOUNDS'
   | 'SOURCE_CONFLICT'
+  | 'INVALID_VALUE'
   | 'PORT_MISSING';
 
 export function evaluateGraph(
@@ -980,7 +994,22 @@ export function evaluateGraph(
           }
         }
         const result = def.run(inputs, ctxBase) ?? {};
-        for (const name of Object.keys(def.outputs)) out[name] = result[name];
+        // 计算节点返回的对象不可信：只有解析节点用 makeView 登记过的实例
+        // 才是元素；形似元素的对象降级为 JSON，并留下一条可定位的告警。
+        let reported = false;
+        for (const name of Object.keys(def.outputs)) {
+          const v = result[name];
+          if (looksLikeInstance(v)) {
+            if (!reported) {
+              reported = true;
+              add(node, 'warn', `计算：输出 ${name} 只是形似元素的对象`, 'INVALID_VALUE',
+                '元素必须由解析节点产出；该值已按 JSON 处理，下游不会按 addr 解码');
+            }
+            out[name] = toPlainJson(v);
+          } else {
+            out[name] = v;
+          }
+        }
         setView({ kind: 'calc', outputs: out });
         return out;
       }

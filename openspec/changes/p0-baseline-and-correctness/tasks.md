@@ -12,10 +12,10 @@
 
 ## 2. 值类别显式化
 
-- [ ] 2.1 在 `src/bp/types.ts` 引入模块内 `WeakSet` 品牌：`makeView` 产出实例时登记，`isInstanceView` 改为查表且签名不变。验证：新增用例证明手工构造的 `{addr,typeName,fields}` 不被认作实例，而 `makeView` 的产出被认作实例；`pnpm test` 全绿。
-- [ ] 2.2 在 `eval.ts` 的计算节点分支对 `def.run` 的返回值做规范化：非品牌实例一律按 JSON 处理，形状像元素时追加 `INVALID_VALUE` 告警。验证：用例覆盖「calc 返回伪元素 → 接 number 输入 → 告警且不按 addr 解码」与「真实 `elem:0` → 仍当地址使用」。
-- [ ] 2.3 确认展示层对降级值不崩溃：`Inspector` 的 calc 输出与 `Canvas` 的端口行能显示对象/数组的 JSON 摘要而不是抛错。验证：用例对降级值调用展示格式化函数无异常，并在 NVMe 示例中手工确认端口行可读。
-- [ ] 2.4 用 `samples/` 与既有 293 条用例回归，把每一处新增 `INVALID_VALUE` 逐条判定为「真 bug」或「误报」，结论写入 `docs/value-branding.md`。验证：文档列出每处告警的节点、原因与处置；无误报遗留。
+- [x] 2.1 在 `src/bp/types.ts` 引入模块内 `WeakSet` 品牌：`makeView` 产出实例时登记，`isInstanceView` 改为查表且签名不变。验证：新增用例证明手工构造的 `{addr,typeName,fields}` 不被认作实例，而 `makeView` 的产出被认作实例；`pnpm test` 全绿。
+- [x] 2.2 在 `eval.ts` 的计算节点分支对 `def.run` 的返回值做规范化：非品牌实例一律按 JSON 处理，形状像元素时追加 `INVALID_VALUE` 告警。验证：用例覆盖「calc 返回伪元素 → 接 number 输入 → 告警且不按 addr 解码」与「真实 `elem:0` → 仍当地址使用」。
+- [x] 2.3 确认展示层对降级值不崩溃：`Inspector` 的 calc 输出与 `Canvas` 的端口行能显示对象/数组的 JSON 摘要而不是抛错。验证：用例对降级值调用展示格式化函数无异常，并在 NVMe 示例中手工确认端口行可读。
+- [x] 2.4 用 `samples/` 与既有 293 条用例回归，把每一处新增 `INVALID_VALUE` 逐条判定为「真 bug」或「误报」，结论写入 `docs/value-branding.md`。验证：文档列出每处告警的节点、原因与处置；无误报遗留。
 
 ## 3. 资产身份
 
