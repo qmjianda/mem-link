@@ -60,6 +60,8 @@ export interface TreeRow {
   more?: true;
   /** more 行对应的父 path（loadMore 用） */
   moreOf?: string;
+  /** 该行是数组/链表容器：g 跳下标时以它为目标 */
+  container?: 'array' | 'list';
 }
 
 function msgOf(e: unknown): string {
@@ -81,6 +83,8 @@ export class StructTree {
   private readonly cache = new Map<string, TreeRow[]>();
   /** path → 已加载的元素数（数组/链表分页） */
   private readonly pages = new Map<string, number>();
+  /** path → 可按下标跳转的容器信息 */
+  private readonly containers = new Map<string, { kind: 'array' | 'list'; count?: number }>();
   private readonly rootRow: TreeRow;
 
   /* 链表遍历状态 */
@@ -129,12 +133,17 @@ export class StructTree {
     }
 
     // 有搜索词时保留「命中行的祖先」，否则缩进会失去上下文。
+    // 搜索时保留「加载更多」行，否则搜索状态下无法继续加载长数据。
     const kept = new Set<string>();
     const mark = (row: TreeRow): boolean => {
       let hit = row.tone !== 'more' && row.tone !== 'note' && matches(row, q);
       if (row.expandable && expanded.has(row.path)) {
-        for (const child of this.children(row.path)) {
-          if (mark(child)) hit = true;
+        const kids = this.children(row.path);
+        let childHit = false;
+        for (const child of kids) if (mark(child)) childHit = true;
+        if (childHit) {
+          hit = true;
+          for (const child of kids) if (child.more) kept.add(child.path);
         }
       }
       if (hit) kept.add(row.path);
@@ -164,6 +173,15 @@ export class StructTree {
     return rows;
   }
 
+  /** 是否存在可按下标跳转的容器（根或嵌套数组字段）。 */
+  hasContainer(): boolean { return this.containers.size > 0; }
+
+  /** 默认下标目标：根容器，或第一个嵌套数组字段。 */
+  defaultIndexPath(): string {
+    if (this.containers.has(this.rootPath)) return this.rootPath;
+    return this.containers.keys().next().value ?? this.rootPath;
+  }
+
   /** 追加一页；返回是否还有更多。 */
   loadMore(path: string): boolean {
     const loaded = this.pages.get(path) ?? TREE_PAGE;
@@ -181,34 +199,38 @@ export class StructTree {
     return `${this.root.type.size} B`;
   }
 
-  /** 下标跳转：把该下标对应的行加载出来，返回它的 path。 */
-  locateIndex(index: number): { path?: string; error?: string } {
+  /** 下标跳转：把目标容器内该下标的行加载出来，返回它的 path。 */
+  locateIndex(index: number, targetPath?: string): { path?: string; error?: string } {
     if (!Number.isInteger(index) || index < 0) return { error: '下标必须是非负整数' };
-    if (this.root.kind === 'array') {
-      const count = this.root.count ?? 0;
+    const target = targetPath ?? this.defaultIndexPath();
+    const container = this.containers.get(target);
+    if (!container) return { error: '选中的行不是数组 / 链表容器' };
+
+    if (container.kind === 'array') {
+      const count = container.count ?? 0;
       if (index >= count) return { error: `下标 ${index} 越界（共 ${count} 项）` };
       const need = Math.min(count, Math.ceil((index + 1) / TREE_PAGE) * TREE_PAGE);
-      const loaded = this.pages.get(this.rootPath) ?? TREE_PAGE;
+      const loaded = this.pages.get(target) ?? TREE_PAGE;
       if (need > loaded) {
-        this.pages.set(this.rootPath, need);
-        this.cache.delete(this.rootPath);
+        this.pages.set(target, need);
+        this.cache.delete(target);
       }
-      return { path: `${this.rootPath}[${index}]` };
+      return { path: `${target}[${index}]` };
     }
-    if (this.root.kind === 'list') {
-      if (index >= this.listMax) return { error: `下标 ${index} 超过链表上限 ${this.listMax}` };
-      this.walkList(index + 1);
-      if (index >= this.listAddrs.length) {
-        return { error: this.listError ?? (this.listCycle ? '链表有环，已停止' : `链表只有 ${this.listAddrs.length} 项`) };
-      }
-      const loaded = this.pages.get(this.rootPath) ?? TREE_PAGE;
-      if (index + 1 > loaded) {
-        this.pages.set(this.rootPath, Math.ceil((index + 1) / TREE_PAGE) * TREE_PAGE);
-        this.cache.delete(this.rootPath);
-      }
-      return { path: `${this.rootPath}[${index}]` };
+
+    // 链表只能从头部顺序走，因此只支持根容器
+    if (target !== this.rootPath) return { error: '嵌套链表暂不支持下标跳转' };
+    if (index >= this.listMax) return { error: `下标 ${index} 超过链表上限 ${this.listMax}` };
+    this.walkList(index + 1);
+    if (index >= this.listAddrs.length) {
+      return { error: this.listError ?? (this.listCycle ? '链表有环，已停止' : `链表只有 ${this.listAddrs.length} 项`) };
     }
-    return { error: '当前根是单个结构体，没有下标' };
+    const loaded = this.pages.get(this.rootPath) ?? TREE_PAGE;
+    if (index + 1 > loaded) {
+      this.pages.set(this.rootPath, Math.ceil((index + 1) / TREE_PAGE) * TREE_PAGE);
+      this.cache.delete(this.rootPath);
+    }
+    return { path: `${this.rootPath}[${index}]` };
   }
 
   /* ------------------------------------------------------------- 根与行 */
@@ -228,8 +250,11 @@ export class StructTree {
       size: type.size,
       valueText,
       expandable: kind === 'struct' ? type.fields.length > 0 : (kind === 'array' ? (this.root.count ?? 0) > 0 : true),
+      container: kind === 'array' ? 'array' : kind === 'list' ? 'list' : undefined,
       tone: 'root',
     };
+    if (kind === 'array') this.containers.set(row.path, { kind: 'array', count: this.root.count ?? 0 });
+    if (kind === 'list') this.containers.set(row.path, { kind: 'list' });
     this.builders.set(row.path, () => {
       if (kind === 'struct') return this.instanceRows(row.path, type, addr, 1);
       if (kind === 'array') {
@@ -301,8 +326,10 @@ export class StructTree {
         size,
         valueText: f.kind === 'array' ? `[${count}]` : `@${toHex(at)}`,
         expandable: f.kind === 'record' ? !!elem && elem.size > 0 : count > 0,
+        container: f.kind === 'array' ? 'array' : undefined,
         tone: 'field',
       };
+      if (f.kind === 'array') this.containers.set(path, { kind: 'array', count });
       if (f.kind === 'record' && elem) {
         this.builders.set(path, () => this.instanceRows(path, elem, at, depth + 1));
       } else if (f.kind === 'array') {
@@ -359,6 +386,7 @@ export class StructTree {
   private arrayRows(
     path: string, elem: TypeDef | undefined, base: number, count: number, stride: number, depth: number,
   ): TreeRow[] {
+    this.containers.set(path, { kind: 'array', count });
     const loaded = Math.min(count, this.pages.get(path) ?? TREE_PAGE);
     const rows: TreeRow[] = [];
     for (let i = 0; i < loaded; i++) {
@@ -383,6 +411,7 @@ export class StructTree {
   }
 
   private listRows(path: string, depth: number): TreeRow[] {
+    this.containers.set(path, { kind: 'list' });
     const loaded = Math.min(this.listMax, this.pages.get(path) ?? TREE_PAGE);
     this.walkList(loaded);
     const type = this.root.type;
@@ -497,4 +526,9 @@ function matches(row: TreeRow, q: string): boolean {
     || row.typeText.toLowerCase().includes(q)
     || row.valueText.toLowerCase().includes(q)
     || row.path.toLowerCase().includes(q);
+}
+
+/** 地址是否已在当前展开的行里（元素行/根行），用于「树内定位」。 */
+export function findRowPathByAddr(rows: TreeRow[], addr: number): string | undefined {
+  return rows.find((r) => (r.tone === 'element' || r.tone === 'root') && r.addr === addr)?.path;
 }

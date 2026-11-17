@@ -22,7 +22,8 @@
 - 入口三个：节点标题栏 `⤢`（仅 struct/list/array）、检查器「打开」、双击节点空白处；Esc 退出，图的缩放与选中不变。**没有** Enter 快捷键（用户明确不要）。
 - `src/bp/tree.ts` 是懒解码模型：结构体浅解码、链表/数组分页（200/页）、`locateIndex` 跳下标、搜索只过滤已展开行并保留祖先、`follow`/hex 指针可内联展开。
 - `src/bp/StructTree.tsx` 是虚拟滚动 UI。图上求值仍截断 4096，树里不受此限（受 pack 的 list `max` 约束），所以两处上限语义不同，改的时候别混。
-- 回归：`node scripts/cdp-verify-tree.mjs`（14 项）+ `tests/tree.test.ts`。
+- 同一节点再次打开会恢复展开/搜索/游标/滚动（`BlueprintApp` 的 `treeSessions`，仅本次会话）；数组容器（含嵌套数组字段）支持 `g` 跳下标；地址行有 `⌖` 树内定位与 `↗` 图上解析两个按钮。
+- 回归：`node scripts/cdp-verify-tree.mjs`（17 项）+ `tests/tree.test.ts`。
 
 ## 仓库
 

@@ -8,7 +8,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toHex } from '../core/mem';
 import type { TreeRootSpec, TreeRow } from './tree';
-import { StructTree as TreeModel } from './tree';
+import { findRowPathByAddr, StructTree as TreeModel } from './tree';
 
 const ROW_H = 22;
 const OVERSCAN = 8;
@@ -21,21 +21,36 @@ function Highlight({ text, q }: { text: string; q: string }) {
   return <>{text.slice(0, i)}<mark>{text.slice(i, i + q.length)}</mark>{text.slice(i + q.length)}</>;
 }
 
+/** 同一节点再次打开时恢复的视图状态（只在本次会话内保留）。 */
+export interface TreeSession {
+  expanded: string[];
+  query: string;
+  cursor: number;
+  scrollTop: number;
+}
+
 interface Props {
   root: TreeRootSpec;
   title: string;
   subtitle?: string;
+  initial?: TreeSession;
+  onSession?: (session: TreeSession) => void;
   onClose: () => void;
   onFollow: (addr: number, description: string) => void;
 }
 
-export default function StructTree({ root, title, subtitle, onClose, onFollow }: Props) {
+export default function StructTree({
+  root, title, subtitle, initial, onSession, onClose, onFollow,
+}: Props) {
   const model = useMemo(() => new TreeModel(root), [root]);
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set([model.rootPath]));
-  const [query, setQuery] = useState('');
+  const initialRef = useRef(initial);
+  const [expanded, setExpanded] = useState<Set<string>>(
+    () => new Set(initial?.expanded?.length ? initial.expanded : [model.rootPath]),
+  );
+  const [query, setQuery] = useState(initial?.query ?? '');
   const [version, setVersion] = useState(0);
-  const [cursor, setCursor] = useState(0);
-  const [scrollTop, setScrollTop] = useState(0);
+  const [cursor, setCursor] = useState(initial?.cursor ?? 0);
+  const [scrollTop, setScrollTop] = useState(initial?.scrollTop ?? 0);
   const [viewportH, setViewportH] = useState(600);
   const [jump, setJump] = useState('');
   const [notice, setNotice] = useState('');
@@ -61,6 +76,10 @@ export default function StructTree({ root, title, subtitle, onClose, onFollow }:
     const el = bodyRef.current;
     if (!el) return;
     setViewportH(el.clientHeight);
+    if (initialRef.current?.scrollTop) {
+      el.scrollTop = initialRef.current.scrollTop;
+      setScrollTop(el.scrollTop);
+    }
     const ro = new ResizeObserver(() => setViewportH(el.clientHeight));
     ro.observe(el);
     return () => ro.disconnect();
@@ -68,12 +87,29 @@ export default function StructTree({ root, title, subtitle, onClose, onFollow }:
 
   useEffect(() => { hostRef.current?.focus(); }, []);
 
-  // 换搜索词后结果整体变化，回到顶部并重置游标
+  // 换搜索词后结果整体变化，回到顶部并重置游标；首次挂载要保留恢复的滚动位置
+  const lastQuery = useRef(query);
   useEffect(() => {
+    if (query === lastQuery.current) return;
+    lastQuery.current = query;
     setCursor(0);
     if (bodyRef.current) bodyRef.current.scrollTop = 0;
     setScrollTop(0);
   }, [query]);
+
+  // 退出时把展开路径、搜索词、游标与滚动位置交回父级缓存
+  const latest = useRef({ expanded, query, cursor, scrollTop });
+  latest.current = { expanded, query, cursor, scrollTop };
+  const sessionSink = useRef(onSession);
+  sessionSink.current = onSession;
+  useEffect(() => () => {
+    sessionSink.current?.({
+      expanded: [...latest.current.expanded],
+      query: latest.current.query,
+      cursor: latest.current.cursor,
+      scrollTop: latest.current.scrollTop,
+    });
+  }, []);
 
   const scrollToIndex = (index: number) => {
     const el = bodyRef.current;
@@ -116,15 +152,29 @@ export default function StructTree({ root, title, subtitle, onClose, onFollow }:
     scrollToIndex(Math.min(rows.length - 1, Math.max(0, cursor + delta)));
   };
 
+  const locateAddr = (addr: number) => {
+    const path = findRowPathByAddr(rows, addr);
+    if (!path) { setNotice(`0x${addr.toString(16)} 还没在当前树里展开`); return; }
+    const index = rows.findIndex((r) => r.path === path);
+    if (index >= 0) scrollToIndex(index);
+    setNotice(`已定位 ${path}`);
+  };
+
+  const jumpTarget = () => {
+    const row = rows[cursor];
+    return row?.container ? row.path : model.defaultIndexPath();
+  };
+
   const jumpToIndex = () => {
     const raw = jump.trim().replace(/^\[/, '').replace(/\]$/, '');
     if (!raw) return;
     const n = Number(raw);
     if (!Number.isInteger(n) || n < 0) { setNotice('下标必须是非负整数'); return; }
-    const r = model.locateIndex(n);
+    const target = jumpTarget();
+    const r = model.locateIndex(n, target);
     if (r.error || !r.path) { setNotice(r.error ?? '定位失败'); return; }
-    setNotice('');
-    setExpanded((prev) => new Set(prev).add(model.rootPath));
+    setNotice(`已跳到 ${target}[${n}]`);
+    setExpanded((prev) => new Set(prev).add(target));
     setVersion((v) => v + 1);
     setPendingPath(r.path);
   };
@@ -170,7 +220,7 @@ export default function StructTree({ root, title, subtitle, onClose, onFollow }:
         searchRef.current?.focus();
         break;
       case 'g':
-        if (model.root.kind !== 'struct') { e.preventDefault(); jumpRef.current?.focus(); }
+        if (canJump) { e.preventDefault(); jumpRef.current?.focus(); }
         break;
       default:
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') { e.preventDefault(); copyPath(); }
@@ -184,6 +234,9 @@ export default function StructTree({ root, title, subtitle, onClose, onFollow }:
   const visible = rows.slice(start, end);
   const openCount = expanded.size;
   const q = query.trim().toLowerCase();
+  const canJump = model.hasContainer();
+  const jumpPath = jumpTarget();
+  const jumpLabel = rows.find((r) => r.path === jumpPath)?.label ?? root.type.name;
 
   return (
     <div
@@ -211,19 +264,20 @@ export default function StructTree({ root, title, subtitle, onClose, onFollow }:
                 placeholder="搜索字段 / 值（/）"
                 value={query}
                 onChange={(e) => { setQuery(e.target.value); setCursor(0); }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') { e.preventDefault(); move(e.shiftKey ? -1 : 1); }
-                    if (e.key === 'Escape') { e.stopPropagation(); setQuery(''); }
-                  }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') { e.preventDefault(); move(e.shiftKey ? -1 : 1); }
+                  if (e.key === 'Escape') { e.stopPropagation(); setQuery(''); }
+                }}
               />
               {query.trim() && <em>{rows.length} 行</em>}
             </label>
-            {model.root.kind !== 'struct' && (
+            {canJump && (
               <label className="bp-tree-jump">
                 <input
                   ref={jumpRef}
                   className="in mono"
-                  placeholder="跳下标（g）"
+                  placeholder={`跳 ${jumpLabel} 下标（g）`}
+                  title={`目标容器：${jumpPath}`}
                   value={jump}
                   onChange={(e) => setJump(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); jumpToIndex(); } }}
@@ -291,13 +345,22 @@ export default function StructTree({ root, title, subtitle, onClose, onFollow }:
                   </span>
                   <span className="bp-tree-act">
                     {row.ref && (
-                      <button
-                        className="bp-tree-go"
-                        title={`在图上解析 ${row.ref.hint}`}
-                        aria-label="在图上解析"
-                        onMouseDown={(e) => e.stopPropagation()}
-                        onClick={(e) => { e.stopPropagation(); onFollow(row.ref!.addr, row.ref!.hint); }}
-                      >↗</button>
+                      <>
+                        <button
+                          className="bp-tree-go"
+                          title={`在树内定位 0x${row.ref.addr.toString(16)}`}
+                          aria-label="在树内定位"
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onClick={(e) => { e.stopPropagation(); locateAddr(row.ref!.addr); }}
+                        >⌖</button>
+                        <button
+                          className="bp-tree-go"
+                          title={`在图上解析 ${row.ref.hint}`}
+                          aria-label="在图上解析"
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onClick={(e) => { e.stopPropagation(); onFollow(row.ref!.addr, row.ref!.hint); }}
+                        >↗</button>
+                      </>
                     )}
                   </span>
                 </div>
@@ -307,7 +370,7 @@ export default function StructTree({ root, title, subtitle, onClose, onFollow }:
         </div>
 
         <footer className="bp-tree-foot mono">
-          <span>↑↓ 移动 · Enter 展开 · ←→ 收起/展开{model.root.kind !== 'struct' ? ' · g 跳下标' : ''} · / 搜索 · Ctrl+C 复制路径 · Esc 退出</span>
+          <span>↑↓ 移动 · Enter 展开 · ←→ 收起/展开{canJump ? ' · g 跳下标' : ''} · / 搜索 · Ctrl+C 复制路径 · ⌖ 树内定位 / ↗ 图上解析 · Esc 退出</span>
           <span className="bp-tree-notice">{notice}</span>
         </footer>
       </div>

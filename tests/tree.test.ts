@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import demoSource from '../samples/demo.bp.ts?raw';
 import { loadBlueprintPack } from '../src/bp/load';
-import { StructTree } from '../src/bp/tree';
+import { findRowPathByAddr, StructTree } from '../src/bp/tree';
 import type { BlueprintPack, ListNodeDef } from '../src/bp/types';
 import { Memory } from '../src/core/mem';
 import { array, record, struct, u16, u32, u8 } from '../src/core/pack';
@@ -101,6 +101,22 @@ describe('struct tree model', () => {
     const expanded = tree.rows(new Set([tree.rootPath, 'Entry[0]']), 'name');
     expect(expanded.map((r) => r.path)).toEqual(['Entry', 'Entry[0]', 'Entry[0].name']);
   });
+
+  it('地址能在已加载的行里定位', () => {
+    const rows = listTree().rows(new Set(['Entry']), '');
+    expect(findRowPathByAddr(rows, 0x178)).toBe('Entry[1]');
+    expect(findRowPathByAddr(rows, 0x999)).toBeUndefined();
+  });
+
+  it('搜索状态下仍保留「加载更多」行', () => {
+    const tree = new StructTree({
+      kind: 'array', pack: demoPack, type: demoPack.types.Entry,
+      mem: new Memory(new Uint8Array(0x8000), 0), addr: 0, count: 500, stride: 24,
+    });
+    const rows = tree.rows(new Set([tree.rootPath]), '0x');
+    expect(rows.filter((r) => r.tone === 'element')).toHaveLength(200);
+    expect(rows.find((r) => r.tone === 'more')?.moreOf).toBe(tree.rootPath);
+  });
 });
 
 describe('struct tree nested decode', () => {
@@ -154,6 +170,19 @@ describe('struct tree nested decode', () => {
     const tree = new StructTree({ kind: 'struct', pack, type: Outer, mem: mem(), addr: 0x9000 });
     const rows = tree.rows(new Set([tree.rootPath]), '');
     expect(rows.some((r) => r.tone === 'error' && r.label.includes('不在缓冲区'))).toBe(true);
+  });
+
+  it('结构体里的嵌套数组也能按下标跳转', () => {
+    const tree = new StructTree({ kind: 'struct', pack, type: Outer, mem: mem(), addr: 0x100 });
+    tree.rows(new Set([tree.rootPath]), '');
+    expect(tree.hasContainer()).toBe(true);
+    expect(tree.defaultIndexPath()).toBe('Outer.items');
+    expect(tree.locateIndex(1)).toEqual({ path: 'Outer.items[1]' });
+    expect(tree.locateIndex(1, 'Outer.items')).toEqual({ path: 'Outer.items[1]' });
+    expect(tree.locateIndex(2, 'Outer.items').error).toContain('越界');
+    expect(tree.locateIndex(0, 'Outer.kind').error).toBeTruthy();
+    expect(tree.rows(new Set([tree.rootPath, 'Outer.items', 'Outer.items[1]']), '')
+      .some((r) => r.path === 'Outer.items[1].a')).toBe(true);
   });
 });
 

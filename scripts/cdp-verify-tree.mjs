@@ -60,6 +60,22 @@ const mouse = (type, x, y) => send('Input.dispatchMouseEvent', {
   buttons: type === 'mouseReleased' ? 0 : 1, clickCount: 1,
 });
 const esc = () => evaluate(`document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+const closeTree = () => evaluate(`document.querySelector('.bp-tree-overlay')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+const openPrp = () => evaluate(`(() => {
+  const btn = [...document.querySelectorAll('.bp-node-open')].find((b) =>
+    (b.closest('.bp-node')?.querySelector('.bp-node-title')?.textContent ?? '').includes('PRP 列表'));
+  if (!btn) return false;
+  btn.click();
+  return true;
+})()`);
+const typeSearch = (text) => evaluate(`(() => {
+  const input = document.querySelector('.bp-tree-search input');
+  if (!input) return false;
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+  setter.call(input, ${JSON.stringify(text)});
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  return true;
+})()`);
 
 async function main() {
   const page = await findPage();
@@ -195,8 +211,38 @@ async function main() {
   })()`);
   await sleep(400);
   const goCount = await evaluate(`document.querySelectorAll('.bp-tree-go').length`);
-  check('指针字段出现图上解析按钮', goOpened && goCount > 0, `${goCount} 个`);
-  await esc();
+  const locateCount = await evaluate(`document.querySelectorAll('.bp-tree-go[aria-label="在树内定位"]').length`);
+  check('指针字段有图上解析与树内定位按钮', goOpened && goCount > 0 && locateCount > 0,
+    `共 ${goCount} 个 · 定位 ${locateCount}`);
+  await evaluate(`document.querySelector('.bp-tree-go[aria-label="在树内定位"]')?.click()`);
+  await sleep(200);
+  const notice = await evaluate(`document.querySelector('.bp-tree-notice')?.textContent ?? ''`);
+  check('树内定位给出结果提示且不关闭浮层',
+    /已定位|还没/.test(notice) && await evaluate(`!!document.querySelector('.bp-tree-overlay')`), notice);
+  await closeTree();
+  await sleep(250);
+
+  // ---- 会话恢复：展开 [0] + 搜索词，退出再进来还在
+  await openPrp();
+  await sleep(350);
+  await evaluate(`(() => {
+    const row = [...document.querySelectorAll('.bp-tree-row')].find((r) => r.querySelector('.bp-tree-chev')?.textContent === '▸');
+    row?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+  })()`);
+  await sleep(250);
+  await typeSearch('数据页地址');
+  await sleep(250);
+  const rowsBefore = await evaluate(`document.querySelectorAll('.bp-tree-row').length`);
+  await closeTree();
+  await sleep(250);
+  await openPrp();
+  await sleep(350);
+  const restoredQuery = await evaluate(`document.querySelector('.bp-tree-search input')?.value ?? ''`);
+  const rowsAfter = await evaluate(`document.querySelectorAll('.bp-tree-row').length`);
+  const hasChild = await evaluate(`[...document.querySelectorAll('.bp-tree-name')].some((n) => n.textContent.includes('数据页地址'))`);
+  check('再次打开恢复搜索词', restoredQuery === '数据页地址', restoredQuery);
+  check('再次打开恢复展开路径', rowsAfter === rowsBefore && hasChild, `${rowsBefore} → ${rowsAfter}`);
+  await closeTree();
   await sleep(250);
 
   const nodesAfter = await evaluate(`document.querySelectorAll('.bp-node').length`);

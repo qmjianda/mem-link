@@ -1035,7 +1035,7 @@ button.bp-hist.bp-nav { font-size: 17px; line-height: 1; }
   background: var(--bg);
 }
 .bp-tree {
-  --tree-cols: minmax(200px, 1fr) minmax(240px, 1.5fr) 130px 116px 26px;
+  --tree-cols: minmax(200px, 1fr) minmax(240px, 1.5fr) 130px 116px 48px;
   flex: 1; min-width: 0;
   display: flex; flex-direction: column;
   background: var(--panel);
@@ -1090,7 +1090,7 @@ button.bp-hist.bp-nav { font-size: 17px; line-height: 1; }
 .bp-tree-val em { font-style: normal; color: var(--dim); }
 .bp-tree-type { font-size: 10px; color: #7b8ca3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bp-tree-off { text-align: right; font-size: 10px; color: #5f7188; }
-.bp-tree-act { display: flex; justify-content: flex-end; }
+.bp-tree-act { display: flex; justify-content: flex-end; gap: 2px; }
 .bp-tree-go {
   width: 20px; height: 20px; padding: 0; line-height: 1;
   border: 1px solid transparent; border-radius: 4px;

@@ -54,7 +54,7 @@ import FollowPicker, {
 } from './FollowPicker';import GraphSearch, { type SearchHit } from './GraphSearch';
 import { buildMenu, type MenuCtx, type MenuItem, type MenuTarget } from './menus';
 import { IconAlert, IconDownload, IconFolder, IconRefresh, IconUndo, IconUpload, Logo } from '../ui/icons';
-import StructTree from './StructTree';
+import StructTree, { type TreeSession } from './StructTree';
 import type { TreeRootSpec } from './tree';
 
 /** 分隔条命中的栅格轨道宽度（视觉带 5px 居中，命中区 9px） */
@@ -155,7 +155,9 @@ export default function BlueprintApp() {
   /** 拖入文件时的覆盖层 */
   const [dropping, setDropping] = useState(false);
   /** 全屏结构树：打开时把节点、根类型与内存快照一起固定下来 */
-  const [tree, setTree] = useState<{ root: TreeRootSpec; title: string; subtitle?: string } | null>(null);
+  const [tree, setTree] = useState<{ nodeId: string; root: TreeRootSpec; title: string; subtitle?: string } | null>(null);
+  /** 每个节点上一次的展开/搜索/滚动状态，只在本次会话内保留 */
+  const treeSessions = useRef(new Map<string, TreeSession>());
   /** 问题定位后的节点脉冲高亮 */
   const [pulse, setPulse] = useState<string | null>(null);
   /** F2 重命名：检查器据此切入行内编辑 */
@@ -842,7 +844,7 @@ export default function BlueprintApp() {
         : '这个节点暂时没有可展开的结构');
       return;
     }
-    setTree({ root, title: displayTitle(node, nodeTitleOf(node)), subtitle: buffer?.name });
+    setTree({ nodeId, root, title: displayTitle(node, nodeTitleOf(node)), subtitle: buffer?.name });
   };
 
   /** 多级指针预览：按偏移链逐级解引用，越界立即报错，供浮层实时显示。 */  const previewChain = (base: number, width: 4 | 8, offsets: number[]): FollowPreview | null => {
@@ -1989,9 +1991,12 @@ export default function BlueprintApp() {
       )}
       {tree && (
         <StructTree
+          key={tree.nodeId}
           root={tree.root}
           title={tree.title}
           subtitle={tree.subtitle}
+          initial={treeSessions.current.get(tree.nodeId)}
+          onSession={(session) => treeSessions.current.set(tree.nodeId, session)}
           onClose={() => setTree(null)}
           onFollow={(addr, hint) => { setTree(null); openFollow(addr, hint); }}
         />
