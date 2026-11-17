@@ -39,7 +39,7 @@ pnpm build      # dist/index.html（单文件，约 685 KB）
 - `samples/demo.bp.ts` / `demo.bin` / `demo.blueprint.json` — 索引链表的最小示例：结构体 + 链表节点
 - `docs/description-format.md` — pack 与节点参考
 
-重新生成 NVMe 示例资产：`node scripts/gen-nvme.mjs`；真实浏览器回归：`node scripts/cdp-verify.mjs`、`node scripts/cdp-verify-follow.mjs`（覆盖跟随地址 / 元素解析 / 就地重命名 / 标注缩放）。
+重新生成 NVMe 示例资产：`node scripts/gen-nvme.mjs`；真实浏览器回归：`node scripts/cdp-verify.mjs`、`node scripts/cdp-verify-follow.mjs`（跟随地址 / 元素解析 / 就地重命名 / 标注缩放）、`node scripts/cdp-verify-core.mjs`（从空画布拖入 `samples/demo.bin` 与 `demo.bp.ts`，走完 bin → 结构体 → 链表 → 跟随字段，22 项）。
 
 ### 默认示例：NVMe Submission Queue
 

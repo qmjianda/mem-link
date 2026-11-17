@@ -60,7 +60,7 @@
 
 - [x] 8.1 全量回归：`pnpm exec tsc --noEmit`、`pnpm lint`、`pnpm test`（总数不少于 290——v1/v2 用例随入口删除后基线为 294）、`pnpm build` 四条命令连续通过。验证：输出全绿，构建产物小于 800 KB。
 - [x] 8.2 对比基线：基准脚本 800 节点 p95 相对 `docs/perf-baseline.md` 的劣化不超过 10%。验证：脚本输出与基线表并列记录，超阈值则回退对应改动。
-- [ ] 8.3 核心链路手工清单：拖入 `samples/demo.bin`、导入 `samples/demo.bp.ts`、在 `0x100` 解析 `Entry`、沿 `next` 走完整条链、在十六进制视图跟随一个字段地址。验证：五步都符合预期，Console 无报错。
+- [x] 8.3 核心链路手工清单：拖入 `samples/demo.bin`、导入 `samples/demo.bp.ts`、在 `0x100` 解析 `Entry`、沿 `next` 走完整条链、在十六进制视图跟随一个字段地址。验证：已脚本化为 `scripts/cdp-verify-core.mjs`（22 项，真实 Chrome 拖放真实样例），并据此修掉一个真实缺陷——`next` 这类「索引经 transform 转地址」的字段，「在此解析」原先按 `raw` 下标跟随（0x5），现改为按转换后的值跟随（0x178）。
 
 ## Workflow follow-up
 

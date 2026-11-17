@@ -10,7 +10,10 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "bench": "node scripts/bench-eval.mjs"
+    "bench": "node scripts/bench-eval.mjs",
+    "verify": "node scripts/cdp-verify.mjs",
+    "verify:follow": "node scripts/cdp-verify-follow.mjs",
+    "verify:core": "node scripts/cdp-verify-core.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

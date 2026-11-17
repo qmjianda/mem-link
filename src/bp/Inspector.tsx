@@ -121,9 +121,11 @@ function FieldTable({ inst, name, tools }: {
       .map((b) => b.toString(16).padStart(2, '0')).join(' ');
   };
   const followable = (f: (typeof inst.fields)[number]): number | undefined => {
-    const raw = typeof f.raw === 'number' ? f.raw : f.value;
-    if (typeof raw !== 'number' || !Number.isFinite(raw)) return undefined;
-    const addr = Math.trunc(raw);
+    // 优先用转换后的值：索引转地址的字段（next = idx → base + idx*stride）里，
+    // raw 是池下标，直接把 raw 当地址会跟到 0x5 这种错误位置。
+    const v = typeof f.value === 'number' ? f.value : f.raw;
+    if (typeof v !== 'number' || !Number.isFinite(v)) return undefined;
+    const addr = Math.trunc(v);
     return mem?.contains(addr, 1) ? addr : undefined;
   };
 
