@@ -1,5 +1,6 @@
 /**
- * 结构树回归：真实 Chrome 里走一遍「打开 → 展开 → 搜索 → 跳下标 → 地址跟随 → 退出」。
+ * 结构树回归：真实 Chrome 里走一遍「打开 → 展开 → 搜索 → 跳下标 → 树内定位 →
+ * footer 入口 → 生成解析节点 → 跟随并返回 → 退出」，并核对会话恢复与节点图不变。
  * 用法：node scripts/cdp-verify-tree.mjs（需先 build）
  */
 import { spawn } from 'node:child_process';
@@ -61,6 +62,12 @@ const mouse = (type, x, y) => send('Input.dispatchMouseEvent', {
 });
 const esc = () => evaluate(`document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
 const closeTree = () => evaluate(`document.querySelector('.bp-tree-overlay')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+/** 真实按键：浮层监听的是 window 上的 keydown，合成事件不够可靠 */
+async function pressKey(key, code, vk, ctrl = false) {
+  const modifiers = ctrl ? 2 : 0;
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key, code, windowsVirtualKeyCode: vk, modifiers });
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode: vk, modifiers });
+}
 const openPrp = () => evaluate(`(() => {
   const btn = [...document.querySelectorAll('.bp-node-open')].find((b) =>
     (b.closest('.bp-node')?.querySelector('.bp-node-title')?.textContent ?? '').includes('PRP 列表'));
@@ -247,6 +254,72 @@ async function main() {
 
   const nodesAfter = await evaluate(`document.querySelectorAll('.bp-node').length`);
   check('多次进出后节点图不变', nodesAfter === nodesBefore, `${nodesBefore} → ${nodesAfter}`);
+
+  // ---- 节点卡 footer 的「⤢ 全部」入口（截断 / 隐藏元素时的一键出口）
+  const footLinks = await evaluate(`document.querySelectorAll('.bp-node-foot-link').length`);
+  check('容器节点底部常驻结构树入口', footLinks > 0, `${footLinks} 个`);
+  const footOpened = await evaluate(`(() => {
+    const links = [...document.querySelectorAll('.bp-node-foot-link')];
+    const pick = links.find((b) => (b.closest('.bp-node')?.querySelector('.bp-node-title')?.textContent ?? '').includes('PRP 列表')) ?? links[0];
+    if (!pick) return false;
+    pick.click();
+    return true;
+  })()`);
+  await sleep(350);
+  check('footer 入口打开结构树', footOpened && await evaluate(`!!document.querySelector('.bp-tree-overlay:not(.hidden)')`));
+  check('从 footer 进来的树有可展开元素', await evaluate(`document.querySelectorAll('.bp-tree-row').length`) >= 3);
+
+  // ---- ⊕：按当前类型在图上生成解析节点，结构树保持打开
+  const resolveClicked = await evaluate(`(() => {
+    const b = document.querySelector('.bp-tree-go[aria-label="生成解析节点"]');
+    if (!b) return false;
+    b.click();
+    return true;
+  })()`);
+  await sleep(350);
+  const resolveNotice = await evaluate(`document.querySelector('.bp-tree-notice')?.textContent ?? ''`);
+  check('⊕ 生成解析节点且结构树不关闭',
+    resolveClicked && /已在图上生成/.test(resolveNotice)
+      && await evaluate(`!!document.querySelector('.bp-tree-overlay:not(.hidden)')`),
+    resolveNotice.slice(0, 40));
+  await closeTree();
+  await sleep(250);
+
+  // ---- ↗：跟随浮层让位但树不卸载，取消 / 选完都回到树
+  await pressKey('0', 'Digit0', 48, true); // Mod+0 适配全图，保证节点卡按钮可见
+  await sleep(300);
+  const goTree = await evaluate(`(() => {
+    const btn = [...document.querySelectorAll('.bp-node-open')]
+      .find((b) => (b.closest('.bp-node')?.querySelector('.bp-node-title')?.textContent ?? '').includes('Sqe'));
+    if (!btn) return false;
+    btn.click();
+    return true;
+  })()`);
+  await sleep(350);
+  const followClicked = await evaluate(`(() => {
+    const b = document.querySelector('.bp-tree-go[aria-label="在图上解析"]');
+    if (!b) return false;
+    b.click();
+    return true;
+  })()`);
+  await sleep(300);
+  check('↗ 打开跟随浮层时结构树只是隐藏、没有卸载',
+    goTree && followClicked
+      && await evaluate(`!!document.querySelector('.bp-tree-overlay.hidden') && !!document.querySelector('.bp-follow')`));
+  await pressKey('Escape', 'Escape', 27);
+  await sleep(300);
+  check('取消跟随也回到结构树',
+    await evaluate(`!!document.querySelector('.bp-tree-overlay:not(.hidden)') && !document.querySelector('.bp-follow')`));
+  await evaluate(`document.querySelector('.bp-tree-go[aria-label="在图上解析"]')?.click()`);
+  await sleep(300);
+  await pressKey('Enter', 'Enter', 13);
+  await sleep(450);
+  check('选完解析节点后回到结构树（闭环）',
+    await evaluate(`!!document.querySelector('.bp-tree-overlay:not(.hidden)') && !document.querySelector('.bp-follow')`),
+    await evaluate(`document.querySelector('.bp-tree-notice')?.textContent ?? ''`));
+  await closeTree();
+  await sleep(250);
+
   check('无未捕获异常 / console error', consoleErrors.length === 0, consoleErrors.slice(0, 2).join(' | '));
 
   const failed = results.filter((r) => !r.ok).length;

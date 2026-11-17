@@ -1,6 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
-import type { BlueprintPack, BPEdge, BPNode, BPResult, PortSpec, PortType, SourceInfo } from './types';
+import type {
+  BlueprintPack, BPEdge, BPNode, BPResult, PortSpec, PortType, SourceInfo, Truncation,
+} from './types';
 import { builtinLabel, canConnect, displayTitle, NODE_HEADER, NODE_WIDTH } from './types';
+import { focusFromTruncation, type TreeFocus } from './tree';
 import { builtinSubtitle } from './builtins';
 import { portsFor } from './eval';
 import {
@@ -64,8 +67,8 @@ interface Props {
    * 拖动过程中画布**不**改文档（因此不会触发求值），只直写 DOM transform。
    */
   onMoveCommit?: (moves: { id: string; x: number; y: number }[]) => void;
-  /** 打开结构树（struct / list / array 节点） */
-  onOpenNode?: (id: string) => void;
+  /** 打开结构树（struct / list / array 节点）；focus 用于从截断提示跳到指定项 */
+  onOpenNode?: (id: string, focus?: TreeFocus) => void;
   onParam: (id: string, key: string, value: string) => void;
   onConnect: (from: string, fromPort: string, to: string, toPort: string) => void;
   onDisconnect: (nodeId: string, port: string) => void;
@@ -174,6 +177,10 @@ interface Meta {
   footerTop: number;
   footer: string;
   footerError: boolean;
+  /** list/array 节点：底部常驻「在结构树里看全部」入口 */
+  isContainer: boolean;
+  /** 图上求值截断信息：点入口时跳到截断处 */
+  trunc?: Truncation;
 }
 
 interface Pending {
@@ -254,22 +261,27 @@ function metaFor(
   const footerTop = expandTop + (expandable ? EXPAND_H : 0);
 
   const view = result.views.get(node.id);
+  const containerView = view?.kind === 'list' || view?.kind === 'array' ? view : undefined;
+  const isContainer = !!containerView;
   let footer = '';
   let footerError = false;
-  if (view?.kind === 'list' || view?.kind === 'array') {
-    const hidden = view.count - dyn.length;
+  if (containerView) {
+    const hidden = containerView.count - dyn.length;
     if (hidden > 0) footer += `还有 ${hidden} 项`;
-    if (view.kind === 'list' && view.cycle) footer += `${footer ? ' · ' : ''}回环`;
-    if (view.trunc) {
-      const where = view.trunc.unit === 'address' ? `0x${view.trunc.at.toString(16)}` : `第 ${view.trunc.at} 项`;
+    if (view?.kind === 'list' && view.cycle) footer += `${footer ? ' · ' : ''}回环`;
+    if (containerView.trunc) {
+      const where = containerView.trunc.unit === 'address'
+        ? `0x${containerView.trunc.at.toString(16)}`
+        : `第 ${containerView.trunc.at} 项`;
       footer += `${footer ? ' · ' : ''}截断@${where}`;
     }
-    if (view.error) { footer += `${footer ? ' · ' : ''}${view.error}`; footerError = true; }
+    if (containerView.error) { footer += `${footer ? ' · ' : ''}${containerView.error}`; footerError = true; }
   } else if (view && 'error' in view && view.error) {
     footer = view.error;
     footerError = true;
   }
-  const footerH = footer ? 22 : 0;
+  // 容器节点底部常驻结构树入口，即使当前没有隐藏项也能一键进去看
+  const footerH = footer || isContainer ? 22 : 0;
   // 标注卡片：宽高可在画布上拖动调整，默认高度与旧版固定便签一致。
   const note = isNoteNode(node);
   const nsize = note ? noteSize(node) : null;
@@ -290,6 +302,8 @@ function metaFor(
     footerTop,
     footer,
     footerError,
+    isContainer,
+    trunc: containerView?.trunc,
   };
 }
 
@@ -1536,9 +1550,21 @@ export default function Canvas({
                 </button>
               )}
 
-              {lod === 'full' && m.footer && (
+              {lod === 'full' && (m.footer || (openable && m.isContainer)) && (
                 <div className={m.footerError ? 'bp-node-err' : 'bp-node-foot'} style={{ top: m.footerTop }}>
                   {m.footer}
+                  {openable && m.isContainer && (
+                    <button
+                      className="bp-node-foot-link"
+                      aria-label="在结构树里看全部"
+                      title={m.trunc ? '打开结构树并跳到截断处' : '在结构树里看全部元素'}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpenNode?.(node.id, m.trunc ? focusFromTruncation(m.trunc) : undefined);
+                      }}
+                    >⤢ 全部</button>
+                  )}
                 </div>
               )}
             </div>

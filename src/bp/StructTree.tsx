@@ -7,7 +7,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toHex } from '../core/mem';
-import type { TreeRootSpec, TreeRow } from './tree';
+import type { TreeFocus, TreeRootSpec, TreeRow } from './tree';
 import { findRowPathByAddr, StructTree as TreeModel } from './tree';
 
 const ROW_H = 22;
@@ -34,13 +34,20 @@ interface Props {
   title: string;
   subtitle?: string;
   initial?: TreeSession;
+  /** 从节点卡截断提示进来时，自动跳到那一项 */
+  focus?: TreeFocus;
+  /** 跟随浮层打开期间暂时让位，但不卸载：展开/搜索/滚动全部保留 */
+  hidden?: boolean;
   onSession?: (session: TreeSession) => void;
   onClose: () => void;
+  /** 在图上解析（跟随并返回树） */
   onFollow: (addr: number, description: string) => void;
+  /** 直接按当前类型在图上生成解析节点；返回是否成功 */
+  onResolve?: (addr: number, typeName: string) => boolean;
 }
 
 export default function StructTree({
-  root, title, subtitle, initial, onSession, onClose, onFollow,
+  root, title, subtitle, initial, focus, hidden, onSession, onClose, onFollow, onResolve,
 }: Props) {
   const model = useMemo(() => new TreeModel(root), [root]);
   const initialRef = useRef(initial);
@@ -55,6 +62,7 @@ export default function StructTree({
   const [jump, setJump] = useState('');
   const [notice, setNotice] = useState('');
   const [pendingPath, setPendingPath] = useState<string | null>(null);
+  const didFocus = useRef(false);
 
   const bodyRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -86,6 +94,31 @@ export default function StructTree({
   }, []);
 
   useEffect(() => { hostRef.current?.focus(); }, []);
+
+  // 跟随浮层期间让位：不卸载组件，滚动/展开/搜索状态原样保留；焦点交给浮层。
+  useEffect(() => {
+    if (hidden) hostRef.current?.blur();
+    else if (didFocus.current || !focus) hostRef.current?.focus();
+  }, [hidden, focus]);
+
+  // 从节点卡的截断提示进来：把 index / addr 翻译成目标行，展开根容器后滚过去。
+  useEffect(() => {
+    if (didFocus.current || !focus) return;
+    didFocus.current = true;
+    // 明确的定位意图优先于上次残留的搜索词，否则目标行可能被过滤掉
+    setQuery('');
+    const index = focus.index ?? (focus.addr != null ? model.indexOfAddress(focus.addr) : undefined);
+    if (index == null) {
+      setNotice('截断处不在当前数据范围内，已停在根节点');
+      return;
+    }
+    const r = model.locateIndex(index, model.rootPath);
+    if (r.error || !r.path) { setNotice(r.error ?? '定位失败'); return; }
+    setNotice(focus.label ?? `已跳到第 ${index} 项`);
+    setExpanded((prev) => new Set(prev).add(model.rootPath));
+    setVersion((v) => v + 1);
+    setPendingPath(r.path);
+  }, [focus, model]);
 
   // 换搜索词后结果整体变化，回到顶部并重置游标；首次挂载要保留恢复的滚动位置
   const lastQuery = useRef(query);
@@ -189,6 +222,7 @@ export default function StructTree({
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
+    if (hidden) return;
     if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();
@@ -240,9 +274,10 @@ export default function StructTree({
 
   return (
     <div
-      className="bp-tree-overlay"
+      className={`bp-tree-overlay${hidden ? ' hidden' : ''}`}
       role="dialog"
       aria-modal="true"
+      aria-hidden={hidden || undefined}
       aria-label={`${title} 结构视图`}
       tabIndex={-1}
       ref={hostRef}
@@ -344,6 +379,21 @@ export default function StructTree({
                       : row.tone === 'element' && row.addr ? toHex(row.addr) : ''}
                   </span>
                   <span className="bp-tree-act">
+                    {onResolve && (row.tone === 'element' || row.tone === 'instance') && (
+                      <button
+                        className="bp-tree-go"
+                        title={`按 ${root.type.name} 在图上生成解析节点（结构树保持打开）`}
+                        aria-label="生成解析节点"
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const ok = onResolve(row.addr, root.type.name);
+                          setNotice(ok
+                            ? `已在图上生成 ${root.type.name} @${toHex(row.addr)} 的解析节点，Esc 返回节点图`
+                            : '无法生成解析节点：地址不在任何缓冲区内');
+                        }}
+                      >⊕</button>
+                    )}
                     {row.ref && (
                       <>
                         <button
@@ -355,7 +405,7 @@ export default function StructTree({
                         >⌖</button>
                         <button
                           className="bp-tree-go"
-                          title={`在图上解析 ${row.ref.hint}`}
+                          title={`在图上解析 ${row.ref.hint}（选完回到结构树）`}
                           aria-label="在图上解析"
                           onMouseDown={(e) => e.stopPropagation()}
                           onClick={(e) => { e.stopPropagation(); onFollow(row.ref!.addr, row.ref!.hint); }}
@@ -370,7 +420,7 @@ export default function StructTree({
         </div>
 
         <footer className="bp-tree-foot mono">
-          <span>↑↓ 移动 · Enter 展开 · ←→ 收起/展开{canJump ? ' · g 跳下标' : ''} · / 搜索 · Ctrl+C 复制路径 · ⌖ 树内定位 / ↗ 图上解析 · Esc 退出</span>
+          <span>↑↓ 移动 · Enter 展开 · ←→ 收起/展开{canJump ? ' · g 跳下标' : ''} · / 搜索 · Ctrl+C 复制路径 · ⌖ 树内定位 / ↗ 图上解析 / ⊕ 生成节点 · Esc 退出</span>
           <span className="bp-tree-notice">{notice}</span>
         </footer>
       </div>

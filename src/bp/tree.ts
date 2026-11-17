@@ -14,11 +14,11 @@ import {
 } from '../core/pack';
 import { decodeFieldRaw, formatPackValue, packMemApi } from '../core/packgraph';
 import { createEntryReader } from './eval';
-import type { BlueprintPack, EntryView, ListNodeDef } from './types';
+import type { BlueprintPack, EntryView, ListNodeDef, Truncation } from './types';
 
 /** 每次展开/加载更多时追加的行数。 */
 export const TREE_PAGE = 200;
-/** 链表遍历的硬上限（pack 自己声明的 max 优先，且不超过它）。 */
+/** 链表遍历的硬上限：pack 显式声明的 max 优先；未声明时树里不受图上 4096 的限制。 */
 const HARD_MAX = 200_000;
 
 export interface TreeRootSpec {
@@ -38,6 +38,22 @@ export interface TreeRootSpec {
   /** 数组元素个数与步长 */
   count?: number;
   stride?: number;
+}
+
+/** 打开结构树时的初始定位（例如从节点卡的截断提示跳进来）。 */
+export interface TreeFocus {
+  /** 目标容器内的下标 */
+  index?: number;
+  /** 找不到下标时的备选：元素地址 */
+  addr?: number;
+  label?: string;
+}
+
+/** 把图上求值的截断信息翻译成树里的落点。 */
+export function focusFromTruncation(trunc: Truncation): TreeFocus {
+  return trunc.unit === 'index'
+    ? { index: trunc.at, label: `图上从第 ${trunc.at} 项截断 · 已跳到该处` }
+    : { addr: trunc.at, label: `图上在 0x${trunc.at.toString(16)} 截断 · 已跳到该处` };
 }
 
 export interface TreeRow {
@@ -111,7 +127,7 @@ export class StructTree {
     this.reader = createEntryReader(root.mem, root.pack);
     this.listCursor = root.addr;
     this.listNulls = new Set(root.nulls ?? []);
-    this.listMax = Math.min(root.max ?? 4096, HARD_MAX);
+    this.listMax = Math.min(root.max ?? HARD_MAX, HARD_MAX);
     this.rootRow = this.makeRootRow();
   }
 
@@ -231,6 +247,33 @@ export class StructTree {
       this.cache.delete(this.rootPath);
     }
     return { path: `${this.rootPath}[${index}]` };
+  }
+
+  /**
+   * 根容器里某个地址对应的下标，用于把「截断@0x…」翻译成可跳转的行。
+   * 数组直接算步长；链表边走边找，找到就停，不必先遍历整条链。
+   */
+  indexOfAddress(addr: number): number | undefined {
+    if (this.root.kind === 'array') {
+      const stride = this.root.stride ?? this.root.type.size;
+      if (stride <= 0) return undefined;
+      const delta = addr - this.root.addr;
+      if (delta < 0 || delta % stride !== 0) return undefined;
+      const index = delta / stride;
+      return index < (this.root.count ?? 0) ? index : undefined;
+    }
+    if (this.root.kind === 'list') {
+      const known = this.listAddrs.indexOf(addr);
+      if (known >= 0) return known;
+      while (!this.listDone && this.listAddrs.length < this.listMax) {
+        const before = this.listAddrs.length;
+        this.walkList(before + TREE_PAGE);
+        for (let i = before; i < this.listAddrs.length; i++) {
+          if (this.listAddrs[i] === addr) return i;
+        }
+      }
+    }
+    return undefined;
   }
 
   /* ------------------------------------------------------------- 根与行 */

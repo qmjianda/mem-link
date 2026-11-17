@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import demoSource from '../samples/demo.bp.ts?raw';
 import { loadBlueprintPack } from '../src/bp/load';
-import { findRowPathByAddr, StructTree } from '../src/bp/tree';
+import { findRowPathByAddr, focusFromTruncation, StructTree } from '../src/bp/tree';
 import type { BlueprintPack, ListNodeDef } from '../src/bp/types';
 import { Memory } from '../src/core/mem';
 import { array, record, struct, u16, u32, u8 } from '../src/core/pack';
@@ -229,5 +229,44 @@ describe('struct tree pointer follow', () => {
     const row = rows.find((r) => r.label === 'p');
     expect(row?.expandable).toBe(false);
     expect(row?.ref?.addr).toBe(0x110);
+  });
+});
+
+describe('结构树从截断处进入', () => {
+  it('图上截断信息转换成树里的下标 / 地址焦点', () => {
+    expect(focusFromTruncation({ limit: 4096, at: 4096, unit: 'index', canContinue: true }))
+      .toMatchObject({ index: 4096 });
+    expect(focusFromTruncation({ limit: 4096, at: 0x1a8, unit: 'address', canContinue: true }))
+      .toMatchObject({ addr: 0x1a8 });
+  });
+
+  it('链表按地址找到下标，不存在的地址返回 undefined', () => {
+    const tree = listTree();
+    expect(tree.indexOfAddress(0x1a8)).toBe(3);
+    expect(tree.indexOfAddress(0x130)).toBe(0);
+    expect(tree.indexOfAddress(0x999)).toBeUndefined();
+  });
+
+  it('数组按步长换算地址，并能跳到 4096 之后的下标', () => {
+    const tree = new StructTree({
+      kind: 'array', pack: demoPack, type: demoPack.types.Entry,
+      mem: new Memory(new Uint8Array(0x40000), 0), addr: 0x100, count: 5000, stride: 24,
+    });
+    const at4096 = 0x100 + 4096 * 24;
+    expect(tree.indexOfAddress(at4096)).toBe(4096);
+    expect(tree.indexOfAddress(at4096 + 1)).toBeUndefined();
+    expect(tree.locateIndex(4096)).toEqual({ path: 'Entry[4096]' });
+    expect(tree.rows(new Set([tree.rootPath]), '').some((r) => r.path === 'Entry[4096]')).toBe(true);
+  });
+
+  it('未声明 max 的链表不再被图上 4096 上限挡住', () => {
+    const def = demoPack.nodes.entryList as ListNodeDef;
+    const bytes = new Uint8Array(0x400);
+    bytes.set(demoBinary());
+    const tree = new StructTree({
+      kind: 'list', pack: demoPack, type: def.type,
+      mem: new Memory(bytes, 0), addr: 0x130, next: def.next, nulls: def.nulls,
+    });
+    expect(tree.locateIndex(5000).error).not.toContain('超过链表上限');
   });
 });

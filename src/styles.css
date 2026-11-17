@@ -609,6 +609,12 @@ button.bp-fold:hover { color: var(--text); border-color: var(--line-2); backgrou
 }
 .bp-expand:hover { color: var(--text); }
 .bp-node-foot { position: absolute; left: 9px; right: 9px; font-size: 9px; color: var(--amber); padding-top: 5px; word-break: break-word; }
+.bp-node-foot-link {
+  margin-left: 6px; padding: 0; border: 0; background: transparent;
+  color: var(--accent); font: inherit; font-size: 9px; white-space: nowrap; cursor: pointer;
+}
+.bp-node-foot-link:hover { color: #8bf0dc; text-decoration: underline; }
+.bp-node-err .bp-node-foot-link { color: var(--accent); }
 .bp-node-err { position: absolute; left: 9px; right: 9px; font-size: 9px; color: var(--red); border-top: 1px solid rgba(242,112,122,.25); padding-top: 5px; word-break: break-word; }
 
 .bp-hud { position: absolute; left: 14px; bottom: 14px; display: flex; align-items: center; gap: 3px; padding: 3px; background: rgba(10,15,21,.9); border: 1px solid var(--line); border-radius: 7px; font-size: 10px; color: var(--text-2); }
@@ -1033,6 +1039,10 @@ button.bp-hist.bp-nav { font-size: 17px; line-height: 1; }
   position: fixed; inset: 0; z-index: 340;
   display: flex;
   background: var(--bg);
+}
+/* 跟随浮层期间让位但不卸载：布局保留，滚动位置与展开状态原样回来 */
+.bp-tree-overlay.hidden {
+  z-index: 290; visibility: hidden; pointer-events: none;
 }
 .bp-tree {
   --tree-cols: minmax(200px, 1fr) minmax(240px, 1.5fr) 130px 116px 48px;

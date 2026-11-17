@@ -19,11 +19,11 @@
 
 ## 结构树全屏视图
 
-- 入口三个：节点标题栏 `⤢`（仅 struct/list/array）、检查器「打开」、双击节点空白处；Esc 退出，图的缩放与选中不变。**没有** Enter 快捷键（用户明确不要）。
-- `src/bp/tree.ts` 是懒解码模型：结构体浅解码、链表/数组分页（200/页）、`locateIndex` 跳下标、搜索只过滤已展开行并保留祖先、`follow`/hex 指针可内联展开。
-- `src/bp/StructTree.tsx` 是虚拟滚动 UI。图上求值仍截断 4096，树里不受此限（受 pack 的 list `max` 约束），所以两处上限语义不同，改的时候别混。
-- 同一节点再次打开会恢复展开/搜索/游标/滚动（`BlueprintApp` 的 `treeSessions`，仅本次会话）；数组容器（含嵌套数组字段）支持 `g` 跳下标；地址行有 `⌖` 树内定位与 `↗` 图上解析两个按钮。
-- 回归：`node scripts/cdp-verify-tree.mjs`（17 项）+ `tests/tree.test.ts`。
+- 入口三个：节点标题栏 `⤢`（仅 struct/list/array）、检查器「打开」、双击节点空白处；Esc 退出，图的缩放与选中不变。**没有** Enter 快捷键（用户明确不要）。第四个是容器节点底部常驻的 `⤢ 全部`（footer），带 `trunc` 时会带 `TreeFocus` 跳到截断下标/地址。
+- `src/bp/tree.ts` 是懒解码模型：结构体浅解码、链表/数组分页（200/页）、`locateIndex` 跳下标、`indexOfAddress` 地址→下标、搜索只过滤已展开行并保留祖先、`follow`/hex 指针可内联展开。
+- `src/bp/StructTree.tsx` 是虚拟滚动 UI。图上求值截断 4096；树里链表上限取 pack 的 `max`，**未声明时为 20 万硬上限**（不再沿用 4096），数组受 pack 的 count 约束，两处语义不同，改的时候别混。
+- 同一节点再次打开会恢复展开/搜索/游标/滚动（`BlueprintApp` 的 `treeSessions`，仅本次会话）；数组容器（含嵌套数组字段）支持 `g` 跳下标；地址行有 `⌖` 树内定位、`↗` 图上解析（**跟随并返回**：树只 `visibility:hidden` 让位，不卸载）、`⊕` 按当前类型直接在图上生成元素解析节点三个按钮。
+- 回归：`node scripts/cdp-verify-tree.mjs`（24 项）+ `tests/tree.test.ts`（19 项）。真实浏览器没有能触发 4096 截断的示例数据，`TreeFocus` 完整链路只有单测覆盖。
 
 ## 仓库
 

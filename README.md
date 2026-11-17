@@ -39,7 +39,7 @@ pnpm build      # dist/index.html（单文件，约 600 KB）
 - `samples/demo.bp.ts` / `demo.bin` / `demo.blueprint.json` — 索引链表的最小示例：结构体 + 链表节点
 - `docs/description-format.md` — pack 与节点参考
 
-重新生成 NVMe 示例资产：`node scripts/gen-nvme.mjs`；真实浏览器回归：`node scripts/cdp-verify.mjs`、`node scripts/cdp-verify-follow.mjs`（跟随地址 / 元素解析 / 就地重命名 / 标注缩放）、`node scripts/cdp-verify-core.mjs`（从空画布拖入 `samples/demo.bin` 与 `demo.bp.ts`，走完 bin → 结构体 → 链表 → 跟随字段，22 项）、`node scripts/cdp-verify-tree.mjs`（结构树：入口、展开、搜索、下标跳转、地址跟随、退出）。
+重新生成 NVMe 示例资产：`node scripts/gen-nvme.mjs`；真实浏览器回归：`node scripts/cdp-verify.mjs`、`node scripts/cdp-verify-follow.mjs`（跟随地址 / 元素解析 / 就地重命名 / 标注缩放）、`node scripts/cdp-verify-core.mjs`（从空画布拖入 `samples/demo.bin` 与 `demo.bp.ts`，走完 bin → 结构体 → 链表 → 跟随字段，22 项）、`node scripts/cdp-verify-tree.mjs`（结构树：三个入口、展开、搜索、下标跳转、树内定位、跟随返回、footer 入口、生成解析节点、退出，24 项）。
 
 ### 默认示例：NVMe Submission Queue
 
@@ -295,7 +295,7 @@ export default definePack({
 
 - pack 是**代码**：工具用 Sucrase 去掉类型，再用 `new Function` 执行；只加载可信文件。
 - 页面没有网络请求；CSP 需要允许 `unsafe-eval`（或 `wasm-unsafe-eval` 之外的脚本求值）。
-- 列表默认最多 4096 项；越界、环、未知类型都会变成图上的问题节点/条目，不会静默截断。
+- 图上列表最多 4096 项；全屏结构树按需解码，链表上限取 pack 的 `max`，未声明时为 20 万条硬上限。越界、环、未知类型都会变成图上的问题节点/条目，不会静默截断。
 
 ## 代码结构
 

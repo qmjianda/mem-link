@@ -16,7 +16,7 @@ import {
 } from './navhistory';
 import { adjacency, autoLayout } from './autolayout';
 import { boundsOf } from './viewport';
-import { bufferIssue, buildFollowItems, followAddress, followHint, inferFollowType, knownTypesAt } from './follow';
+import { bufferIssue, buildFollowItems, elementFollowItem, followAddress, followHint, inferFollowType, knownTypesAt } from './follow';
 import { bytesToBase64, makeDoc, parseDoc } from './doc';
 import type { DocState, LoadedPack } from './docstate';
 import { isPackEnabled, maxIdSeq } from './docstate';
@@ -55,7 +55,7 @@ import FollowPicker, {
 import { buildMenu, type MenuCtx, type MenuItem, type MenuTarget } from './menus';
 import { IconAlert, IconDownload, IconFolder, IconRefresh, IconUndo, IconUpload, Logo } from '../ui/icons';
 import StructTree, { type TreeSession } from './StructTree';
-import type { TreeRootSpec } from './tree';
+import type { TreeFocus, TreeRootSpec } from './tree';
 
 /** 分隔条命中的栅格轨道宽度（视觉带 5px 居中，命中区 9px） */
 const SPLIT_W = '9px';
@@ -155,7 +155,12 @@ export default function BlueprintApp() {
   /** 拖入文件时的覆盖层 */
   const [dropping, setDropping] = useState(false);
   /** 全屏结构树：打开时把节点、根类型与内存快照一起固定下来 */
-  const [tree, setTree] = useState<{ nodeId: string; root: TreeRootSpec; title: string; subtitle?: string } | null>(null);
+  const [tree, setTree] = useState<{
+    nodeId: string; root: TreeRootSpec; title: string; subtitle?: string; focus?: TreeFocus;
+  } | null>(null);
+  /** 跟随浮层由树里唤起时暂时隐藏树（不卸载，保留滚动与展开状态） */
+  const [treeHidden, setTreeHidden] = useState(false);
+  const followFromTree = useRef(false);
   /** 每个节点上一次的展开/搜索/滚动状态，只在本次会话内保留 */
   const treeSessions = useRef(new Map<string, TreeSession>());
   /** 问题定位后的节点脉冲高亮 */
@@ -743,15 +748,15 @@ export default function BlueprintApp() {
     value: unknown,
     description: string,
     source?: { nodeId: string; port: string },
-  ) => {
+  ): boolean => {
     const address = followAddress(value);
     if (address === null) {
       say(`无法跟随：${followHint(value)}`);
-      return;
+      return false;
     }
     if (!addressInBuffer(address)) {
       say(`无法跟随：${bufferIssue(address, buffers)}`);
-      return;
+      return false;
     }
     // 元素端口 / 同地址已解析过的类型 → 元素解析默认选中它，省掉手选工具
     const sourceNode = source ? docRef.current.nodes.find((x) => x.id === source.nodeId) : undefined;
@@ -759,6 +764,7 @@ export default function BlueprintApp() {
       value, address, packs: allPacks, sourcePackId: sourceNode?.packId, knownAt: knownTypes,
     });
     setFollow({ address, description, source, hint });
+    return true;
   };
 
   const onFollowPort = (nodeId: string, port: string) => {
@@ -788,7 +794,7 @@ export default function BlueprintApp() {
    * 打开全屏结构树：把节点当前求值结果翻译成树根（类型 + 地址 + 内存）。
    * 内存优先用实例自带的 Memory，退回该节点的数据源缓冲区。
    */
-  const openNodeTree = (nodeId: string) => {
+  const openNodeTree = (nodeId: string, focus?: TreeFocus) => {
     const node = docRef.current.nodes.find((n) => n.id === nodeId);
     const view = fullResult.views.get(nodeId);
     if (!node || !view) return;
@@ -844,7 +850,10 @@ export default function BlueprintApp() {
         : '这个节点暂时没有可展开的结构');
       return;
     }
-    setTree({ nodeId, root, title: displayTitle(node, nodeTitleOf(node)), subtitle: buffer?.name });
+    setTree({
+      nodeId, root, focus,
+      title: displayTitle(node, nodeTitleOf(node)), subtitle: buffer?.name,
+    });
   };
 
   /** 多级指针预览：按偏移链逐级解引用，越界立即报错，供浮层实时显示。 */  const previewChain = (base: number, width: 4 | 8, offsets: number[]): FollowPreview | null => {
@@ -865,11 +874,24 @@ export default function BlueprintApp() {
     return { steps, final: cur };
   };
 
-  const doFollow = (item: FollowItem, offsets: number[] = [], width: 4 | 8 = 8) => {
-    const req = follow;
-    if (!req) return;
+  /** 树里唤起跟随浮层后，无论选完还是取消都回到结构树（状态一直没卸载）。 */
+  const restoreTree = () => {
+    if (!followFromTree.current) return;
+    followFromTree.current = false;
+    setTreeHidden(false);
+  };
+
+  /** 跟随落点：按请求创建解析节点并连线；返回是否真的落了节点。 */
+  const addFollowNodes = (
+    req: FollowRequest, item: FollowItem, offsets: number[] = [], width: 4 | 8 = 8,
+  ): boolean => {
     const pv = offsets.length ? previewChain(req.address, width, offsets) : null;
-    if (pv?.error) { say(pv.error); return; }
+    if (pv?.error) { say(pv.error); return false; }
+    // 元素解析的类型只能来自推断；没有类型就不创建，避免硬解出错误内容。
+    if (item.nodeId === 'element' && (!item.typePackId || !item.typeName)) {
+      say('无法推断元素类型：请直接选择结构体 / 链表 / 数组节点');
+      return false;
+    }
     setFollow(null);
     lastFollowKey.current = item.key;
     const addrHex = `0x${req.address.toString(16)}`;
@@ -915,11 +937,6 @@ export default function BlueprintApp() {
 
     const finalId = `n${++seq.current}`;
     const finalHex = `0x${prevAddr.toString(16)}`;
-    // 元素解析的类型只能来自推断；没有类型就不创建，避免硬解出错误内容。
-    if (item.nodeId === 'element' && (!item.typePackId || !item.typeName)) {
-      say('无法推断元素类型：请直接选择结构体 / 链表 / 数组节点');
-      return;
-    }
     /**
      * pack 节点只带地址；内置节点带默认配置；
      * 元素解析写入推断出的 packId + typeId，在该地址解码，
@@ -953,6 +970,29 @@ export default function BlueprintApp() {
     say(offsets.length
       ? `在 ${addrHex} 经 ${offsets.length} 级指针解析 ${what} → ${finalHex}`
       : `在 ${addrHex} 按 ${what} 解析`);
+    return true;
+  };
+
+  const doFollow = (item: FollowItem, offsets: number[] = [], width: 4 | 8 = 8) => {
+    const req = follow;
+    if (!req) return;
+    if (addFollowNodes(req, item, offsets, width)) restoreTree();
+  };
+
+  /** 结构树里点 ⊕：按当前类型直接落一个元素解析节点，树保持打开。 */
+  const resolveFromTree = (addr: number, typeName: string): boolean => {
+    if (!addressInBuffer(addr)) return false;
+    let packId: string | undefined;
+    for (const [id, pack] of allPacks) {
+      if (pack.types[typeName]) { packId = id; break; }
+    }
+    if (!packId) return false;
+    const item = elementFollowItem({ packId, typeName, reason: '结构树当前类型' });
+    if (!item) return false;
+    return addFollowNodes(
+      { address: addr, description: `结构树 · ${typeName} @0x${addr.toString(16)}` },
+      item,
+    );
   };
 
   /* ------------------------------------------------------- 图内搜索定位 */
@@ -1977,7 +2017,7 @@ export default function BlueprintApp() {
           lastKey={lastFollowKey.current}
           onPreview={(offsets, w) => (follow ? previewChain(follow.address, w, offsets) : null)}
           onPick={doFollow}
-          onClose={() => setFollow(null)}
+          onClose={() => { setFollow(null); restoreTree(); }}
         />
       )}
       {searchOpen && (
@@ -1996,9 +2036,16 @@ export default function BlueprintApp() {
           title={tree.title}
           subtitle={tree.subtitle}
           initial={treeSessions.current.get(tree.nodeId)}
+          focus={tree.focus}
+          hidden={treeHidden}
           onSession={(session) => treeSessions.current.set(tree.nodeId, session)}
-          onClose={() => setTree(null)}
-          onFollow={(addr, hint) => { setTree(null); openFollow(addr, hint); }}
+          onClose={() => { setTree(null); setTreeHidden(false); followFromTree.current = false; }}
+          onFollow={(addr, hint) => {
+            if (!openFollow(addr, `${hint} · 结构树（选完返回）`)) return;
+            followFromTree.current = true;
+            setTreeHidden(true);
+          }}
+          onResolve={resolveFromTree}
         />
       )}
       {menu && (
