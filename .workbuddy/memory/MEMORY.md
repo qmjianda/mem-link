@@ -17,6 +17,12 @@
 - v1（`#v1`，C 声明 + 图）与 v2（`#v2`，旧 pack 编辑器）已于 2026-11-17 整体删除，连同 `v2/*`、`ui/{GraphCanvas,LeftPanel,RightPanel,format}`、`core/{cparse,edit,expr,graph,packedit,program,project}`、`types/memlink.d.ts`、`samples/{demo.pack.ts,demo.json}`。不要再按「三代实现」理解仓库。
 - `styles.css` 里仍有 v2 段落未清理（与蓝图共享 `.btn`/`.ft-*` 等类名），要删需先做视觉核对。
 
+## 仓库
+
+- GitHub：https://github.com/qmjianda/mem-link（公开，默认分支 `main`，CI 见 `.github/workflows/ci.yml`）。
+- LICENSE 为**专有**（All rights reserved）：仓库公开但不允许使用/修改/分发，属 source-available。要改开源需先换 LICENSE。
+- 提交前门禁：`pnpm typecheck && pnpm lint && pnpm test && pnpm build`（CI 同序执行）。
+
 ## 常用命令
 
 - 门禁：`pnpm typecheck`、`pnpm lint`、`pnpm test`、`pnpm build`
