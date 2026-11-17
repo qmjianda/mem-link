@@ -377,6 +377,23 @@ function makeView(entry: EntryView, compat: Pick<Pack, 'pointerSize' | 'types'>,
 /* ------------------------------------------------------------------- eval */
 
 /**
+ * 按需读取解码结果（结构树用）：复用求值的解码与 transform 语义，
+ * 但由调用方决定读哪个地址，不参与图求值、不写视图。
+ */
+export function createEntryReader(mem: Memory, pack: BlueprintPack, nodeId = '') {
+  const compat = compatPack(pack);
+  const memApi = packMemApi(mem);
+  const read = (typeName: string, addr: number, index?: number): EntryView =>
+    makeEntry(mem, pack, compat, memApi, typeName, addr, index);
+  const ctx: EvalCtx = {
+    mem, pack, nodeId, endian: pack.endian, pointerSize: pack.pointerSize,
+    consts: pack.constants,
+    read: (type: TypeDef, addr: number) => read(type.name, addr),
+  };
+  return { read, ctx };
+}
+
+/**
  * 把非品牌的"形似元素"对象降级为纯 JSON：断开 Memory 引用与原型，
  * 下游即使误接也拿不到可继续解码的地址。
  */

@@ -39,6 +39,8 @@ interface Props {
   /** 字段级逆向工具：复制提示与「在此地址解析」 */
   onCopy?: (text: string, label: string) => void;
   onFollow?: (addr: number, description: string) => void;
+  /** 全屏结构树：struct / list / array 节点可用 */
+  onOpenNode?: (nodeId: string) => void;
 }
 
 /** 只在 Enter / 失焦时提交一次，避免逐字符写入历史 */
@@ -430,7 +432,7 @@ function NodeBody({
 export default function Inspector({
   packs, packNames, nodes, edges, result, selection, onSelect, onParam, onMode,
   onDisconnect, onDeleteEdge, onFile, onHex, onBase, onCollapse, multi,
-  renameId, onRenameDone, onCopy, onFollow, tab, onTab, onFocusProblem,
+  renameId, onRenameDone, onCopy, onFollow, tab, onTab, onFocusProblem, onOpenNode,
 }: Props) {
   const problemListRef = useRef<HTMLDivElement>(null);
   const tools: FieldTools | undefined = onCopy && onFollow ? { onCopy, onFollow } : undefined;
@@ -450,6 +452,10 @@ export default function Inspector({
 
   const problems = result.problems;
   const fileCount = nodes.filter((n) => n.nodeId === 'file').length;
+  const nodeView = node ? result.views.get(node.id) : undefined;
+  const canOpenTree = !!onOpenNode && !!node && !!nodeView
+    && (nodeView.kind === 'struct' || nodeView.kind === 'list' || nodeView.kind === 'array'
+      || (nodeView.kind === 'element' && !!nodeView.inst));
 
   /** 问题列表：↑↓ 在条目间移动焦点，Enter 由按钮自身触发定位 */
   const onProblemKeys = (e: React.KeyboardEvent) => {
@@ -551,6 +557,13 @@ export default function Inspector({
                   <span>{nodeName(node, packs, elementTypeOf(result, node.id))}</span>
                 )}
                 <span className="mono">{node.packId ? (packNames.get(node.packId) ?? node.packId) : '内置'}</span>
+                {canOpenTree && (
+                  <button
+                    className="bp-ft-btn"
+                    title="全屏查看结构（也可双击节点空白处）"
+                    onClick={() => onOpenNode?.(node.id)}
+                  >打开</button>
+                )}
               </div>
 
               {/* 任何带「数据源」端口的节点都能查看/指定来源：过去只对 pack

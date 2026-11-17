@@ -13,7 +13,8 @@
     "bench": "node scripts/bench-eval.mjs",
     "verify": "node scripts/cdp-verify.mjs",
     "verify:follow": "node scripts/cdp-verify-follow.mjs",
-    "verify:core": "node scripts/cdp-verify-core.mjs"
+    "verify:core": "node scripts/cdp-verify-core.mjs",
+    "verify:tree": "node scripts/cdp-verify-tree.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

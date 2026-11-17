@@ -7,7 +7,7 @@ import Canvas, { type CanvasApi, type DragPreview } from './Canvas';
 import Inspector from './Inspector';
 import { evaluateGraph, valueAsBuffer } from './eval';
 import { loadBlueprintPack } from './load';
-import { canConnect, displayTitle, dropPosition, NODE_WIDTH, type BPEdge, type BPNode, type BPResult } from './types';
+import { canConnect, displayTitle, dropPosition, NODE_WIDTH, type BPEdge, type BPNode, type BlueprintPack, type BPResult } from './types';
 import { uniqueBuffers } from './assets';
 import { builtinDefaults, getBuiltin, inheritOptions } from './builtins';
 import {
@@ -54,6 +54,8 @@ import FollowPicker, {
 } from './FollowPicker';import GraphSearch, { type SearchHit } from './GraphSearch';
 import { buildMenu, type MenuCtx, type MenuItem, type MenuTarget } from './menus';
 import { IconAlert, IconDownload, IconFolder, IconRefresh, IconUndo, IconUpload, Logo } from '../ui/icons';
+import StructTree from './StructTree';
+import type { TreeRootSpec } from './tree';
 
 /** 分隔条命中的栅格轨道宽度（视觉带 5px 居中，命中区 9px） */
 const SPLIT_W = '9px';
@@ -152,6 +154,8 @@ export default function BlueprintApp() {
   const [rightTab, setRightTab] = useState<'inspect' | 'problems'>('inspect');
   /** 拖入文件时的覆盖层 */
   const [dropping, setDropping] = useState(false);
+  /** 全屏结构树：打开时把节点、根类型与内存快照一起固定下来 */
+  const [tree, setTree] = useState<{ root: TreeRootSpec; title: string; subtitle?: string } | null>(null);
   /** 问题定位后的节点脉冲高亮 */
   const [pulse, setPulse] = useState<string | null>(null);
   /** F2 重命名：检查器据此切入行内编辑 */
@@ -778,8 +782,70 @@ export default function BlueprintApp() {
     );
   };
 
-  /** 多级指针预览：按偏移链逐级解引用，越界立即报错，供浮层实时显示。 */
-  const previewChain = (base: number, width: 4 | 8, offsets: number[]): FollowPreview | null => {
+  /**
+   * 打开全屏结构树：把节点当前求值结果翻译成树根（类型 + 地址 + 内存）。
+   * 内存优先用实例自带的 Memory，退回该节点的数据源缓冲区。
+   */
+  const openNodeTree = (nodeId: string) => {
+    const node = docRef.current.nodes.find((n) => n.id === nodeId);
+    const view = fullResult.views.get(nodeId);
+    if (!node || !view) return;
+    const pack = node.packId ? allPacks.get(node.packId) : undefined;
+    const def = pack?.nodes[node.nodeId];
+    const buffer = fullResult.sources.get(nodeId)?.buffer;
+    const fallbackMem = buffer ? new Memory(buffer.bytes, buffer.base) : undefined;
+    const numInput = (name: string): number | undefined => {
+      const v = fullResult.inputs.get(nodeId)?.[name]?.value;
+      return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+    };
+    const ownerOf = (typeName: string, prefer?: BlueprintPack): BlueprintPack | undefined => {
+      if (prefer?.types[typeName]) return prefer;
+      for (const p of allPacks.values()) if (p.types[typeName]) return p;
+      return undefined;
+    };
+
+    let root: TreeRootSpec | undefined;
+    const label = displayTitle(node, nodeTitleOf(node));
+    if ((view.kind === 'struct' || view.kind === 'element') && view.inst) {
+      const owner = ownerOf(view.inst.typeName, pack);
+      const mem = view.inst.mem ?? fallbackMem;
+      if (owner && mem) {
+        root = {
+          kind: 'struct', pack: owner, type: owner.types[view.inst.typeName], mem,
+          addr: view.inst.addr, label,
+        };
+      }
+    } else if (view.kind === 'list' && pack && def?.kind === 'list') {
+      const mem = view.items[0]?.mem ?? fallbackMem;
+      const head = numInput('address') ?? view.items[0]?.addr;
+      if (mem && head != null) {
+        root = {
+          kind: 'list', pack, type: def.type, mem, addr: head, label,
+          next: def.next, nulls: def.nulls, max: def.max,
+        };
+      }
+    } else if (view.kind === 'array' && pack && def?.kind === 'array') {
+      const mem = view.items[0]?.mem ?? fallbackMem;
+      const base = numInput('address') ?? view.items[0]?.addr;
+      const count = def.count ?? numInput('count') ?? view.count;
+      if (mem && base != null && count > 0) {
+        root = {
+          kind: 'array', pack, type: def.type, mem, addr: base, count, label,
+          stride: def.stride ?? def.type.size,
+        };
+      }
+    }
+
+    if (!root) {
+      say(view.kind === 'list' || view.kind === 'array'
+        ? '这个节点还没有可展开的数据：先接上文件与地址'
+        : '这个节点暂时没有可展开的结构');
+      return;
+    }
+    setTree({ root, title: displayTitle(node, nodeTitleOf(node)), subtitle: buffer?.name });
+  };
+
+  /** 多级指针预览：按偏移链逐级解引用，越界立即报错，供浮层实时显示。 */  const previewChain = (base: number, width: 4 | 8, offsets: number[]): FollowPreview | null => {
     const buf = buffers.find((b) => base >= b.base && base < b.base + b.bytes.length);
     if (!buf) return { steps: [], final: base, error: '起始地址不在任何缓冲区内' };
     const mem = new Memory(buf.bytes, buf.base);
@@ -1508,7 +1574,7 @@ export default function BlueprintApp() {
   /** 任一浮层打开时，注册表让位（浮层自己处理按键） */
   const overlayOpenRef = useRef(false);
   overlayOpenRef.current = helpOpen || quickAddOpen || menu !== null
-    || follow !== null || searchOpen;
+    || follow !== null || searchOpen || tree !== null;
 
   const commands: Command[] = [
     { id: 'save', keys: ['Mod+S'], when: 'global', label: '保存到本地缓存', run: () => { runSave(docRef.current); } },
@@ -1799,6 +1865,7 @@ export default function BlueprintApp() {
             selection={selection}
             onSelect={setSelection}
             onMoveCommit={onMoveCommit}
+            onOpenNode={openNodeTree}
             onParam={onParam}
             onConnect={onConnect}
             onDisconnect={onDisconnect}
@@ -1868,6 +1935,7 @@ export default function BlueprintApp() {
             onRenameDone={() => setRenameId(null)}
             onCopy={(_text, label) => say(label)}
             onFollow={(addr, description) => openFollow(addr, description)}
+            onOpenNode={openNodeTree}
             tab={rightTab}
             onTab={setRightTab}
             onFocusProblem={focusProblem}
@@ -1917,6 +1985,15 @@ export default function BlueprintApp() {
           hits={searchHits}
           onPick={onSearchPick}
           onClose={() => setSearchOpen(false)}
+        />
+      )}
+      {tree && (
+        <StructTree
+          root={tree.root}
+          title={tree.title}
+          subtitle={tree.subtitle}
+          onClose={() => setTree(null)}
+          onFollow={(addr, hint) => { setTree(null); openFollow(addr, hint); }}
         />
       )}
       {menu && (

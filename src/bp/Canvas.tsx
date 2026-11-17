@@ -64,6 +64,8 @@ interface Props {
    * 拖动过程中画布**不**改文档（因此不会触发求值），只直写 DOM transform。
    */
   onMoveCommit?: (moves: { id: string; x: number; y: number }[]) => void;
+  /** 打开结构树（struct / list / array 节点） */
+  onOpenNode?: (id: string) => void;
   onParam: (id: string, key: string, value: string) => void;
   onConnect: (from: string, fromPort: string, to: string, toPort: string) => void;
   onDisconnect: (nodeId: string, port: string) => void;
@@ -369,7 +371,7 @@ function NodeTitleInput({
 }
 
 export default function Canvas({
-  nodes, edges, result, packs, packNames, selection, onSelect, onMoveCommit,
+  nodes, edges, result, packs, packNames, selection, onSelect, onMoveCommit, onOpenNode,
   onParam, onConnect, onDisconnect, dragAdd, dropInside, disabledPacks,
   minimapOpen, onToggleMinimap, onContextMenu, onQuickAdd, pulseNodeId, onProblemClick, onFollowPort,
   onFollowInPort, carriesFile, renameId, onRenameStart, onRenameDone, onNoteResize, apiRef,
@@ -1256,6 +1258,9 @@ export default function Canvas({
           if (!visible.has(node.id)) return null;
           const m = metas.get(node.id)!;
           const viewNode = result.views.get(node.id);
+          const openable = !!onOpenNode && !!viewNode
+            && (viewNode.kind === 'struct' || viewNode.kind === 'list' || viewNode.kind === 'array'
+              || (viewNode.kind === 'element' && !!viewNode.inst));
           const selected = isNodeSelected(selection, node.id);
           const isPrimary = selection.primary?.kind === 'node' && selection.primary.id === node.id;
           // An Element node names the type it actually decoded, not the
@@ -1296,6 +1301,13 @@ export default function Canvas({
               className={`bp-node ${selected ? 'on' : ''}${isPrimary ? ' primary' : ''} ${hasElements ? 'is-list' : ''}${packOff ? ' disabled' : ''}${marqueeHits.has(node.id) ? ' marquee-hit' : ''}${pulseNodeId === node.id ? ' pulse' : ''}`}
               style={{ left: node.x, top: node.y, width: nsize?.w ?? m.w, height: nsize?.h ?? m.h }}
               onPointerDown={nodeBodyDown(node)}
+              onDoubleClick={(e) => {
+                if (!openable) return;
+                const el = e.target as HTMLElement;
+                // 标题栏双击是重命名，字段行双击是跟随，只有空白处才打开结构树
+                if (el.closest('.bp-row, .bp-port, .bp-node-head, button, input, textarea')) return;
+                onOpenNode?.(node.id);
+              }}
             >
               <div className="bp-node-head" onPointerDown={nodeHeadDown(node)}>
                 <span className="bp-node-dot" />
@@ -1325,6 +1337,15 @@ export default function Canvas({
                   >{problemCount.get(node.id)}</button>
                 )}
                 <span className="bp-node-pack mono" title={chainText ?? src?.buffer?.name}>{packName}</span>
+                {openable && (
+                  <button
+                    className="bp-node-open"
+                    title="打开结构视图（双击节点空白处）"
+                    aria-label="打开结构视图"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => { e.stopPropagation(); onOpenNode?.(node.id); }}
+                  >⤢</button>
+                )}
               </div>
 
               {lod !== 'full' && (

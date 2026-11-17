@@ -50,7 +50,7 @@ function endianOf(pack: Pack, f: FieldDef): Endian {
   return f.endian ?? pack.endian;
 }
 
-function decodeFieldRaw(
+export function decodeFieldRaw(
   mem: Memory, pack: Pack, type: TypeDef, f: FieldDef, addr: number, depth = 0,
 ): unknown {
   const at = addr + f.offset;

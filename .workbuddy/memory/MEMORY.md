@@ -17,6 +17,13 @@
 - v1（`#v1`，C 声明 + 图）与 v2（`#v2`，旧 pack 编辑器）已于 2026-11-17 整体删除，连同 `v2/*`、`ui/{GraphCanvas,LeftPanel,RightPanel,format}`、`core/{cparse,edit,expr,graph,packedit,program,project}`、`types/memlink.d.ts`、`samples/{demo.pack.ts,demo.json}`。不要再按「三代实现」理解仓库。
 - 同日晚些时候清理了残留死代码：`styles.css` 只剩蓝图样式（84 → 50 KB），`core/types.ts` 只留 `Endian` + `Problem`，v1 图层构建器（`buildPackGraph`）、`validatePack`、`loadPack`、`hexdump` 等一并删除。改动前请先确认这些确实没人用了。
 
+## 结构树全屏视图
+
+- 入口三个：节点标题栏 `⤢`（仅 struct/list/array）、检查器「打开」、双击节点空白处；Esc 退出，图的缩放与选中不变。**没有** Enter 快捷键（用户明确不要）。
+- `src/bp/tree.ts` 是懒解码模型：结构体浅解码、链表/数组分页（200/页）、`locateIndex` 跳下标、搜索只过滤已展开行并保留祖先、`follow`/hex 指针可内联展开。
+- `src/bp/StructTree.tsx` 是虚拟滚动 UI。图上求值仍截断 4096，树里不受此限（受 pack 的 list `max` 约束），所以两处上限语义不同，改的时候别混。
+- 回归：`node scripts/cdp-verify-tree.mjs`（14 项）+ `tests/tree.test.ts`。
+
 ## 仓库
 
 - GitHub：https://github.com/qmjianda/mem-link（公开，默认分支 `main`，CI 见 `.github/workflows/ci.yml`）。

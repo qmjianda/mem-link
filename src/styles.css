@@ -551,6 +551,15 @@ button.bp-fold:hover { color: var(--text); border-color: var(--line-2); backgrou
   color: var(--amber); font-size: 8px; letter-spacing: 0.04em;
 }
 .bp-node-pack { font-size: 8px; color: var(--dim); text-transform: uppercase; letter-spacing: .05em; max-width: 118px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: none; }
+.bp-node-open {
+  width: 17px; height: 17px; padding: 0; flex: 0 0 auto;
+  border: 1px solid transparent; border-radius: 4px;
+  background: transparent; color: var(--dim);
+  font: 11px/1 var(--mono);
+  opacity: 0; transition: opacity .12s, color .12s, border-color .12s;
+}
+.bp-node:hover .bp-node-open, .bp-node.on .bp-node-open { opacity: 1; }
+.bp-node-open:hover { color: var(--accent); border-color: rgba(78, 216, 192, 0.4); background: rgba(78, 216, 192, 0.08); }
 .bp-row { position: absolute; left: 0; right: 0; height: 23px; display: flex; align-items: center; gap: 6px; padding: 0 11px; font-size: 10px; }
 .bp-in-row { color: var(--text-2); }
 .bp-row-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1018,3 +1027,79 @@ button.bp-hist.bp-nav { font-size: 17px; line-height: 1; }
 .hex-row.focus { background: rgba(78, 216, 192, 0.06); }
 .hb { cursor: pointer; }
 .hb:hover { background: rgba(255, 255, 255, 0.10); }
+
+/* ------------------------------------------------------- struct tree view */
+.bp-tree-overlay {
+  position: fixed; inset: 0; z-index: 340;
+  display: flex;
+  background: var(--bg);
+}
+.bp-tree {
+  --tree-cols: minmax(200px, 1fr) minmax(240px, 1.5fr) 130px 116px 26px;
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column;
+  background: var(--panel);
+  overflow: hidden;
+  outline: none;
+}
+.bp-tree-head {
+  display: flex; align-items: center; gap: 14px;
+  padding: 9px 12px; border-bottom: 1px solid var(--line);
+  background: #0d131b;
+}
+.bp-tree-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.bp-tree-title b {
+  font-size: 13px; font-weight: 600; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.bp-tree-meta { font-size: 10px; color: var(--dim); }
+.bp-tree-tools { margin-left: auto; display: flex; align-items: center; gap: 7px; }
+.bp-tree-search, .bp-tree-jump { position: relative; display: flex; align-items: center; gap: 6px; }
+.bp-tree-search .in { width: 230px; height: 26px; }
+.bp-tree-jump .in { width: 116px; height: 26px; }
+.bp-tree-search em { font-style: normal; font-size: 9.5px; color: var(--dim); white-space: nowrap; }
+.bp-tree-cols {
+  display: grid; grid-template-columns: var(--tree-cols); gap: 8px;
+  padding: 5px 10px; border-bottom: 1px solid var(--line);
+  background: #0b1118;
+  font: 600 9px var(--sans); letter-spacing: 0.08em; text-transform: uppercase;
+  color: #53647b;
+}
+.bp-tree-body { position: relative; flex: 1; min-height: 0; overflow: auto; }
+.bp-tree-spacer { position: relative; }
+.bp-tree-row {
+  position: absolute; left: 0; right: 0; height: 22px;
+  display: grid; grid-template-columns: var(--tree-cols); gap: 8px;
+  align-items: center; padding: 0 10px;
+  border-bottom: 1px solid rgba(28, 38, 52, 0.45);
+  color: var(--text-2); font-size: 11px;
+}
+.bp-tree-row:hover { background: rgba(78, 216, 192, 0.05); }
+.bp-tree-row.on { background: rgba(78, 216, 192, 0.1); box-shadow: inset 2px 0 0 var(--accent); }
+.bp-tree-row.root { color: var(--text); }
+.bp-tree-row.error { color: #eeb0b5; }
+.bp-tree-row.note { color: var(--amber); }
+.bp-tree-row.more { color: var(--accent); cursor: pointer; }
+.bp-tree-name { display: flex; align-items: center; gap: 3px; min-width: 0; }
+.bp-tree-name .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-tree-chev { width: 12px; flex: 0 0 auto; text-align: center; font-size: 9px; color: #5a6c83; cursor: pointer; }
+.bp-tree-chev:hover { color: var(--accent); }
+.bp-tree-row mark { background: rgba(78, 216, 192, 0.24); color: var(--text); border-radius: 2px; }
+.bp-tree-chev.ghost { visibility: hidden; }
+.bp-tree-val { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #cfe4df; }
+.bp-tree-val em { font-style: normal; color: var(--dim); }
+.bp-tree-type { font-size: 10px; color: #7b8ca3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-tree-off { text-align: right; font-size: 10px; color: #5f7188; }
+.bp-tree-act { display: flex; justify-content: flex-end; }
+.bp-tree-go {
+  width: 20px; height: 20px; padding: 0; line-height: 1;
+  border: 1px solid transparent; border-radius: 4px;
+  background: transparent; color: var(--accent); font-size: 11px;
+}
+.bp-tree-go:hover { border-color: rgba(78, 216, 192, 0.4); background: rgba(78, 216, 192, 0.08); }
+.bp-tree-foot {
+  display: flex; justify-content: space-between; gap: 12px;
+  padding: 6px 12px; border-top: 1px solid var(--line); background: #0b1118;
+  color: #5f7188; font-size: 9.5px; white-space: nowrap; overflow: hidden;
+}
+.bp-tree-notice { color: var(--accent); }
