@@ -41,9 +41,9 @@ interface Props {
   onSession?: (session: TreeSession) => void;
   onClose: () => void;
   /** 在图上解析（跟随并返回树） */
-  onFollow: (addr: number, description: string) => void;
+  onFollow: (addr: number, description: string, port?: string) => void;
   /** 直接按当前类型在图上生成解析节点；返回是否成功 */
-  onResolve?: (addr: number, typeName: string) => boolean;
+  onResolve?: (addr: number, typeName: string, port?: string) => boolean;
 }
 
 export default function StructTree({
@@ -379,18 +379,18 @@ export default function StructTree({
                       : row.tone === 'element' && row.addr ? toHex(row.addr) : ''}
                   </span>
                   <span className="bp-tree-act">
-                    {onResolve && (row.tone === 'element' || row.tone === 'instance') && (
+                    {onResolve && (row.tone === 'element' || row.tone === 'instance') && root.pack.types[row.typeText] && (
                       <button
                         className="bp-tree-go"
-                        title={`按 ${root.type.name} 在图上生成解析节点（结构树保持打开）`}
+                        title={`按 ${row.typeText} 在图上生成解析节点（结构树保持打开）`}
                         aria-label="生成解析节点"
                         onMouseDown={(e) => e.stopPropagation()}
                         onClick={(e) => {
                           e.stopPropagation();
-                          const ok = onResolve(row.addr, root.type.name);
+                          const ok = onResolve(row.addr, row.typeText, row.graphPort);
                           setNotice(ok
-                            ? `已在图上生成 ${root.type.name} @${toHex(row.addr)} 的解析节点，Esc 返回节点图`
-                            : '无法生成解析节点：地址不在任何缓冲区内');
+                            ? `已在图上生成 ${row.typeText} @${toHex(row.addr)} 的解析节点，Esc 返回节点图`
+                            : '无法生成解析节点：地址、类型或数据源已不可用');
                         }}
                       >⊕</button>
                     )}
@@ -408,7 +408,7 @@ export default function StructTree({
                           title={`在图上解析 ${row.ref.hint}（选完回到结构树）`}
                           aria-label="在图上解析"
                           onMouseDown={(e) => e.stopPropagation()}
-                          onClick={(e) => { e.stopPropagation(); onFollow(row.ref!.addr, row.ref!.hint); }}
+                          onClick={(e) => { e.stopPropagation(); onFollow(row.ref!.addr, row.ref!.hint, row.graphPort); }}
                         >↗</button>
                       </>
                     )}

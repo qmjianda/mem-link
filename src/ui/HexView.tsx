@@ -49,7 +49,7 @@ export default function HexView({
       out.push({ addr: a, bytes: bs, ascii: asc });
     }
     return out;
-  }, [mem, addr, len, maxRows]);
+  }, [mem, addr, len, maxRows, width]);
 
   if (!rows.length) return <div className="hex-empty">没有可显示的字节</div>;
 

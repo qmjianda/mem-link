@@ -10,8 +10,9 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { chromePath } from './cdp-chrome.mjs';
 
-const CHROME = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
+const CHROME = chromePath();
 const PORT = 9335;
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const url = `file:///${root.replace(/\\/g, '/')}/dist/index.html`;

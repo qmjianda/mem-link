@@ -39,7 +39,7 @@ pnpm build      # dist/index.html（单文件，约 600 KB）
 - `samples/demo.bp.ts` / `demo.bin` / `demo.blueprint.json` — 索引链表的最小示例：结构体 + 链表节点
 - `docs/description-format.md` — pack 与节点参考
 
-重新生成 NVMe 示例资产：`node scripts/gen-nvme.mjs`；真实浏览器回归：`node scripts/cdp-verify.mjs`、`node scripts/cdp-verify-follow.mjs`（跟随地址 / 元素解析 / 就地重命名 / 标注缩放）、`node scripts/cdp-verify-core.mjs`（从空画布拖入 `samples/demo.bin` 与 `demo.bp.ts`，走完 bin → 结构体 → 链表 → 跟随字段，22 项）、`node scripts/cdp-verify-tree.mjs`（结构树：三个入口、展开、搜索、下标跳转、树内定位、跟随返回、footer 入口、生成解析节点、退出，24 项）。
+重新生成 NVMe 示例资产：`node scripts/gen-nvme.mjs`；真实浏览器回归：`node scripts/cdp-verify.mjs`、`node scripts/cdp-verify-follow.mjs`（跟随地址 / 元素解析 / 就地重命名 / 标注缩放）、`node scripts/cdp-verify-core.mjs`（从空画布拖入 `samples/demo.bin` 与 `demo.bp.ts`，走完 bin → 结构体 → 链表 → 跟随字段，22 项）、`node scripts/cdp-verify-tree.mjs`（结构树：三个入口、展开、搜索、下标跳转、树内定位、跟随返回、footer 入口、生成解析节点、退出，24 项）、`node scripts/cdp-verify-tree-truncation.mjs`（5000 项数组从截断 footer 跳到第 4096 项）、`node scripts/cdp-verify-add-defaults.mjs`（非零文件基址下新增链表节点继承地址）。
 
 ### 默认示例：NVMe Submission Queue
 
@@ -92,6 +92,7 @@ nvme-sq.bin ──> 提交队列 SQ (4 × 64 B SQE)
 - **右键输出或输入端口**：菜单第一项就是「跟随地址 0x1200…」；端口值不是有效地址时该项会禁用并说明原因。
 - **检查器字段行**：字段值落在缓冲区内时，字段工具条出现「在此解析 →」。
 - 选定类型后一次提交：**新建节点 + 自动连一条 `address` 线 + 视口居中**，只用一条撤销记录。上次用过的候选会自动高亮，连续跟指针时不用每次重选。
+- 在结构树里生成解析节点或跟随字段时，会优先接回对应的图上端口；如果该行没有可用端口（例如截断后的元素），则接回原数据源，地址仍可编辑。
 
 ### 多级指针
 
@@ -172,6 +173,7 @@ File/Buffer ──buffer──> Header ──head──> Entry 链表 ──elem
 - **pack**：一个 `.bp.ts`，导出 `types`（内存布局）和 `nodes`（解析/计算节点）。
 - **节点实例**：画布上的一个节点 = pack 里的节点定义 + 地址/参数绑定。
 - **拖放添加**：从左栏把节点拖到画布任意位置，就在落点创建；拖动时有跟随鼠标的虚线框预览落点，画布边框高亮表示可放置。单击节点库仍可快速添加（自动找空位）。平移/缩放后落点依然准确，拖出画布或按 `Esc` 取消。
+- **新增解析节点的初始地址和数据源**：单选已载入的文件或有明确文件来源的解析节点时，新节点沿用同一份文件，并预填有效的解析地址或文件基址。没有明确上下文时，单文件图可预填文件基址，多文件图仍从 `0x0` 开始；地址和数据源都能在检查器修改。
 - **File 是真正的数据源节点**：输出 `buffer`（文件）、`base`（基址）、`size`（字节数），都能往外拉线。把 `buffer` 接到某个节点的「数据源」口，这个节点就属于该文件。
 - **数据源依次继承**：每个解析节点都有一个可选的「数据源」输入（虚线圆点）。不接时，它沿任意入边向上逐级继承上游节点的文件——`Header → 链表 → 元素 → 另一个 Header` 全程共用一份 buffer，不必每个节点都接 File。优先级：**数据源直连 > 检查器手动指定 > 沿连线继承 > 图里第一个文件**。
 - **继承时不显示数据源圆点**：节点一旦从上游继承，那个虚线圆点就先隐藏，避免在继承之外再叠一条线造成「到底用哪个文件」的混乱；行上仍显示 `继承 · 文件名`（未接线时按来源显示 `指定 / 继承 / 默认 · 文件名`，接线后直接显示文件名 + `×`）。断开上游连线后圆点会重新出现；也可以直接在检查器「数据源」里指定文件（此时原有的数据源连线会一并断开），或从上游重新拉一条线（原来的手动指定会被清掉）。

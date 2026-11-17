@@ -8,8 +8,9 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { chromePath } from './cdp-chrome.mjs';
 
-const CHROME = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
+const CHROME = chromePath();
 const PORT = 9351;
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const url = `file:///${root.replace(/\\/g, '/')}/dist/index.html`;
@@ -270,18 +271,27 @@ async function main() {
   check('从 footer 进来的树有可展开元素', await evaluate(`document.querySelectorAll('.bp-tree-row').length`) >= 3);
 
   // ---- ⊕：按当前类型在图上生成解析节点，结构树保持打开
+  const edgesBeforeResolve = await evaluate(`document.querySelectorAll('path[data-edge-id]').length`);
   const resolveClicked = await evaluate(`(() => {
     const b = document.querySelector('.bp-tree-go[aria-label="生成解析节点"]');
     if (!b) return false;
     b.click();
     return true;
   })()`);
-  await sleep(350);
+  await sleep(950); // 等待蓝图自动保存，以便核对连线端点
   const resolveNotice = await evaluate(`document.querySelector('.bp-tree-notice')?.textContent ?? ''`);
   check('⊕ 生成解析节点且结构树不关闭',
     resolveClicked && /已在图上生成/.test(resolveNotice)
       && await evaluate(`!!document.querySelector('.bp-tree-overlay:not(.hidden)')`),
     resolveNotice.slice(0, 40));
+  check('⊕ 从原节点的元素端口连到新节点',
+    await evaluate(`document.querySelectorAll('path[data-edge-id]').length`) === edgesBeforeResolve + 1
+      && await evaluate(`(() => {
+        const doc = JSON.parse(localStorage.getItem('memlink:graph:v1'));
+        const edge = doc?.edges.at(-1);
+        return edge?.from.node === 'n_prpList' && edge.from.port === 'elem:0'
+          && edge.to.node === doc.nodes.at(-1)?.id && edge.to.port === 'address';
+      })()`));
   await closeTree();
   await sleep(250);
 
@@ -310,6 +320,7 @@ async function main() {
   await sleep(300);
   check('取消跟随也回到结构树',
     await evaluate(`!!document.querySelector('.bp-tree-overlay:not(.hidden)') && !document.querySelector('.bp-follow')`));
+  const edgesBeforeFollow = await evaluate(`document.querySelectorAll('path[data-edge-id]').length`);
   await evaluate(`document.querySelector('.bp-tree-go[aria-label="在图上解析"]')?.click()`);
   await sleep(300);
   await pressKey('Enter', 'Enter', 13);
@@ -317,6 +328,8 @@ async function main() {
   check('选完解析节点后回到结构树（闭环）',
     await evaluate(`!!document.querySelector('.bp-tree-overlay:not(.hidden)') && !document.querySelector('.bp-follow')`),
     await evaluate(`document.querySelector('.bp-tree-notice')?.textContent ?? ''`));
+  check('树中跟随字段也增加一条画布连线',
+    await evaluate(`document.querySelectorAll('path[data-edge-id]').length`) === edgesBeforeFollow + 1);
   await closeTree();
   await sleep(250);
 

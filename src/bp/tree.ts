@@ -13,7 +13,7 @@ import {
   type FieldDef, type FieldKind, type Pack, type TypeDef,
 } from '../core/pack';
 import { decodeFieldRaw, formatPackValue, packMemApi } from '../core/packgraph';
-import { createEntryReader } from './eval';
+import { createEntryReader, ELEMENT_PORT } from './eval';
 import type { BlueprintPack, EntryView, ListNodeDef, Truncation } from './types';
 
 /** 每次展开/加载更多时追加的行数。 */
@@ -70,6 +70,8 @@ export interface TreeRow {
   rawText?: string;
   /** 指针/地址字段：可在图上解析 */
   ref?: { addr: number; hint: string };
+  /** 图上可能存在的输出端口；生成连线前还需核对实际求值结果。 */
+  graphPort?: string;
   expandable: boolean;
   tone: 'root' | 'instance' | 'field' | 'element' | 'more' | 'error' | 'note';
   /** more 行点击后由 UI 调 loadMore(path) */
@@ -415,6 +417,7 @@ export class StructTree {
       valueText,
       rawText,
       ref: refAddr != null ? { addr: refAddr, hint: `${type.name}.${f.name}` } : undefined,
+      graphPort: this.root.kind === 'struct' && parent === this.rootPath ? f.name : undefined,
       expandable: !!refTypeName,
       tone: error ? 'error' : 'field',
     };
@@ -439,6 +442,7 @@ export class StructTree {
         depth,
         label: `[${i}]`,
         typeText: elem?.name ?? 'scalar',
+        graphPort: path === this.rootPath ? `${ELEMENT_PORT}${i}` : undefined,
         addr: at,
         offset: at - this.root.addr,
         size: stride,
@@ -464,6 +468,7 @@ export class StructTree {
         depth,
         label: `[${i}]`,
         typeText: type.name,
+        graphPort: `${ELEMENT_PORT}${i}`,
         addr,
         offset: addr - this.root.addr,
         size: type.size,

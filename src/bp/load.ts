@@ -20,6 +20,8 @@ export interface BPLoadResult {
   issues: Problem[];
 }
 
+type PackFactory = (...args: unknown[]) => unknown;
+
 const PORT_TYPES: PortType[] = ['number', 'string', 'bytes', 'boolean', 'instance', 'list', 'buffer'];
 
 function isPortType(v: unknown): v is PortType {
@@ -165,12 +167,12 @@ export function evaluateBlueprintPack(js: string): {
   error?: string;
 } {
   const body = js.replace(/^(\s*)return\b/, '$1const __pack =');
-  let fn: Function;
+  let fn: PackFactory;
   try {
     fn = new Function(
       ...BP_DSL_NAMES,
       `"use strict";\n${body}\n;return { pack: __pack, compile: (src) => eval('(' + src + ')') };\n//# sourceURL=memlink-blueprint.ts`,
-    );
+    ) as PackFactory;
   } catch (e) {
     return { error: `语法错误：${e instanceof Error ? e.message : String(e)}` };
   }

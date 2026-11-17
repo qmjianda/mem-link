@@ -21,6 +21,8 @@ export interface FollowRequest {
   description: string;
   /** 有来源端口时会自动连一条 address 线；纯地址跳转时为空 */
   source?: { nodeId: string; port: string };
+  /** 结构树没有可接的地址端口时，显式连回原数据源。 */
+  bufferSource?: { nodeId: string; port: string };
   /** 来源能推断出的类型（元素端口 / 同地址已知类型） */
   hint?: FollowTypeHint | null;
 }

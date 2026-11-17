@@ -5,7 +5,7 @@ import type { Problem } from '../core/types';
 import Palette from './Palette';
 import Canvas, { type CanvasApi, type DragPreview } from './Canvas';
 import Inspector from './Inspector';
-import { evaluateGraph, valueAsBuffer } from './eval';
+import { evaluateGraph, SOURCE_PORT, valueAsBuffer } from './eval';
 import { loadBlueprintPack } from './load';
 import { canConnect, displayTitle, dropPosition, NODE_WIDTH, type BPEdge, type BPNode, type BlueprintPack, type BPResult } from './types';
 import { uniqueBuffers } from './assets';
@@ -32,6 +32,7 @@ import {
   addPack, cleanupPackNodes, disabledPackIds, enabledPackMap, packImpact, removePackAtomic,
   renamePack, setPackEnabled, TEMPLATE_PACK_SOURCE,
 } from './packops';
+import { initialParseParams } from './add-defaults';
 import {
   canRedo, canUndo, currentDoc, initHistory, isDirty, markSaved, push, redo, redoLabel, resetHistory,
   undo, undoLabel, type HistoryState,
@@ -157,6 +158,7 @@ export default function BlueprintApp() {
   /** 全屏结构树：打开时把节点、根类型与内存快照一起固定下来 */
   const [tree, setTree] = useState<{
     nodeId: string; root: TreeRootSpec; title: string; subtitle?: string; focus?: TreeFocus;
+    sourceAssetId?: string;
   } | null>(null);
   /** 跟随浮层由树里唤起时暂时隐藏树（不卸载，保留滚动与展开状态） */
   const [treeHidden, setTreeHidden] = useState(false);
@@ -529,7 +531,9 @@ export default function BlueprintApp() {
     if (!packId && nodeId === 'element') params.index = '0';
     if (packId) {
       const def = packsMap.get(packId)?.nodes[nodeId];
-      if (def && (def.kind === 'struct' || def.kind === 'list' || def.kind === 'array')) params.address = '0x0';
+      if (def && (def.kind === 'struct' || def.kind === 'list' || def.kind === 'array')) {
+        Object.assign(params, initialParseParams(nodes, selectionRef.current, result));
+      }
       if (def?.kind === 'calc') {
         for (const [k, t] of Object.entries(def.inputs)) if (t === 'number') params[k] = '0';
       }
@@ -853,13 +857,15 @@ export default function BlueprintApp() {
     setTree({
       nodeId, root, focus,
       title: displayTitle(node, nodeTitleOf(node)), subtitle: buffer?.name,
+      sourceAssetId: buffer?.bytes === root.mem.buf ? buffer.assetId : undefined,
     });
   };
 
-  /** 多级指针预览：按偏移链逐级解引用，越界立即报错，供浮层实时显示。 */  const previewChain = (base: number, width: 4 | 8, offsets: number[]): FollowPreview | null => {
+  /** 多级指针预览：结构树优先使用自己的缓冲区，不按地址猜文件。 */
+  const previewChain = (base: number, width: 4 | 8, offsets: number[]): FollowPreview | null => {
     const buf = buffers.find((b) => base >= b.base && base < b.base + b.bytes.length);
-    if (!buf) return { steps: [], final: base, error: '起始地址不在任何缓冲区内' };
-    const mem = new Memory(buf.bytes, buf.base);
+    const mem = followFromTree.current ? tree?.root.mem : buf && new Memory(buf.bytes, buf.base);
+    if (!mem) return { steps: [], final: base, error: '起始地址不在任何缓冲区内' };
     const steps: FollowStep[] = [];
     let cur = base;
     for (let i = 0; i < offsets.length; i += 1) {
@@ -958,7 +964,22 @@ export default function BlueprintApp() {
       id: finalId, packId: item.packId, nodeId: item.nodeId, x: startX, y: cursorY,
       params,
     });
-    if (prevOut) edges.push({ id: `e${++seq.current}`, from: prevOut, to: { node: finalId, port: 'address' } });
+    if (!item.packId && item.nodeId === 'ptrwalk') {
+      params.base = finalHex;
+      delete params.address;
+    }
+    if (prevOut) edges.push({
+      id: `e${++seq.current}`, from: prevOut,
+      to: { node: finalId, port: !item.packId && item.nodeId === 'ptrwalk' ? 'base' : 'address' },
+    });
+    if (req.bufferSource) {
+      const { nodeId, port } = req.bufferSource;
+      // 字节/文本值不能像 File 一样沿地址线继承，每一级都显式接原值。
+      const targets = result.sources.get(nodeId)?.mode === 'file' ? nodes.slice(0, 1) : nodes;
+      for (const target of targets) edges.push({
+        id: `e${++seq.current}`, from: { node: nodeId, port }, to: { node: target.id, port: SOURCE_PORT },
+      });
+    }
 
     commit((d) => ({ ...d, nodes: [...d.nodes, ...nodes], edges: [...d.edges, ...edges] }),
       offsets.length ? '多级指针跟随' : '跟随地址');
@@ -979,20 +1000,39 @@ export default function BlueprintApp() {
     if (addFollowNodes(req, item, offsets, width)) restoreTree();
   };
 
-  /** 结构树里点 ⊕：按当前类型直接落一个元素解析节点，树保持打开。 */
-  const resolveFromTree = (addr: number, typeName: string): boolean => {
-    if (!addressInBuffer(addr)) return false;
-    let packId: string | undefined;
-    for (const [id, pack] of allPacks) {
-      if (pack.types[typeName]) { packId = id; break; }
+  /** 树上的行不一定有画布端口（例如截断之后的元素）；仅连接真实、匹配的输出。 */
+  const requestFromTree = (addr: number, description: string, port?: string): FollowRequest | undefined => {
+    if (!tree?.root.mem.contains(addr, 1)) return undefined;
+    const id = tree.nodeId;
+    const outputs = result.outputs.get(id);
+    const spec = result.ports.get(id)?.outputs.find((p) => p.name === port);
+    const value = port ? outputs?.[port] : undefined;
+    const source = spec && canConnect(spec.type, 'number') && followAddress(value) === addr
+      ? { nodeId: id, port: spec.name } : undefined;
+    const info = result.sources.get(id);
+    if (!info?.buffer || info.buffer.base !== tree.root.mem.base
+      || (info.buffer.bytes !== tree.root.mem.buf && info.buffer.assetId !== tree.sourceAssetId)) return undefined;
+    let bufferSource: FollowRequest['bufferSource'];
+    if (!source && info.fileId) {
+      bufferSource = { nodeId: info.fileId, port: SOURCE_PORT };
+    } else if (!info.fileId && info.via
+      && result.ports.get(info.via.node)?.outputs.some((p) => p.name === info.via?.port
+        && (p.type === 'bytes' || p.type === 'string'))) {
+      bufferSource = { nodeId: info.via.node, port: info.via.port };
     }
+    if (!source && !bufferSource) return undefined;
+    return { address: addr, description, source, bufferSource };
+  };
+
+  /** 结构树里点 ⊕：按该行实际类型直接落一个元素解析节点，树保持打开。 */
+  const resolveFromTree = (addr: number, typeName: string, port?: string): boolean => {
+    const req = requestFromTree(addr, `结构树 · ${typeName} @0x${addr.toString(16)}`, port);
+    if (!req) return false;
+    const packId = [...packsMap].find(([, pack]) => pack === tree?.root.pack)?.[0];
     if (!packId) return false;
     const item = elementFollowItem({ packId, typeName, reason: '结构树当前类型' });
     if (!item) return false;
-    return addFollowNodes(
-      { address: addr, description: `结构树 · ${typeName} @0x${addr.toString(16)}` },
-      item,
-    );
+    return addFollowNodes(req, item);
   };
 
   /* ------------------------------------------------------- 图内搜索定位 */
@@ -2040,8 +2080,15 @@ export default function BlueprintApp() {
           hidden={treeHidden}
           onSession={(session) => treeSessions.current.set(tree.nodeId, session)}
           onClose={() => { setTree(null); setTreeHidden(false); followFromTree.current = false; }}
-          onFollow={(addr, hint) => {
-            if (!openFollow(addr, `${hint} · 结构树（选完返回）`)) return;
+          onFollow={(addr, hint, port) => {
+            const req = requestFromTree(addr, `${hint} · 结构树（选完返回）`, port);
+            if (!req) { say('无法跟随：结构树中的数据源已不可用'); return; }
+            const source = req.source;
+            const value = source ? result.outputs.get(source.nodeId)?.[source.port] : addr;
+            setFollow({ ...req, hint: inferFollowType({
+              value, address: addr, packs: allPacks, sourcePackId: nodes.find((n) => n.id === tree.nodeId)?.packId,
+              knownAt: knownTypes,
+            }) });
             followFromTree.current = true;
             setTreeHidden(true);
           }}
