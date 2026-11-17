@@ -32,4 +32,6 @@
 
 ## 已固化的求值契约
 
-见 `openspec/changes/p0-baseline-and-correctness/`：值品牌用 WeakSet、资产 id 用同步 FNV-1a 64、来源解析不调用求值、截断区分自然结束与上限。改 `eval.ts` 前先读这份 spec。
+见 `openspec/specs/blueprint-evaluation/spec.md` 与 `openspec/specs/buffer-assets/spec.md`：值品牌用 WeakSet、资产 id 用同步 FNV-1a 64、来源解析不调用求值、截断区分自然结束与上限。改 `eval.ts` 前先读这两份 spec。
+
+变更 `p0-baseline-and-correctness` 已于 2026-11-17 归档到 `openspec/changes/archive/`；信任边界仍挂在 `openspec/changes/pack-trust-boundary/`（未启动）。
