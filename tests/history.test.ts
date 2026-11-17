@@ -90,8 +90,6 @@ describe('history: 深度相等与步进', () => {
   });
 
   it('resetHistory 清空 undo 与 redo', () => {
-    let h = initHistory(baseDoc());
-    h = moveToStep(h, 7, { now: 1000 });
     const fresh = resetHistory(baseDoc(3));
     expect(canUndo(fresh)).toBe(false);
     expect(canRedo(fresh)).toBe(false);

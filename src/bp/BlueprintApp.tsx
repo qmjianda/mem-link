@@ -140,8 +140,6 @@ export default function BlueprintApp() {
   const [doc, setDoc] = useState<DocState>(boot.doc);
   const [history, setHistory] = useState<HistoryState>(() => initHistory(boot.doc));
   const [selection, setSelection] = useState<SelectionState>(emptySelection);
-  /** 是否有正在拖拽的连线：Escape 的第一级由画布消费 */
-  const [wirePending, setWirePending] = useState(false);
   /** 快捷键帮助浮层 */
   const [helpOpen, setHelpOpen] = useState(false);
   /** 快速添加浮层 */
@@ -346,7 +344,7 @@ export default function BlueprintApp() {
   useEffect(() => {
     const t = window.setTimeout(() => runSave(docRef.current), PERSIST_DEBOUNCE_MS);
     return () => window.clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [doc]);
 
   const dirty = isDirty(history);
@@ -469,7 +467,7 @@ export default function BlueprintApp() {
       window.removeEventListener('pointerup', finish);
       window.removeEventListener('pointercancel', finish);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [resizing]);
 
   const onSplitKey = (side: 'left' | 'right') => (e: React.KeyboardEvent) => {
@@ -990,11 +988,6 @@ export default function BlueprintApp() {
     deleteObjects({ ...emptySelection(), edges: new Set([id]) }, '删除连线');
   };
 
-  /** 删节点与它关联的连线必须一次提交，否则会留下孤儿连线且撤销不完整 */
-  const onDeleteNode = (id: string) => {
-    deleteObjects(selectOnlyNode(id), '删除节点');
-  };
-
   // ---- 复制 / 剪切 / 粘贴 / 副本 ------------------------------------------
   const nextEntityId = () => `n${++seq.current}`;
 
@@ -1290,7 +1283,7 @@ export default function BlueprintApp() {
       window.removeEventListener('dragleave', onLeave);
       window.removeEventListener('drop', onDrop);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, []);
 
   const dragInside = !!dragAdd
@@ -1619,7 +1612,7 @@ export default function BlueprintApp() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // 注册表内容通过 commandsRef 每次渲染刷新
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, []);
 
   const selectionSummary = summaryOf(selection);
@@ -1806,7 +1799,6 @@ export default function BlueprintApp() {
             selection={selection}
             onSelect={setSelection}
             onMoveCommit={onMoveCommit}
-            onPendingChange={setWirePending}
             onParam={onParam}
             onConnect={onConnect}
             onDisconnect={onDisconnect}

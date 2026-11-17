@@ -91,37 +91,6 @@ export function toHex(n: number, pad = 0): string {
   return `${neg ? '-' : ''}0x${s.padStart(pad, '0')}`;
 }
 
-export function hexBytes(bytes: Uint8Array, sep = ' '): string {
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join(sep);
-}
-
-export interface HexRow {
-  addr: number;
-  bytes: (number | null)[];
-  ascii: string;
-}
-
-export function hexdump(mem: Memory, addr: number, len: number, perLine = 16): HexRow[] {
-  const start = Math.max(addr, mem.base);
-  const stop = Math.min(addr + len, mem.end);
-  if (stop <= start) return [];
-  // align to perLine relative to base
-  const alignedStart = start - ((start - mem.base) % perLine);
-  const rows: HexRow[] = [];
-  for (let a = alignedStart; a < stop; a += perLine) {
-    const rowLen = Math.min(perLine, mem.end - a);
-    const bytes: (number | null)[] = [];
-    let ascii = '';
-    for (let i = 0; i < rowLen; i++) {
-      const b = mem.buf[a - mem.base + i];
-      bytes.push(b);
-      ascii += b >= 32 && b < 127 ? String.fromCharCode(b) : '.';
-    }
-    rows.push({ addr: a, bytes, ascii });
-  }
-  return rows;
-}
-
 /** Best effort hex text parser: plain hex, 0x-prefixed lists, or classic hexdump output. */
 export function parseHexText(text: string): { bytes: Uint8Array; error?: string } {
   const lines = text.split(/\r?\n/);

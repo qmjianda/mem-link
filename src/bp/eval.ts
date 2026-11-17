@@ -402,13 +402,8 @@ function toNumber(v: unknown): number | undefined {
 
 /**
  * 求值计数器（仅用于性能验收：拖动期必须为 0）。
- * 挂在 `window.__bp` 上，不改变求值语义与返回值。
+ * 挂在 `window.__bp` 上，不改变求值语义与返回值；验收脚本直接读它。
  */
-export function evalRunCount(): number {
-  if (typeof window === 'undefined') return 0;
-  return window.__bp?.evalRuns ?? 0;
-}
-
 function countEvalRun(): void {
   if (typeof window === 'undefined') return;
   const s = (window.__bp ??= { evalRuns: 0 });

@@ -64,8 +64,6 @@ interface Props {
    * 拖动过程中画布**不**改文档（因此不会触发求值），只直写 DOM transform。
    */
   onMoveCommit?: (moves: { id: string; x: number; y: number }[]) => void;
-  /** 是否有正在拖拽的连线（父级据此决定 Esc 先取消连线还是清空选择） */
-  onPendingChange?: (pending: boolean) => void;
   onParam: (id: string, key: string, value: string) => void;
   onConnect: (from: string, fromPort: string, to: string, toPort: string) => void;
   onDisconnect: (nodeId: string, port: string) => void;
@@ -371,7 +369,7 @@ function NodeTitleInput({
 }
 
 export default function Canvas({
-  nodes, edges, result, packs, packNames, selection, onSelect, onMoveCommit, onPendingChange,
+  nodes, edges, result, packs, packNames, selection, onSelect, onMoveCommit,
   onParam, onConnect, onDisconnect, dragAdd, dropInside, disabledPacks,
   minimapOpen, onToggleMinimap, onContextMenu, onQuickAdd, pulseNodeId, onProblemClick, onFollowPort,
   onFollowInPort, carriesFile, renameId, onRenameStart, onRenameDone, onNoteResize, apiRef,
@@ -576,7 +574,7 @@ export default function Canvas({
     if (didFit.current || !nodes.length) return;
     didFit.current = true;
     openReadableRef.current();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [nodes.length]);
 
   /**
@@ -656,7 +654,7 @@ export default function Canvas({
     };
     return () => { apiRef.current = null; };
     // 只依赖 apiRef：其余数据通过 ref 读取，避免每次渲染重建 API 对象
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [apiRef]);
 
   // Starting a palette drag cancels a half-drawn wire, so only one preview
@@ -781,12 +779,6 @@ export default function Canvas({
     }
   };
 
-  // 拖线状态同步给父级：Esc 的降级顺序需要它
-  useEffect(() => {
-    onPendingChange?.(pending !== null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pending]);
-
   const edgePath = (x1: number, y1: number, x2: number, y2: number) => {
     if (x2 < x1) {
       return `M ${x1} ${y1} C ${x1 + 28} ${y1}, ${x2 - 18} ${y2}, ${x2} ${y2}`;
@@ -910,7 +902,7 @@ export default function Canvas({
   // 文档更新（提交后）再清 inline transform：与 React 的新 left/top 同一帧生效
   useLayoutEffect(() => {
     if (dragEls.current.size || dragPaths.current.length) clearDragDom();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [nodes]);
 
   useEffect(() => () => {

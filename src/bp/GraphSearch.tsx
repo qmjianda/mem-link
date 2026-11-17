@@ -32,7 +32,7 @@ export default function GraphSearch({ query, onQuery, hits, onPick, onClose }: P
   };
 
   useEffect(() => { inputRef.current?.focus(); inputRef.current?.select(); }, []);
-  useEffect(() => { setActive(0); }, [query]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setActive(0); }, [query]);  
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -54,7 +54,7 @@ export default function GraphSearch({ query, onQuery, hits, onPick, onClose }: P
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [hits, onPick, onClose]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [hits, onPick, onClose]);  
 
   return (
     <div className="bp-overlay" role="dialog" aria-modal="true" aria-label="在图中查找" onPointerDown={onClose}>

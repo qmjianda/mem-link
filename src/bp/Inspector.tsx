@@ -1,6 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
 import { Memory } from '../core/mem';
-import type { Problem } from '../core/types';
 import type { BlueprintPack, BPEdge, BPNode, BPResult } from './types';
 import { builtinLabel, displayTitle, type InstanceView } from './types';
 import { getBuiltin } from './builtins';

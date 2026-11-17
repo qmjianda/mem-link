@@ -15,7 +15,7 @@
 
 - 唯一入口：`src/main.tsx` → `src/bp/BlueprintApp.tsx`。
 - v1（`#v1`，C 声明 + 图）与 v2（`#v2`，旧 pack 编辑器）已于 2026-11-17 整体删除，连同 `v2/*`、`ui/{GraphCanvas,LeftPanel,RightPanel,format}`、`core/{cparse,edit,expr,graph,packedit,program,project}`、`types/memlink.d.ts`、`samples/{demo.pack.ts,demo.json}`。不要再按「三代实现」理解仓库。
-- `styles.css` 里仍有 v2 段落未清理（与蓝图共享 `.btn`/`.ft-*` 等类名），要删需先做视觉核对。
+- 同日晚些时候清理了残留死代码：`styles.css` 只剩蓝图样式（84 → 50 KB），`core/types.ts` 只留 `Endian` + `Problem`，v1 图层构建器（`buildPackGraph`）、`validatePack`、`loadPack`、`hexdump` 等一并删除。改动前请先确认这些确实没人用了。
 
 ## 仓库
 

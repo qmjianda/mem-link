@@ -84,7 +84,7 @@ export function autoLayout(nodes: AutoLayoutNode[], opts: AutoLayoutOptions = {}
   // —— 2. 层内排序：barycenter 前后交替，减少交叉。
   const index = new Map<string, number>();
   columns.forEach((col) => col.forEach((id, i) => index.set(id, i)));
-  const avg = (ids: string[], key: 'preds' | 'succs') => {
+  const avg = (ids: string[]) => {
     const vals = ids
       .filter((x) => index.has(x))
       .map((x) => index.get(x)!)
@@ -97,13 +97,13 @@ export function autoLayout(nodes: AutoLayoutNode[], opts: AutoLayoutOptions = {}
   for (let sweep = 0; sweep < sweeps; sweep += 1) {
     for (let l = 0; l < columns.length; l += 1) {
       columns[l] = [...columns[l]].sort(
-        (a, b) => avg(byId.get(a)?.preds ?? [], 'preds') - avg(byId.get(b)?.preds ?? [], 'preds'),
+        (a, b) => avg(byId.get(a)?.preds ?? []) - avg(byId.get(b)?.preds ?? []),
       );
       columns[l].forEach((id, i) => index.set(id, i));
     }
     for (let l = columns.length - 1; l >= 0; l -= 1) {
       columns[l] = [...columns[l]].sort(
-        (a, b) => avg(byId.get(a)?.succs ?? [], 'succs') - avg(byId.get(b)?.succs ?? [], 'succs'),
+        (a, b) => avg(byId.get(a)?.succs ?? []) - avg(byId.get(b)?.succs ?? []),
       );
       columns[l].forEach((id, i) => index.set(id, i));
     }
