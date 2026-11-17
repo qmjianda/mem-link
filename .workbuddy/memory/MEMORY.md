@@ -27,7 +27,7 @@
 
 - 门禁：`pnpm typecheck`、`pnpm lint`、`pnpm test`、`pnpm build`
 - 求值基准：`node scripts/bench-eval.mjs`（`--write` 更新 `docs/perf-baseline.md`）
-- 真实浏览器回归：`node scripts/cdp-verify.mjs`、`node scripts/cdp-verify-follow.mjs`（跑 `dist/index.html`，需先 build）
+- 真实浏览器回归：`node scripts/cdp-verify.mjs`（功能面）、`cdp-verify-follow.mjs`（跟随）、`cdp-verify-core.mjs`（核心链路：拖 bin → 解码 → 链表 → 跟随）。三者都跑 `dist/index.html`，需先 build。
 - 文档索引：`docs/README.md`
 
 ## 已固化的求值契约
