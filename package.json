@@ -16,7 +16,8 @@
     "verify:core": "node scripts/cdp-verify-core.mjs",
     "verify:tree": "node scripts/cdp-verify-tree.mjs",
     "verify:tree:trunc": "node scripts/cdp-verify-tree-truncation.mjs",
-    "verify:add-defaults": "node scripts/cdp-verify-add-defaults.mjs"
+    "verify:add-defaults": "node scripts/cdp-verify-add-defaults.mjs",
+    "verify:default-nodes": "node scripts/cdp-verify-default-nodes.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

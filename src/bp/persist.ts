@@ -1,18 +1,20 @@
 /**
- * 图文档持久化（`memlink:graph:v1`）。只放 `{packs, nodes, edges}`；面板宽度、
+ * 图文档持久化。面板宽度、
  * 折叠、分组折叠归 `memlink:ui:v1`，UI 操作不会触发这里的写入。
  *
  * 降级原则（D1）：写入失败不回滚内存文档，只把持久化副本停在上一成功版本。
  */
 
 import type { Problem } from '../core/types';
-import { migrateNode, type BPEdge, type BPNode } from './types';
+import type { BPEdge, BPNode } from './types';
 import type { DocState, LoadedPack } from './docstate';
 import { isPackEnabled } from './docstate';
 import { loadBlueprintPack } from './load';
+import { addressInteger } from './precision';
+import { validLayoutDocument, type BinaryLayout } from './layouts';
 
-export const KEY_GRAPH = 'memlink:graph:v1';
-export const GRAPH_VERSION = 1;
+export const GRAPH_VERSION = 2;
+export const KEY_GRAPH = `memlink:graph:v${GRAPH_VERSION}`;
 /** 单次写入上限：2MB */
 export const MAX_WRITE_BYTES = 2 * 1024 * 1024;
 
@@ -24,13 +26,21 @@ export interface GraphPayload {
   packs: StoredPack[];
   nodes: BPNode[];
   edges: BPEdge[];
+  layouts?: BinaryLayout[];
 }
 
 /** 因超限被裁掉 buffer 的 File 节点 */
 export interface DroppedBuffer { nodeId: string; name: string; bytes: number }
 
 export type PersistCode = 'OK' | 'TRIMMED' | 'TOO_LARGE' | 'NO_STORAGE' | 'BAD_DATA';
-export interface PersistResult { ok: boolean; code: PersistCode; bytes: number; droppedBuffers: number }
+export interface PersistResult {
+  ok: boolean;
+  code: PersistCode;
+  bytes: number;
+  droppedBuffers: number;
+  /** 被裁掉的转储明细，用于在状态区列出需要重新载入的来源 */
+  dropped: DroppedBuffer[];
+}
 
 export type LoadCode = 'OK' | 'MISSING' | 'BAD_JSON' | 'VERSION' | 'BAD_DATA';
 export interface LoadResult { doc?: DocState; code: LoadCode; problems: Problem[] }
@@ -53,12 +63,14 @@ export function payloadOf(doc: DocState, savedAt = Date.now()): GraphPayload {
     })),
     nodes: doc.nodes,
     edges: doc.edges,
+    ...(doc.layouts ? { layouts: doc.layouts } : {}),
   };
 }
 
 /**
- * 容量裁剪：序列化超过 `limit` 时先把各 File 节点的 buffer 置空（保留 name/base），
- * 返回裁剪后的文档与被裁列表。仍超限由调用方判定 `TOO_LARGE`。
+ * 容量裁剪：序列化超过 `limit` 时按字节数从大到小丢掉 File 节点的 buffer
+ * （保留 name/base），直到能写进缓存或没有可丢的内容。只丢必要的部分，
+ * 避免一个超大转储把同一张图里其它小转储一起清空。
  */
 export function trimForQuota(
   doc: DocState,
@@ -68,15 +80,26 @@ export function trimForQuota(
   const fullBytes = bytesOf(full);
   if (fullBytes <= limit) return { doc, dropped: [], bytes: fullBytes };
 
+  const candidates = doc.nodes
+    .filter((n) => n.source?.data)
+    .map((n) => ({ node: n, size: n.source!.data!.length }))
+    .sort((a, b) => b.size - a.size);
+  if (!candidates.length) return { doc, dropped: [], bytes: fullBytes };
+
   const dropped: DroppedBuffer[] = [];
-  const nodes = doc.nodes.map((n) => {
-    if (!n.source || !n.source.data) return n;
-    dropped.push({ nodeId: n.id, name: n.source.name, bytes: n.source.data.length });
-    return { ...n, source: { ...n.source, data: '' } };
-  });
-  if (!dropped.length) return { doc, dropped: [], bytes: fullBytes };
-  const trimmed: DocState = { ...doc, nodes };
-  return { doc: trimmed, dropped, bytes: bytesOf(JSON.stringify(payloadOf(trimmed))) };
+  const emptied = new Set<string>();
+  let nodes = doc.nodes;
+  let bytes = fullBytes;
+  for (const { node } of candidates) {
+    emptied.add(node.id);
+    dropped.push({ nodeId: node.id, name: node.source!.name, bytes: node.source!.data!.length });
+    nodes = nodes.map((n) => (emptied.has(n.id) && n.source
+      ? { ...n, source: { ...n.source, data: '' } }
+      : n));
+    bytes = bytesOf(JSON.stringify(payloadOf({ ...doc, nodes })));
+    if (bytes <= limit) break;
+  }
+  return { doc: { ...doc, nodes }, dropped, bytes };
 }
 
 /** 待写入的 JSON（已按容量裁剪） */
@@ -89,7 +112,7 @@ function isNode(v: unknown): v is BPNode {
   if (!n || typeof n.id !== 'string' || typeof n.packId !== 'string' || typeof n.nodeId !== 'string') return false;
   if (!Number.isFinite(n.x) || !Number.isFinite(n.y)) return false;
   if (n.source && (typeof n.source.name !== 'string'
-    || !Number.isFinite(n.source.base) || typeof n.source.data !== 'string')) return false;
+    || addressInteger(n.source.base) === undefined || typeof n.source.data !== 'string')) return false;
   return true;
 }
 
@@ -120,6 +143,7 @@ export function deserialize(raw: string | null | undefined): LoadResult {
   }
   if (!env.nodes.every(isNode)) return { code: 'BAD_DATA', problems: [] };
   if (!env.edges.every(isEdge)) return { code: 'BAD_DATA', problems: [] };
+  if (env.layouts !== undefined && !validLayoutDocument(env.layouts)) return { code: 'BAD_DATA', problems: [] };
 
   const problems: Problem[] = [];
   const packs: LoadedPack[] = [];
@@ -144,10 +168,10 @@ export function deserialize(raw: string | null | undefined): LoadResult {
     });
   }
 
-  const nodes = env.nodes.map((n) => migrateNode({ ...n, params: { ...(n.params ?? {}) } }));
+  const nodes = env.nodes.map((n) => ({ ...n, params: { ...(n.params ?? {}) } }));
   const alive = new Set(nodes.map((n) => n.id));
   const edges = env.edges.filter((e) => alive.has(e.from.node) && alive.has(e.to.node));
-  return { code: 'OK', doc: { packs, nodes, edges }, problems };
+  return { code: 'OK', doc: { packs, nodes, edges, ...(env.layouts ? { layouts: env.layouts } : {}) }, problems };
 }
 
 /** localStorage 写探针：隐私模式下 setItem 会抛错 */
@@ -178,22 +202,29 @@ export function saveDoc(doc: DocState, limit = MAX_WRITE_BYTES): PersistResult {
   try {
     json = JSON.stringify(payloadOf(trim.doc));
   } catch {
-    return { ok: false, code: 'BAD_DATA', bytes: 0, droppedBuffers: 0 };
+    return { ok: false, code: 'BAD_DATA', bytes: 0, droppedBuffers: 0, dropped: [] };
   }
   const bytes = bytesOf(json);
   if (bytes > limit) {
-    return { ok: false, code: 'TOO_LARGE', bytes, droppedBuffers: trim.dropped.length };
+    return {
+      ok: false, code: 'TOO_LARGE', bytes,
+      droppedBuffers: trim.dropped.length, dropped: trim.dropped,
+    };
   }
   try {
     window.localStorage.setItem(KEY_GRAPH, json);
   } catch {
-    return { ok: false, code: 'NO_STORAGE', bytes, droppedBuffers: trim.dropped.length };
+    return {
+      ok: false, code: 'NO_STORAGE', bytes,
+      droppedBuffers: trim.dropped.length, dropped: trim.dropped,
+    };
   }
   return {
     ok: true,
     code: trim.dropped.length ? 'TRIMMED' : 'OK',
     bytes,
     droppedBuffers: trim.dropped.length,
+    dropped: trim.dropped,
   };
 }
 

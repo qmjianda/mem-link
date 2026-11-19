@@ -91,36 +91,111 @@ export function toHex(n: number, pad = 0): string {
   return `${neg ? '-' : ''}0x${s.padStart(pad, '0')}`;
 }
 
-/** Best effort hex text parser: plain hex, 0x-prefixed lists, or classic hexdump output. */
-export function parseHexText(text: string): { bytes: Uint8Array; error?: string } {
-  const lines = text.split(/\r?\n/);
+/**
+ * 严格 HEX 文本解析：支持空白分隔字节、连续偶数位 HEX、`0x` 前缀字节，
+ * 以及 `hexdump -C` / `xxd` 风格的带地址转储。
+ *
+ * 与「尽量提取看起来像十六进制的内容」不同，这里宁可报错也不猜：
+ * 奇数位、无法识别的字符、倒退/跳跃的地址、`*` 压缩行都会返回带行号的
+ * 错误，调用方据此保留原有转储。地址列只用于校验连续性，不改变映射基址。
+ */
+export interface HexParseResult {
+  bytes: Uint8Array;
+  error?: string;
+}
+
+const HEXDUMP_LINE = /^\s*([0-9a-fA-F]{4,16})(?::|\s{2,})\s*(.*)$/;
+const ADDRESS_ONLY = /^\s*([0-9a-fA-F]{4,16}):?\s*$/;
+
+export function parseHexText(text: string): HexParseResult {
+  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/);
+  const nonEmpty: number[] = [];
+  lines.forEach((l, i) => { if (l.trim()) nonEmpty.push(i); });
+  const lastNonEmpty = nonEmpty.length ? nonEmpty[nonEmpty.length - 1] : -1;
+
+  const hexdumpLike = nonEmpty.some((i) => {
+    const m = HEXDUMP_LINE.exec(lines[i]);
+    return !!m && /[0-9a-fA-F]{2}/.test(m[2].split('|')[0]);
+  });
+
   const out: number[] = [];
-  const hexdumpLike = lines.some((l) => /^\s*[0-9a-fA-F]{4,16}\s{2,}[0-9a-fA-F]{2}/.test(l));
-  for (const rawLine of lines) {
-    let line = rawLine;
+  let expected: bigint | null = null;
+  let sawData = false;
+
+  const fail = (i: number, reason: string): HexParseResult =>
+    ({ bytes: new Uint8Array(), error: `第 ${i + 1} 行：${reason}` });
+
+  for (const i of nonEmpty) {
+    let line = lines[i];
     const bar = line.indexOf('|');
     if (bar >= 0) line = line.slice(0, bar);
     line = line.replace(/[#;].*$/, '');
     const trimmed = line.trim();
     if (!trimmed) continue;
-    if (hexdumpLike) {
-      line = line.replace(/^\s*[0-9a-fA-F]{4,16}\s+/, '');
-      line = line.replace(/\s+[0-9a-fA-F]{4,16}\s*$/, ''); // trailing offset column
+
+    if (trimmed === '*') {
+      return fail(i, '不支持 * 压缩行；请先导出未压缩的 HEX 内容');
     }
-    const tokens = line.match(/0x[0-9a-fA-F]+|[0-9a-fA-F]{2}\b|\b[0-9a-fA-F]{2}\b/g);
-    if (!tokens) continue;
+
     if (hexdumpLike) {
-      for (const t of tokens) out.push(parseInt(t.replace(/^0x/i, ''), 16) & 0xff);
-    } else {
-      // if the line is a run of pairs without separators, split it
-      const clean = line.replace(/0x/gi, '').replace(/[^0-9a-fA-F]/g, '');
-      if (clean.length >= 2 && tokens.length === 1 && clean.length > 2) {
-        for (let i = 0; i + 1 < clean.length; i += 2) out.push(parseInt(clean.slice(i, i + 2), 16));
-      } else {
-        for (const t of tokens) out.push(parseInt(t.replace(/^0x/i, ''), 16) & 0xff);
+      const addressOnly = ADDRESS_ONLY.exec(line);
+      const dataLine = HEXDUMP_LINE.exec(line);
+      const addressText = addressOnly?.[1] ?? dataLine?.[1];
+      if (!addressText) {
+        return fail(i, '格式混杂：带地址的转储里出现了无法识别的行');
+      }
+      const offset = BigInt(`0x${addressText}`);
+      // xxd 的 ASCII 栏用两列以上空格分隔；hexdump -C 已在 `|` 处截断。
+      const rest = (dataLine?.[2]?.split(/\s{2,}/)[0] ?? '').trim();
+
+      // 末尾单独的地址行是 hexdump 的结束偏移，不是数据。
+      if (!rest) {
+        if (i !== lastNonEmpty) return fail(i, '地址行只能出现在末尾');
+        if (!sawData) return fail(i, '只有地址，没有可解析的字节');
+        if (expected !== null && offset !== expected) {
+          return fail(i, `末尾地址 ${addressText} 与已读长度 ${expected.toString(16)} 不符`);
+        }
+        continue;
+      }
+
+      if (sawData && expected !== null && offset !== expected) {
+        return fail(i, `地址 ${addressText} 不连续（应为 ${expected.toString(16)}）`);
+      }
+      const tokens = rest.split(/\s+/).filter(Boolean);
+      for (const token of tokens) {
+        if (!/^[0-9a-fA-F]{2}$/.test(token)) {
+          return fail(i, `数据列包含无法识别的内容「${token}」`);
+        }
+        out.push(parseInt(token, 16));
+      }
+      sawData = true;
+      expected = offset + BigInt(tokens.length);
+      continue;
+    }
+
+    // 纯 HEX：每个空白/逗号分隔的标记必须是完整字节，0x 前缀只允许 1–2 位。
+    const tokens = trimmed.split(/[\s,]+/).filter(Boolean);
+    for (const token of tokens) {
+      if (/^0x/i.test(token)) {
+        const digits = token.slice(2);
+        if (!/^[0-9a-fA-F]{1,2}$/.test(digits)) {
+          return fail(i, `0x 字节「${token}」应为 1–2 位十六进制`);
+        }
+        out.push(parseInt(digits, 16));
+        continue;
+      }
+      if (!/^[0-9a-fA-F]+$/.test(token)) {
+        return fail(i, `无法识别的内容「${token}」`);
+      }
+      if (token.length % 2 !== 0) {
+        return fail(i, `字节「${token}」只有奇数个十六进制位`);
+      }
+      for (let k = 0; k < token.length; k += 2) {
+        out.push(parseInt(token.slice(k, k + 2), 16));
       }
     }
   }
+
   if (!out.length) return { bytes: new Uint8Array(), error: '没有找到可解析的十六进制字节' };
   return { bytes: Uint8Array.from(out) };
 }

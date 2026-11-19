@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { nodeItemsOf, type PalItem } from './Palette';
 import type { LoadedPack } from './docstate';
+import { useModalFocus } from './ModalFocus';
 
 interface Props {
   packs: LoadedPack[];
@@ -17,6 +18,8 @@ export default function QuickAdd({ packs, onPick, onClose }: Props) {
   const [q, setQ] = useState('');
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useModalFocus<HTMLDivElement>(onClose);
 
   const all = useMemo(() => nodeItemsOf(packs), [packs]);
   const packNames = useMemo(() => new Map(packs.map((p) => [p.id, p.name])), [packs]);
@@ -31,6 +34,12 @@ export default function QuickAdd({ packs, onPick, onClose }: Props) {
   useEffect(() => { inputRef.current?.focus(); }, []);
   useEffect(() => { setActive(0); }, [q]);
 
+  /** 键盘移动时把当前项滚进可视范围 */
+  useEffect(() => {
+    const el = listRef.current?.querySelector<HTMLElement>('.bp-quick-item.on');
+    el?.scrollIntoView({ block: 'nearest' });
+  }, [active]);
+
   const pick = (item: PalItem | undefined) => {
     if (!item) return;
     onPick(item.packId, item.nodeId);
@@ -39,6 +48,7 @@ export default function QuickAdd({ packs, onPick, onClose }: Props) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.isComposing || e.keyCode === 229) return;
       if (e.key === 'Escape') {
         e.preventDefault();
         e.stopPropagation();
@@ -65,8 +75,8 @@ export default function QuickAdd({ packs, onPick, onClose }: Props) {
   }, [items, active]);
 
   return (
-    <div className="bp-overlay" role="dialog" aria-modal="true" aria-label="快速添加节点" onPointerDown={onClose}>
-      <div className="bp-quick" onPointerDown={(e) => e.stopPropagation()}>
+    <div className="bp-overlay" role="presentation" onPointerDown={onClose}>
+      <div className="bp-quick" role="dialog" aria-modal="true" aria-label="快速添加节点" ref={dialogRef} onPointerDown={(e) => e.stopPropagation()}>
         <input
           ref={inputRef}
           className="bp-quick-input"
@@ -75,7 +85,7 @@ export default function QuickAdd({ packs, onPick, onClose }: Props) {
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
-        <div className="bp-quick-list" role="listbox" aria-label="节点列表">
+        <div className="bp-quick-list" role="listbox" aria-label="节点列表" ref={listRef}>
           {items.map((item, i) => (
             <button
               key={`${item.packId}/${item.nodeId}`}
@@ -84,6 +94,7 @@ export default function QuickAdd({ packs, onPick, onClose }: Props) {
               aria-selected={i === active}
               title={item.hint ?? item.label}
               className={`bp-quick-item${i === active ? ' on' : ''}`}
+              onFocus={() => setActive(i)}
               onPointerEnter={() => setActive(i)}
               onClick={() => pick(item)}
             >

@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import demoSource from '../samples/demo.bp.ts?raw';
 import { loadBlueprintPack } from '../src/bp/load';
-import { bytesToBase64 } from '../src/bp/doc';
+import { bytesToBase64, parseDoc } from '../src/bp/doc';
 import { docJson, type DocState, type LoadedPack } from '../src/bp/docstate';
 import {
   GRAPH_VERSION, KEY_GRAPH, MAX_WRITE_BYTES, clearStored, deserialize, loadStored, saveDoc, serialize,
   storageAvailable, trimForQuota,
 } from '../src/bp/persist';
-import { migrateNode, type BPNode } from '../src/bp/types';
+import type { BPNode } from '../src/bp/types';
 import { demoBinary } from './demo-bin';
 
 function demoPack(): LoadedPack {
@@ -149,43 +149,13 @@ describe('persist: 容量与降级', () => {
     expect(() => clearStored()).not.toThrow();
   });
 
-  it('缓存键固定为 memlink:graph:v1', () => {
-    expect(KEY_GRAPH).toBe('memlink:graph:v1');
+  it('新版与旧缓存使用不同的键', () => {
+    expect(KEY_GRAPH).toBe('memlink:graph:v2');
   });
 });
 
-describe('旧内置节点合并迁移', () => {
-  it('pointer → ptrwalk（offset 恒 0）', () => {
-    expect(migrateNode({ id: 'p', packId: '', nodeId: 'pointer', x: 0, y: 0, params: { address: '0x1000', pointerSize: '8' } }))
-      .toMatchObject({ nodeId: 'ptrwalk', params: { base: '0x1000', offset: '0x0', pointerSize: '8' } });
-  });
-
-  it('bitwise → expr（按运算符生成表达式模板）', () => {
-    expect(migrateNode({ id: 'b', packId: '', nodeId: 'bitwise', x: 0, y: 0, params: { a: '0xf0', b: '2', op: '<<' } }))
-      .toMatchObject({ nodeId: 'expr', params: { a: '0xf0', b: '2', formula: 'a << b' } });
-    expect(migrateNode({ id: 'b2', packId: '', nodeId: 'bitwise', x: 0, y: 0, params: {} }))
-      .toMatchObject({ nodeId: 'expr', params: { formula: 'a & b' } });
-  });
-
-  it('float → readint（size 映射为 f4 / f8）', () => {
-    expect(migrateNode({ id: 'f', packId: '', nodeId: 'float', x: 0, y: 0, params: { address: '0x0', size: '8' } }))
-      .toMatchObject({ nodeId: 'readint', params: { size: 'f8' } });
-  });
-
-  it('pack 节点与未受影响的内置节点原样返回', () => {
-    const pack: BPNode = { id: 's', packId: 'p1', nodeId: 'sq', x: 0, y: 0, params: {} };
-    const keep: BPNode = { id: 'n', packId: '', nodeId: 'readint', x: 0, y: 0, params: { address: '0x0' } };
-    expect(migrateNode(pack)).toEqual(pack);
-    expect(migrateNode(keep)).toEqual(keep);
-  });
-
-  it('deserialize 对缓存里的旧节点套用迁移', () => {
-    const raw = JSON.stringify({
-      version: 1, savedAt: 0, packs: [],
-      nodes: [{ id: 'p', packId: '', nodeId: 'pointer', x: 0, y: 0, params: { address: '0x10' } }],
-      edges: [],
-    });
-    const r = deserialize(raw);
-    expect(r.doc?.nodes[0]?.nodeId).toBe('ptrwalk');
-  });
+it('旧蓝图明确报版本不支持，旧缓存不迁移', () => {
+  const graph = { packs: [], nodes: [], edges: [] };
+  expect(parseDoc(JSON.stringify({ ...graph, format: 'memlink-blueprint/1' })).error).toContain('不支持此蓝图版本');
+  expect(deserialize(JSON.stringify({ ...graph, version: 1, savedAt: 0 })).code).toBe('VERSION');
 });

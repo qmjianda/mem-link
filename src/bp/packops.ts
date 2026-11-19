@@ -22,44 +22,6 @@ export type RenameCode = 'OK' | 'EMPTY' | 'UNCHANGED' | 'MISSING';
 /** pack 显示名长度上限 */
 export const MAX_PACK_NAME = 48;
 
-/** 新建 pack 的最小可用骨架：一个结构体、一条链表 */
-export const TEMPLATE_PACK_SOURCE = `/// <reference path="../types/memlink-bp.d.ts" />
-
-// 结构体：名字、总长度、字段（偏移从 0 开始）
-const Head = struct('Head', 8, [
-  u16('magic', 0, { format: 'hex' }),
-  u16('version', 2),
-  u32('size', 4),
-]);
-
-// 链表节点：next 是下一条记录的地址，0 表示结束
-const Item = struct('Item', 12, [
-  u32('next', 0),
-  u32('id', 4),
-  u32('value', 8),
-]);
-
-export default definePack({
-  name: '新 pack',
-  endian: 'little',
-  pointerSize: 4,
-  constants: {},
-  types: { Head, Item },
-  nodes: {
-    head: structNode(Head, { label: 'Head 头部' }),
-    items: listNode(Item, {
-      label: 'Item 链表',
-      // 返回下一条的地址；返回 null 表示到此结束
-      next: (e) => {
-        const v = Number(e.value.next);
-        return v > 0 ? v : null;
-      },
-      max: 256,
-    }),
-  },
-});
-`;
-
 /** 该 pack 拥有的节点 id 集合 */
 function nodeIdsOf(doc: DocState, packId: string): Set<string> {
   const ids = new Set<string>();
@@ -129,7 +91,7 @@ export function removePackAtomic(doc: DocState, packId: string): DocState {
   const nodes = doc.nodes.filter((n) => n.packId !== packId);
   const alive = new Set(nodes.map((n) => n.id));
   const edges = doc.edges.filter((e) => alive.has(e.from.node) && alive.has(e.to.node));
-  return { packs: doc.packs.filter((p) => p.id !== packId), nodes, edges };
+  return { ...doc, packs: doc.packs.filter((p) => p.id !== packId), nodes, edges };
 }
 
 /** 清理 N 个节点：只删该 pack 的节点与关联连线，pack 本身留在文档里 */

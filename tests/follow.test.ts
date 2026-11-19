@@ -5,7 +5,7 @@ import type { BPNode, BufferValue, InstanceView, NodeView } from '../src/bp/type
 import { brandInstance } from '../src/bp/types';
 import { assetIdOf, uniqueBuffers } from '../src/bp/assets';
 import {
-  bufferIssue, buildFollowItems, elementFollowItem, followAddress, followBuiltinIds, followHint,
+  bufferIssue, buildFollowItems, elementFollowItem, followAddress, followHint, followTypeIssue,
   inferFollowType, knownTypesAt,
 } from '../src/bp/follow';
 
@@ -20,9 +20,9 @@ function buf(name: string, base: number, size: number): BufferValue {
 }
 
 describe('followAddress', () => {
-  it('数字地址原样取整', () => {
+  it('只接受精确的整数地址', () => {
     expect(followAddress(0x1000)).toBe(0x1000);
-    expect(followAddress(12.9)).toBe(12);
+    expect(followAddress(12.9)).toBeNull();
     expect(followAddress(-4)).toBe(-4);
   });
 
@@ -41,6 +41,11 @@ describe('followAddress', () => {
 });
 
 describe('followHint', () => {
+  it('已声明的偏移和下标不会被当成绝对地址跳转', () => {
+    expect(followTypeIssue('offset')).toContain('字节偏移不是地址');
+    expect(followTypeIssue('index')).toContain('元素下标不是地址');
+    expect(followTypeIssue('address')).toBeUndefined();
+  });
   it('列表端口提示展开后双击单个元素', () => {
     expect(followHint([inst(0x1000)])).toContain('展开后双击单个元素');
   });
@@ -91,12 +96,9 @@ describe('在此地址解析：候选清单', () => {
   it('列出全部按地址工作的内置解析节点，且不重复元素解析', () => {
     const items = buildFollowItems({ packs, packNames });
     const builtins = items.filter((i) => i.packId === '').map((i) => i.nodeId);
-    expect(builtins).toEqual(expect.arrayContaining([
-      'readint', 'text', 'arrayread', 'ptrwalk', 'prp', 'checksum', 'slice',
-    ]));
-    // 元素解析由浮层顶部的自适应条目承担
-    expect(builtins).not.toContain('element');
-    for (const id of followBuiltinIds()) expect(builtins).toContain(id);
+    expect(builtins.sort()).toEqual(['arrayread', 'listread', 'ptrwalk', 'readint', 'slice', 'structread', 'text']);
+    expect(items.find((item) => item.nodeId === 'ptrwalk')?.inputPort).toBe('address');
+    expect(items.find((item) => item.nodeId === 'readint')?.inputPort).toBe('address');
   });
 
   it('包含 pack 里的结构体 / 链表 / 数组节点并保留分组', () => {

@@ -238,7 +238,7 @@ describe('implicit source tracing', () => {
 
   it('uses a string handed over by a data-source wire as the buffer', () => {
     const constant = node('c', '', 'string', { value: 'hello world' });
-    const t = node('t', '', 'text', { address: '0x0', length: '5' });
+    const t = node('t', '', 'text', { address: '0x0', length: '5', mode: 'fixed' });
     const r = evaluateGraph([fileNode('f1'), constant, t], [edge('e0', ['c', 'text'], ['t', 'buffer'])], packs);
     const src = r.sources.get('t');
     expect(src?.mode).toBe('explicit');
@@ -272,7 +272,7 @@ describe('implicit source tracing', () => {
 
   it('keeps source wires verbatim when opening a saved graph', () => {
     const doc = {
-      format: 'memlink-blueprint/1',
+      format: 'memlink-blueprint/2',
       packs: [],
       nodes: [fileNode(), node('h', 'p', 'header', { address: '0x0' })],
       edges: [edge('e0', ['f', 'buffer'], ['h', 'buffer'])],
@@ -576,7 +576,7 @@ describe('wired input values', () => {
 
   it('publishes File base and size as connectable numbers', () => {
     const r = evaluateGraph([fileNode('f', demoBinary(), 0x1000)], [], packs);
-    expect(r.outputs.get('f')?.base).toBe(0x1000);
+    expect(r.outputs.get('f')?.base).toMatchObject({ value: 0x1000n });
     expect(r.outputs.get('f')?.size).toBe(demoBinary().length);
   });
 });

@@ -12,7 +12,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const url = `file:///${root.replace(/\\/g, '/')}/dist/index.html`;
 const perf = JSON.parse(readFileSync(join(root, 'samples/perf.big.blueprint.json'), 'utf8'));
 const payload = JSON.stringify({
-  version: 1, savedAt: Date.now(),
+  version: 2, savedAt: Date.now(),
   packs: perf.packs.map((p) => ({ ...p, enabled: true })),
   nodes: perf.nodes, edges: perf.edges,
 });
@@ -67,7 +67,7 @@ async function main() {
 
   // Inject the benchmark graph and reload so the app boots from it.
   await send('Runtime.evaluate', {
-    expression: `localStorage.setItem('memlink:graph:v1', ${JSON.stringify(payload)})`,
+    expression: `localStorage.setItem('memlink:graph:v2', ${JSON.stringify(payload)})`,
   });
   await send('Page.reload', { ignoreCache: true });
   await sleep(1800);

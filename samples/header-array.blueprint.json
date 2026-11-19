@@ -1,0 +1,268 @@
+{
+  "format": "memlink-blueprint/2",
+  "packs": [],
+  "layouts": [
+    {
+      "id": "header",
+      "name": "表头",
+      "size": "8",
+      "endian": "little",
+      "fields": [
+        {
+          "id": "f1",
+          "name": "tableOffset",
+          "offset": "0",
+          "kind": "u16",
+          "role": "offset"
+        },
+        {
+          "id": "f2",
+          "name": "count",
+          "offset": "2",
+          "kind": "u8"
+        },
+        {
+          "id": "f3",
+          "name": "magic",
+          "offset": "3",
+          "kind": "u8"
+        },
+        {
+          "id": "f4",
+          "name": "crc32",
+          "offset": "4",
+          "kind": "u32"
+        }
+      ],
+      "nextField": 5
+    },
+    {
+      "id": "entry",
+      "name": "表项",
+      "size": "4",
+      "endian": "little",
+      "fields": [
+        {
+          "id": "f1",
+          "name": "id",
+          "offset": "0",
+          "kind": "u16"
+        },
+        {
+          "id": "f2",
+          "name": "value",
+          "offset": "2",
+          "kind": "u16"
+        }
+      ],
+      "nextField": 3
+    }
+  ],
+  "nodes": [
+    {
+      "id": "f",
+      "packId": "",
+      "nodeId": "file",
+      "x": 0,
+      "y": 70,
+      "params": {
+        "name": "header-array.bin"
+      },
+      "source": {
+        "name": "header-array.bin",
+        "base": "0x1000",
+        "data": "CAACp0/jtIwBAAoAAgAUAA=="
+      }
+    },
+    {
+      "id": "header",
+      "packId": "",
+      "nodeId": "structread",
+      "x": 330,
+      "y": 0,
+      "params": {
+        "address": "0x1000",
+        "layoutId": "header"
+      }
+    },
+    {
+      "id": "offset",
+      "packId": "",
+      "nodeId": "address",
+      "x": 670,
+      "y": 0,
+      "params": {}
+    },
+    {
+      "id": "array",
+      "packId": "",
+      "nodeId": "arrayread",
+      "x": 1020,
+      "y": 0,
+      "params": {
+        "elementType": "record",
+        "layoutId": "entry"
+      }
+    },
+    {
+      "id": "item",
+      "packId": "",
+      "nodeId": "item",
+      "x": 1370,
+      "y": 0,
+      "params": {
+        "index": "1"
+      }
+    },
+    {
+      "id": "range",
+      "packId": "",
+      "nodeId": "slice",
+      "x": 1020,
+      "y": 300,
+      "params": {
+        "length": "8"
+      }
+    },
+    {
+      "id": "checksum",
+      "packId": "",
+      "nodeId": "checksum",
+      "x": 1370,
+      "y": 300,
+      "params": {
+        "algorithm": "crc32"
+      }
+    },
+    {
+      "id": "checksumOk",
+      "packId": "",
+      "nodeId": "assert",
+      "x": 1710,
+      "y": 300,
+      "params": {}
+    },
+    {
+      "id": "magicOk",
+      "packId": "",
+      "nodeId": "assert",
+      "x": 670,
+      "y": 260,
+      "params": {
+        "expected": "0xa7"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "from": {
+        "node": "f",
+        "port": "base"
+      },
+      "to": {
+        "node": "header",
+        "port": "address"
+      }
+    },
+    {
+      "id": "e2",
+      "from": {
+        "node": "header",
+        "port": "field:header:f1"
+      },
+      "to": {
+        "node": "offset",
+        "port": "offset"
+      }
+    },
+    {
+      "id": "e3",
+      "from": {
+        "node": "offset",
+        "port": "address"
+      },
+      "to": {
+        "node": "array",
+        "port": "address"
+      }
+    },
+    {
+      "id": "e4",
+      "from": {
+        "node": "header",
+        "port": "field:header:f2"
+      },
+      "to": {
+        "node": "array",
+        "port": "count"
+      }
+    },
+    {
+      "id": "e5",
+      "from": {
+        "node": "array",
+        "port": "list"
+      },
+      "to": {
+        "node": "item",
+        "port": "list"
+      }
+    },
+    {
+      "id": "e6",
+      "from": {
+        "node": "offset",
+        "port": "address"
+      },
+      "to": {
+        "node": "range",
+        "port": "address"
+      }
+    },
+    {
+      "id": "e7",
+      "from": {
+        "node": "range",
+        "port": "span"
+      },
+      "to": {
+        "node": "checksum",
+        "port": "span"
+      }
+    },
+    {
+      "id": "e8",
+      "from": {
+        "node": "checksum",
+        "port": "value"
+      },
+      "to": {
+        "node": "checksumOk",
+        "port": "actual"
+      }
+    },
+    {
+      "id": "e9",
+      "from": {
+        "node": "header",
+        "port": "field:header:f4"
+      },
+      "to": {
+        "node": "checksumOk",
+        "port": "expected"
+      }
+    },
+    {
+      "id": "e10",
+      "from": {
+        "node": "header",
+        "port": "field:header:f3"
+      },
+      "to": {
+        "node": "magicOk",
+        "port": "actual"
+      }
+    }
+  ]
+}

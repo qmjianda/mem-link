@@ -111,6 +111,13 @@ async function main() {
 
   for (let i = 0; i < 60; i++) {
     if (await evaluate(`!!document.querySelector('.bp-app .bp-node')`)) break;
+    if (i === 0) {
+      await evaluate(`(() => {
+        const b = [...document.querySelectorAll('.bp-top .btn')].find((e) => e.textContent.trim() === '示例');
+        b?.click();
+        return !!b;
+      })()`);
+    }
     await sleep(150);
   }
   await sleep(300);
@@ -142,10 +149,10 @@ async function main() {
   check('类型可推断时置顶元素解析，且不提供手动类型下拉',
     !!overlay?.smart?.includes('元素解析') && overlay.smart.includes('DataBlock')
     && overlay.select === false, JSON.stringify(overlay?.smart));
-  const need = ['数值读取', '字符串读取', '数组读取', '指针步进', 'PRP / 分散页', '校验和', '缓冲区切片'];
+  const need = ['读数值', '读字符串', '读结构', '展开数组', '遍历链表', '读指针', '字节范围'];
   check('解析节点清单不再缺项', need.every((t) => overlay.labels.includes(t)),
     `缺 ${need.filter((t) => !overlay.labels.includes(t)).join('、') || '无'}`);
-  check('候选按类型分组', ['结构体', '数组', '解析', '数据源', '地址', '校验']
+  check('候选按类型分组', ['结构体', '数组', '读取', '集合', '数据源', '定位']
     .every((g) => overlay.groups.includes(g)), overlay.groups.join(' / '));
 
   /* 2. 默认 Enter = 元素解析（类型自适应），应新建元素节点并连好地址 */

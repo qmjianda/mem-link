@@ -19,7 +19,10 @@
 
 行为契约不在本目录，而在 `openspec/`：`openspec/specs/` 是已生效的能力规格，`openspec/changes/` 是进行中的变更。本目录只解释**为什么这样设计**，不重复 MUST/SHALL 条款。
 
-当前进行中的变更：[`p0-baseline-and-correctness`](../openspec/changes/p0-baseline-and-correctness/proposal.md)。
+当前状态：
+
+- P0 正确性基线已归档：[`2026-11-17-p0-baseline-and-correctness`](../openspec/changes/archive/2026-11-17-p0-baseline-and-correctness/proposal.md)。
+- 信任边界已单独记录但按触发条件暂缓：[`pack-trust-boundary`](../openspec/changes/pack-trust-boundary/proposal.md)。
 
 ## 维护约定
 

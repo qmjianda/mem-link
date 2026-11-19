@@ -99,9 +99,17 @@ async function main() {
   await send('Log.enable');
   await send('Page.enable');
 
-  // Wait for the app to mount.
+  // Wait for the app to mount. 启动默认是空白工作区，先进入「示例」临时副本。
   for (let i = 0; i < 60; i++) {
     if (await evaluate(`!!document.querySelector('.bp-app .bp-node')`)) break;
+    if (i === 0) {
+      await evaluate(`(() => {
+        const b = [...document.querySelectorAll('.bp-top .btn')]
+          .find(e => e.textContent.trim() === '示例');
+        b?.click();
+        return !!b;
+      })()`);
+    }
     await sleep(150);
   }
 
@@ -130,12 +138,12 @@ async function main() {
   const groups = await evaluate(`[...document.querySelectorAll('.bp-group-title')].map(e=>e.textContent)`);
   check('节点库按 6 组分类并含 pack 分组', groups.length >= 7, groups.join(' / '));
   const items = await evaluate(`document.querySelectorAll('.bp-pal-item').length`);
-  check('内置节点合并后清单完整（18 内置 + pack）', items >= 24, `${items} 项`);
+  check('节点库含通用节点和已导入 pack 节点', items >= 24, `${items} 项`);
   const gone = await evaluate(`(() => {
     const labels = [...document.querySelectorAll('.bp-pal-item')].map(e => e.textContent);
     return {
       removed: ['指针解引用', '浮点读取', '位运算'].filter(t => labels.some(l => l.includes(t))),
-      kept: ['指针步进', '数值读取'].filter(t => labels.some(l => l.includes(t))),
+      kept: ['读指针', '读数值'].filter(t => labels.some(l => l.includes(t))),
     };
   })()`);
   check('冗余节点已从节点库移除，合并节点仍在',
@@ -503,6 +511,9 @@ async function main() {
     check('跟随浮层再次打开', await evaluate(`!!document.querySelector('.bp-follow')`));
 
     const chainBox = await evaluate(`(() => {
+      // 偏移链属于高级用法，默认折叠；先展开再量取输入框位置。
+      const adv = document.querySelector('.bp-follow-advanced');
+      if (adv) adv.open = true;
       const el = document.querySelector('.bp-follow-chain input');
       if (!el) return null;
       const r = el.getBoundingClientRect();
@@ -525,7 +536,7 @@ async function main() {
     check('多级指针展开 2 个节点与 2 条连线',
       n1 === n0 + 2 && e1 >= e0 + 2, `节点 ${n0}→${n1}；连线 ${e0}→${e1}`);
     const titles = await evaluate(`[...document.querySelectorAll('.bp-node-title')].map(e=>e.textContent)`);
-    check('画布出现「指针步进」节点', titles.includes('指针步进'), titles.filter((t) => t.includes('指针')).join('/'));
+    check('画布出现「读指针」节点', titles.includes('读指针'), titles.filter((t) => t.includes('指针')).join('/'));
     const chainVals = await evaluate(`[...document.querySelectorAll('.bp-out-row')]
       .map(r => r.textContent).filter(t => /0x1400/.test(t))`);
     check('步进节点 target 输出为 0x1400', chainVals.length >= 1,
@@ -729,7 +740,7 @@ async function main() {
   /* --------------------------------- 6m. 新节点继承下拉配置（少一步设置） */
   const readItem = await evaluate(`(() => {
     const el = [...document.querySelectorAll('.bp-pal-item')]
-      .find(b => b.textContent.includes('数值读取'));
+      .find(b => b.textContent.includes('读数值'));
     if (!el) return null;
     const r = el.getBoundingClientRect();
     return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
@@ -753,12 +764,12 @@ async function main() {
   );
   if (readItem) {
     await addRead();
-    check('新数值读取默认宽度 u32', (await readSize()) === '4', String(await readSize()));
-    await setSize('2');
-    check('检查器可改宽度为 u16', (await readSize()) === '2', String(await readSize()));
+    check('新读数值默认类型 u32', (await readSize()) === 'u32', String(await readSize()));
+    await setSize('u16');
+    check('检查器可改宽度为 u16', (await readSize()) === 'u16', String(await readSize()));
     await addRead();
-    check('再添加的数值读取自动继承 u16', (await readSize()) === '2', String(await readSize()));
-    await setSize('4');
+    check('再添加的读数值自动继承 u16', (await readSize()) === 'u16', String(await readSize()));
+    await setSize('u32');
   }
 
   /* ------------------------- 6j. 数据源接受字符串、拒绝无内容的来源 */
@@ -776,7 +787,7 @@ async function main() {
     return evaluate(`[...document.querySelectorAll('.bp-node')].at(-1)?.dataset.nodeId ?? ''`);
   };
   const constId = await quickAdd('文本常量');
-  const textId = await quickAdd('字符串读取');
+  const textId = await quickAdd('读字符串');
   await chord('1', 'Digit1', 49, 2); // 100%：确保端口行渲染
   await sleep(260);
   const portAt = (id, port, side) => evaluate(`(() => {

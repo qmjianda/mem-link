@@ -144,6 +144,30 @@ describe('history: 保存点', () => {
     h = redo(h);
     expect(isDirty(h)).toBe(true);
   });
+
+  it('撤销后另起分支：同一游标数字不等于已保存', () => {
+    let h = initHistory(baseDoc());
+    h = moveToStep(h, 1, { now: 1000 });
+    h = markSaved(h);
+    h = undo(h);
+    h = moveToStep(h, 9, { now: 2000 });
+    expect(h.cursor).toBe(0);
+    expect(isDirty(h)).toBe(true);
+    // 旧保存点已被新分支覆盖：继续撤销也不会再变回「已保存」
+    h = undo(h);
+    expect(isDirty(h)).toBe(true);
+  });
+
+  it('markSaved 绑定传入的快照，而不是当时的游标', () => {
+    let h = initHistory(baseDoc());
+    h = moveToStep(h, 1, { now: 1000 });
+    const saved = currentDoc(h);
+    h = moveToStep(h, 2, { now: 2000 });
+    h = markSaved(h, saved);
+    expect(isDirty(h)).toBe(true);
+    h = undo(h);
+    expect(isDirty(h)).toBe(false);
+  });
 });
 
 describe('history: 栈深', () => {
@@ -166,7 +190,7 @@ describe('history: 栈深', () => {
     h = markSaved(h);
     expect(isDirty(h)).toBe(false);
     for (let i = 2; i <= 160; i += 1) h = moveToStep(h, i, { now: 1000 + i * 1000 });
-    expect(h.savedCursor).toBeNull();
+    expect(h.savedDoc).toBeNull();
     expect(isDirty(h)).toBe(true);
   });
 });

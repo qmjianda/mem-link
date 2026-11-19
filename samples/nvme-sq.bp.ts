@@ -21,8 +21,8 @@ const Sqe = struct('Sqe', 64, [
   u32('reserved0', 8, { label: '保留 [8]' }),
   u32('reserved1', 12, { label: '保留 [12]' }),
   u64('mptr', 16, { label: 'MPTR 元数据指针', format: 'hex' }),
-  u64('prp1', 24, { label: 'PRP1 首数据页', format: 'hex' }),
-  u64('prp2', 32, { label: 'PRP2 / 列表指针', format: 'hex' }),
+  ptr('prp1', 24, { label: 'PRP1 首数据页', format: 'hex' }),
+  ptr('prp2', 32, { label: 'PRP2 / 列表指针', format: 'hex' }),
   u32('cdw10', 40, { label: 'SLBA 低 32 位', format: 'hex' }),
   u32('cdw11', 44, { label: 'SLBA 高 32 位', format: 'hex' }),
   u32('cdw12', 48, { label: 'CDW12', format: 'hex' }),
@@ -59,6 +59,40 @@ export default definePack({
     prpList: arrayNode(PrpEntry, { label: 'PRP 列表', count: PRP_DEPTH, stride: 8 }),
     prpEntry: structNode(PrpEntry, { label: 'PRP 表项' }),
     data: structNode(DataBlock, { label: '数据页' }),
+    opcode: calcNode({
+      label: 'NVMe 操作码',
+      inputs: { value: 'number' },
+      outputs: { name: 'string', known: 'boolean' },
+      run: ({ value }) => {
+        const names: Record<number, string> = { 0: 'Flush', 1: 'Write', 2: 'Read', 4: 'Write Uncorrectable', 6: 'Identify',
+          8: 'Abort', 9: 'Set Features', 10: 'Get Features' };
+        const name = names[Number(value)];
+        return { name: name ?? `未知操作码 (${value})`, known: name !== undefined };
+      },
+    }),
+    prp: calcNode({
+      label: 'PRP / 分散页',
+      description: '展开本示例中的单页 PRP 列表（不含连锁列表）',
+      inputs: { prp1: 'number', prp2: 'number', count: 'number' },
+      outputs: { pages: 'number', p0: 'number', p1: 'number', p2: 'number', p3: 'number', list: 'string' },
+      run: ({ prp1, prp2, count }, ctx) => {
+        const n = Number(count);
+        if (!Number.isSafeInteger(n) || n < 0 || n > PRP_DEPTH + 1) {
+          throw new Error(`本示例只支持 0–${PRP_DEPTH + 1} 个 PRP 数据页`);
+        }
+        const pages: number[] = [];
+        if (n >= 1) pages.push(Number(prp1));
+        if (n === 2) pages.push(Number(prp2));
+        for (let i = 0; n > 2 && i < n - 1; i++) {
+          pages.push(Number(ctx.read(PrpEntry, Number(prp2) + i * PrpEntry.size).value.addr));
+        }
+        return {
+          pages: pages.length,
+          p0: pages[0], p1: pages[1], p2: pages[2], p3: pages[3],
+          list: pages.map((addr) => `0x${addr.toString(16)}`).join('  '),
+        };
+      },
+    }),
     transfer: calcNode({
       label: '传输长度 / 页数',
       inputs: { nlb: 'number', lbaSize: 'number' },

@@ -23,8 +23,6 @@ interface Props {
   onRenamePack: (packId: string, name: string) => void;
   onDeletePack: (packId: string) => void;
   onCleanupPack: (packId: string) => void;
-  /** 以最小模板新建 pack */
-  onNewPack: () => void;
   /** 分组折叠表：key 为 `builtin` 或 pack id，true 表示折叠 */
   collapsedGroups: Record<string, boolean>;
   onToggleGroup: (key: string) => void;
@@ -64,7 +62,7 @@ export function nodeItemsOf(packs: LoadedPack[]): PalItem[] {
 export default function Palette({
   packs, onAdd, onDragStart, shouldIgnoreAdd,
   onLoadPack,
-  impactOf, onTogglePack, onRenamePack, onDeletePack, onCleanupPack, onNewPack,
+  impactOf, onTogglePack, onRenamePack, onDeletePack, onCleanupPack,
   collapsedGroups, onToggleGroup, onCollapse,
 }: Props) {
   const [q, setQ] = useState('');
@@ -140,8 +138,7 @@ export default function Palette({
         />
       </div>
       <div className="bp-pal-body">
-        <div className="bp-pack-new">
-          <button className="bp-mini primary" title="用最小模板新建 pack" onClick={onNewPack}>＋ 新建 pack</button>
+        <div className="bp-pack-import">
           <label className="bp-mini" title="pack 为可执行代码，仅导入可信来源">
             导入 .bp.ts
             <input
@@ -277,11 +274,8 @@ export default function Palette({
         {searching && !groups.length && (
           <div className="bp-empty bp-empty-search">无匹配节点</div>
         )}
-        {!packs.length && (
-          <div className="bp-empty bp-empty-pack">
-            <span>无 pack</span>
-            <button className="bp-file-btn" onClick={onNewPack}>新建 pack</button>
-          </div>
+        {!packs.length && !searching && (
+          <div className="bp-empty bp-empty-pack">可直接载入 dump 并使用内置节点。自定义解析节点通过 .bp.ts 导入。</div>
         )}
       </div>
     </aside>

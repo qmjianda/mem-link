@@ -3,13 +3,14 @@
  * 覆盖该地址的实例。回车选中并居中，是大型逆向图里最高频的导航动作。
  */
 import { useEffect, useRef, useState } from 'react';
+import { useModalFocus } from './ModalFocus';
 
 export interface SearchHit {
   nodeId: string;
   title: string;
   detail: string;
   /** 0x… 地址模式下的命中地址 */
-  address?: number;
+  address?: number | bigint;
 }
 
 interface Props {
@@ -22,8 +23,10 @@ interface Props {
 
 export default function GraphSearch({ query, onQuery, hits, onPick, onClose }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef(0);
   const [active, setActiveState] = useState(0);
+  const dialogRef = useModalFocus<HTMLDivElement>(onClose);
 
   const setActive = (n: number | ((prev: number) => number)) => {
     const next = typeof n === 'function' ? n(activeRef.current) : n;
@@ -32,10 +35,16 @@ export default function GraphSearch({ query, onQuery, hits, onPick, onClose }: P
   };
 
   useEffect(() => { inputRef.current?.focus(); inputRef.current?.select(); }, []);
-  useEffect(() => { setActive(0); }, [query]);  
+  useEffect(() => { setActive(0); }, [query]);
+
+  useEffect(() => {
+    const el = listRef.current?.querySelector<HTMLElement>('.bp-quick-item.on');
+    el?.scrollIntoView({ block: 'nearest' });
+  }, [active]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.isComposing || e.keyCode === 229) return;
       if (e.key === 'Escape') {
         e.preventDefault(); e.stopPropagation(); onClose(); return;
       }
@@ -54,11 +63,18 @@ export default function GraphSearch({ query, onQuery, hits, onPick, onClose }: P
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [hits, onPick, onClose]);  
+  }, [hits, onPick, onClose]);
 
   return (
-    <div className="bp-overlay" role="dialog" aria-modal="true" aria-label="在图中查找" onPointerDown={onClose}>
-      <div className="bp-quick bp-search-graph" onPointerDown={(e) => e.stopPropagation()}>
+    <div className="bp-overlay" role="presentation" onPointerDown={onClose}>
+      <div
+        className="bp-quick bp-search-graph"
+        role="dialog"
+        aria-modal="true"
+        aria-label="在图中查找"
+        ref={dialogRef}
+        onPointerDown={(e) => e.stopPropagation()}
+      >
         <input
           ref={inputRef}
           className="bp-quick-input"
@@ -67,7 +83,7 @@ export default function GraphSearch({ query, onQuery, hits, onPick, onClose }: P
           value={query}
           onChange={(e) => onQuery(e.target.value)}
         />
-        <div className="bp-quick-list" role="listbox" aria-label="查找结果">
+        <div className="bp-quick-list" role="listbox" aria-label="查找结果" ref={listRef}>
           {hits.map((hit, i) => (
             <button
               key={`${hit.nodeId}/${hit.address ?? hit.detail}/${i}`}
@@ -76,6 +92,7 @@ export default function GraphSearch({ query, onQuery, hits, onPick, onClose }: P
               aria-selected={i === active}
               className={`bp-quick-item${i === active ? ' on' : ''}`}
               title={hit.detail}
+              onFocus={() => setActive(i)}
               onPointerEnter={() => setActive(i)}
               onClick={() => onPick(hit)}
             >

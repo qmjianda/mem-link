@@ -1,5 +1,5 @@
 {
-  "format": "memlink-blueprint/1",
+  "format": "memlink-blueprint/2",
   "packs": [
     {
       "id": "p1",

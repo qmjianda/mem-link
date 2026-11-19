@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import nvmeDemo from '../../samples/nvme-sq.blueprint.json';
-import { Memory, downloadBlob, parseHexText } from '../core/mem';
+import { downloadBlob, parseHexText } from '../core/mem';
 import type { Problem } from '../core/types';
 import Palette from './Palette';
 import Canvas, { type CanvasApi, type DragPreview } from './Canvas';
 import Inspector from './Inspector';
 import { evaluateGraph, SOURCE_PORT, valueAsBuffer } from './eval';
 import { loadBlueprintPack } from './load';
-import { canConnect, displayTitle, dropPosition, NODE_WIDTH, type BPEdge, type BPNode, type BlueprintPack, type BPResult } from './types';
+import { BLUEPRINT_FORMAT, canConnect, displayTitle, dropPosition, isInstanceView, NODE_WIDTH, type BPEdge, type BPNode, type BlueprintPack, type BPResult, type BufferValue, type PortType } from './types';
 import { uniqueBuffers } from './assets';
 import { builtinDefaults, getBuiltin, inheritOptions } from './builtins';
 import {
@@ -16,7 +16,7 @@ import {
 } from './navhistory';
 import { adjacency, autoLayout } from './autolayout';
 import { boundsOf } from './viewport';
-import { bufferIssue, buildFollowItems, elementFollowItem, followAddress, followHint, inferFollowType, knownTypesAt } from './follow';
+import { bufferIssue, buildFollowItems, elementFollowItem, followAddress, followHint, followTypeIssue, inferFollowType, knownTypesAt } from './follow';
 import { bytesToBase64, makeDoc, parseDoc } from './doc';
 import type { DocState, LoadedPack } from './docstate';
 import { isPackEnabled, maxIdSeq } from './docstate';
@@ -30,15 +30,18 @@ import {
 } from './clipboard';
 import {
   addPack, cleanupPackNodes, disabledPackIds, enabledPackMap, packImpact, removePackAtomic,
-  renamePack, setPackEnabled, TEMPLATE_PACK_SOURCE,
+  renamePack, setPackEnabled,
 } from './packops';
 import { initialParseParams } from './add-defaults';
+import { addressHex, addressInteger, isMappedAddress, offsetIn, packMemory, safeNumber, sameMapping } from './precision';
+import { addOffset, pointerRead } from './binary-read';
+import type { BinaryLayout } from './layouts';
 import {
-  canRedo, canUndo, currentDoc, initHistory, isDirty, markSaved, push, redo, redoLabel, resetHistory,
-  undo, undoLabel, type HistoryState,
+  canRedo, canUndo, currentDoc, initHistory, isDirty, markSaved, push, redo, redoLabel, undo, undoLabel,
+  type HistoryState,
 } from './history';
 import {
-  loadStored, saveDoc, storageAvailable, MAX_WRITE_BYTES, type PersistCode,
+  loadStored, saveDoc, storageAvailable, MAX_WRITE_BYTES, type DroppedBuffer, type PersistCode,
 } from './persist';
 import {
   autoCollapse, clampWidth, COLLAPSED_W, readPrefs, resetSide, writePrefs,
@@ -49,13 +52,16 @@ import {
 } from './keys';
 import KeyHelp from './KeyHelp';
 import ContextMenu from './ContextMenu';
+import ConfirmDialog, { type ConfirmRequest } from './ConfirmDialog';
 import QuickAdd from './QuickAdd';
 import FollowPicker, {
   type FollowItem, type FollowPreview, type FollowRequest, type FollowStep,
-} from './FollowPicker';import GraphSearch, { type SearchHit } from './GraphSearch';
+} from './FollowPicker';
+import GraphSearch, { type SearchHit } from './GraphSearch';
 import { buildMenu, type MenuCtx, type MenuItem, type MenuTarget } from './menus';
 import { IconAlert, IconDownload, IconFolder, IconRefresh, IconUndo, IconUpload, Logo } from '../ui/icons';
 import StructTree, { type TreeSession } from './StructTree';
+import LocalTree from './LocalTree';
 import type { TreeFocus, TreeRootSpec } from './tree';
 
 /** 分隔条命中的栅格轨道宽度（视觉带 5px 居中，命中区 9px） */
@@ -75,22 +81,11 @@ function initialDoc(): DocState {
     const r = loadBlueprintPack(p.source);
     if (r.pack) packs.push({ id: p.id, name: p.name, source: p.source, pack: r.pack, enabled: true });
   }
-  return { packs, nodes: d.nodes, edges: d.edges };
+  return { packs, nodes: d.nodes, edges: d.edges, layouts: d.layouts };
 }
 
-/** 一次性示例迁移标记：升级后只检查一次，不覆盖用户自己的图。 */
-const DEMO_REV_KEY = 'memlink:demo-rev';
-const DEMO_REV = '2';
-
-/**
- * 仅识别「上一版出厂示例」本身：单 pack + 固定的 4 节点 / 3 连线结构。
- * 用户改过的图、导入的 pack、性能基准图都不满足，原样保留。
- */
-function isPristineLegacyDemo(d: DocState): boolean {
-  if (d.packs.length !== 1 || d.packs[0].name !== 'demo-index-list') return false;
-  if (d.nodes.length !== 4 || d.edges.length !== 3) return false;
-  const ids = d.nodes.map((x) => x.id).sort().join(',');
-  return ids === 'n_detail,n_file,n_header,n_list';
+function emptyDoc(): DocState {
+  return { packs: [], nodes: [], edges: [] };
 }
 
 function readFile(f: File): Promise<Uint8Array> {
@@ -117,7 +112,7 @@ function Rail({
 }
 
 export default function BlueprintApp() {
-  // 启动：能读缓存就恢复，否则回落示例图（坏数据/无 storage 都不抛错）
+  // 启动：能读缓存就恢复；没有可恢复草稿时打开空白工作区，而不是自动塞入示例。
   const boot = useMemo(() => {
     const storage = storageAvailable();
     const r = storage ? loadStored() : { code: 'MISSING' as const, problems: [] as Problem[] };
@@ -127,16 +122,13 @@ export default function BlueprintApp() {
       : r.code === 'BAD_JSON' || r.code === 'BAD_DATA'
         ? '缓存已损坏，已丢弃'
         : '';
-    // 升级后仅第一次启动检查：缓存若仍是上一版出厂示例则换成 NVMe 示例。
-    let cached = r.doc;
-    try {
-      const migrate = storage && window.localStorage.getItem(DEMO_REV_KEY) !== DEMO_REV;
-      if (migrate) {
-        if (cached && isPristineLegacyDemo(cached)) cached = undefined;
-        window.localStorage.setItem(DEMO_REV_KEY, DEMO_REV);
-      }
-    } catch { /* 存储不可用时保持缓存原样 */ }
-    return { doc: cached ?? initialDoc(), problems: r.problems, storage, notice };
+    return {
+      doc: r.doc ?? emptyDoc(),
+      problems: r.problems,
+      storage,
+      notice,
+      restored: !!r.doc,
+    };
   }, []);
 
   /** 单一文档对象：packs / nodes / edges 的唯一来源 */
@@ -162,6 +154,7 @@ export default function BlueprintApp() {
   } | null>(null);
   /** 跟随浮层由树里唤起时暂时隐藏树（不卸载，保留滚动与展开状态） */
   const [treeHidden, setTreeHidden] = useState(false);
+  const [localTree, setLocalTree] = useState<string | null>(null);
   const followFromTree = useRef(false);
   /** 每个节点上一次的展开/搜索/滚动状态，只在本次会话内保留 */
   const treeSessions = useRef(new Map<string, TreeSession>());
@@ -188,11 +181,27 @@ export default function BlueprintApp() {
   const clip = useRef<Fragment | null>(null);
   /** 连续粘贴的序号：24 / 48 / 72… */
   const pasteCount = useRef(0);
-  const [toast, setToast] = useState(boot.notice);
-  const [packIssues, setPackIssues] = useState<Problem[]>(boot.problems);
-  const [persist, setPersist] = useState<{ code: PersistCode; at: number } | null>(
-    boot.storage ? null : { code: 'NO_STORAGE', at: 0 },
+  const [toast, setToast] = useState(boot.notice);  const [packIssues, setPackIssues] = useState<Problem[]>(boot.problems);
+  const [persist, setPersist] = useState<{ code: PersistCode; at: number; dropped: DroppedBuffer[] } | null>(
+    boot.storage ? null : { code: 'NO_STORAGE', at: 0, dropped: [] },
   );
+  /** 最近一次导出：浏览器只确认「已发起下载」 */
+  const [exportAt, setExportAt] = useState<number | null>(null);
+  /** 示例是临时副本：进入时保存工作会话，返回时恢复 */
+  const [sampleMode, setSampleMode] = useState(false);
+  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
+  const confirmResolve = useRef<((ok: boolean) => void) | null>(null);
+  const sampleModeRef = useRef(false);
+  sampleModeRef.current = sampleMode;
+  const workSession = useRef<{
+    doc: DocState;
+    history: HistoryState;
+    selection: SelectionState;
+    nav: NavState;
+    persist: { code: PersistCode; at: number; dropped: DroppedBuffer[] } | null;
+  } | null>(null);
+  /** 换图/打开的会话号：异步读取回来时若已切换，不得提交到新图 */
+  const sessionSeq = useRef(0);
   /** 节点库分组折叠（true = 折叠） */
   const [groups, setGroups] = useState<GroupState>(() => readPrefs().groups);
   /** 小地图是否展开（持久化到 memlink:ui:v1） */
@@ -233,16 +242,16 @@ export default function BlueprintApp() {
   const allPacks = useMemo(() => new Map(packs.map((p) => [p.id, p.pack])), [packs]);
   const packNames = useMemo(() => new Map(packs.map((p) => [p.id, p.name])), [packs]);
   const result = useMemo(
-    () => evaluateGraph(nodes, edges, packsMap, { disabledPacks }),
-    [nodes, edges, packsMap, disabledPacks],
+    () => evaluateGraph(nodes, edges, packsMap, { disabledPacks, layouts: doc.layouts }),
+    [nodes, edges, packsMap, disabledPacks, doc.layouts],
   );
   const fullResult: BPResult = useMemo(
     () => ({ ...result, problems: [...packIssues, ...result.problems] }),
     [result, packIssues],
   );
 
-  /** 跟随可用的缓冲区（同一份字节可能被多个节点共享；基址不同则是两条引用） */
-  const buffers = useMemo(() => uniqueBuffers(fullResult.sources.values()), [fullResult]);
+  /** 无明确上下文时只考虑根转储，不把同一映射的字节范围当成另一份文件。 */
+  const buffers = useMemo(() => uniqueBuffers([...fullResult.sources.values()].filter(s => s.mode === 'file')), [fullResult]);
 
   /**
    * 画布用它判断一个来源能否接进「数据源」：真正携带文件的节点才可以。
@@ -292,15 +301,17 @@ export default function BlueprintApp() {
   const doUndo = () => applyHistory(undo(historyRef.current));
   const doRedo = () => applyHistory(redo(historyRef.current));
 
-  /** 打开图 / 恢复示例：换掉整份文档并清空 undo/redo */
-  const resetDoc = (d: DocState) => {
+  /** 打开图 / 新建 / 恢复示例：换掉整份文档并清空 undo/redo */
+  const resetDoc = (d: DocState, saved = false) => {
+    sessionSeq.current += 1;
     seq.current = Math.max(seq.current, maxIdSeq(d));
     docRef.current = d;
-    const nh = resetHistory(d);
+    const nh = initHistory(d, saved);
     historyRef.current = nh;
     setDoc(d);
     setHistory(nh);
     setSelection(emptySelection());
+    setNav(emptyNav);
     clip.current = null;
     pasteCount.current = 0;
     setClipCount(0);
@@ -333,24 +344,23 @@ export default function BlueprintApp() {
   // ---- 持久化 --------------------------------------------------------------
   const trimNotified = useRef(false);
   const runSave = (d: DocState) => {
+    // 示例是临时副本：不写工作草稿缓存，返回后原草稿仍在。
+    if (sampleModeRef.current) return;
     const r = saveDoc(d);
-    setPersist({ code: r.code, at: Date.now() });
+    setPersist({ code: r.code, at: Date.now(), dropped: r.dropped });
     if (r.ok) {
-      const nh = markSaved(historyRef.current);
+      const nh = markSaved(historyRef.current, d);
       if (nh !== historyRef.current) {
         historyRef.current = nh;
         setHistory(nh);
       }
       if (r.code === 'TRIMMED' && !trimNotified.current) {
         trimNotified.current = true;
-        setToast(`缓存已裁剪：${r.droppedBuffers} 个缓冲区需重新载入文件`);
+        setToast(`缓存已裁剪：${r.droppedBuffers} 个转储需重新载入`);
       }
-      return r;
-    }
-    if (r.code === 'TOO_LARGE') {
+    } else if (r.code === 'TOO_LARGE') {
       setToast(`未持久化：${(r.bytes / 1024 / 1024).toFixed(1)} MB 超过 ${MAX_WRITE_BYTES / 1024 / 1024} MB 上限`);
     }
-    return r;
   };
 
   // 文档变化 → 800ms 防抖写盘（拖动期不逐帧写）
@@ -364,10 +374,10 @@ export default function BlueprintApp() {
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
 
-  // 有未保存改动时，关闭页面触发原生确认
+  // 有未保存改动时，关闭页面触发原生确认（示例临时副本不拦）
   useEffect(() => {
     const onUnload = (e: BeforeUnloadEvent) => {
-      if (!dirtyRef.current) return;
+      if (!dirtyRef.current || sampleModeRef.current) return;
       e.preventDefault();
       e.returnValue = '';
     };
@@ -514,14 +524,24 @@ export default function BlueprintApp() {
       const collides = (px: number, py: number) =>
         nodes.some((n) => Math.abs(n.x - px) < 300 && Math.abs(n.y - py) < 190);
       const offsets = [
-        [0, 0], [340, 0], [-340, 0], [0, 210], [0, -210],
-        [340, 210], [-340, 210], [340, -210], [-340, -210], [680, 0], [-680, 0],
+        [0, 0], [340, 0], [0, 210], [0, -210], [340, 210], [340, -210], [-340, 0],
+        [-340, 210], [-340, -210], [680, 0], [-680, 0],
       ];
-      const free = offsets
-        .map(([dx, dy]) => ({ x: cx + dx, y: cy + dy }))
-        .find((p) => !collides(p.x, p.y));
-      x = free?.x ?? cx + 40 * (nodes.length % 8);
-      y = free?.y ?? cy + 40 * (nodes.length % 8);
+      // 侧栏会压住一部分画布：优先选完全落在可见区域内的位置，
+      // 否则新节点会「添加成功但看不见」。
+      const vis = canvasApi.current?.visibleWorld();
+      const inside = (px: number, py: number) => !vis
+        || (px >= vis.minX + 8 && py >= vis.minY + 8
+          && px + NODE_WIDTH <= vis.maxX - 8 && py + 140 <= vis.maxY - 8);
+      const placed = offsets.map(([dx, dy]) => ({ x: cx + dx, y: cy + dy }));
+      const free = placed.find((p) => inside(p.x, p.y) && !collides(p.x, p.y))
+        ?? placed.find((p) => inside(p.x, p.y));
+      x = free?.x ?? (vis
+        ? Math.min(Math.max(cx, vis.minX + 8), Math.max(vis.minX + 8, vis.maxX - 8 - NODE_WIDTH))
+        : cx + 40 * (nodes.length % 8));
+      y = free?.y ?? (vis
+        ? Math.min(Math.max(cy, vis.minY + 8), Math.max(vis.minY + 8, vis.maxY - 8 - 140))
+        : cy + 40 * (nodes.length % 8));
     }
     const params: Record<string, string> = packId
       ? {}
@@ -529,6 +549,9 @@ export default function BlueprintApp() {
     // 元素节点从空开始：不在添加时预绑类型，端口等真正接上元素/列表（或
     // 跟随地址推断出类型）后才生成，避免空节点看起来像某个结构体。
     if (!packId && nodeId === 'element') params.index = '0';
+    if (!packId && getBuiltin(nodeId)?.precise && 'address' in params) {
+      Object.assign(params, initialParseParams(nodes, selectionRef.current, result));
+    }
     if (packId) {
       const def = packsMap.get(packId)?.nodes[nodeId];
       if (def && (def.kind === 'struct' || def.kind === 'list' || def.kind === 'array')) {
@@ -709,11 +732,6 @@ export default function BlueprintApp() {
     return displayTitle(n, auto);
   };
 
-  /** 地址是否落在任一 File 的缓冲区内（求值结果里每个 File 都有 source 记录）。 */
-  const addressInBuffer = (addr: number): boolean =>
-    Number.isFinite(addr) && addr >= 0
-    && buffers.some((b) => addr >= b.base && addr < b.base + b.bytes.length);
-
   const navSnapshot = (label: string): NavSnapshot => ({
     view: canvasApi.current?.getView() ?? { x: 40, y: 30, k: 0.92 },
     selection: selectionRef.current,
@@ -745,36 +763,68 @@ export default function BlueprintApp() {
     () => buildFollowItems({ packs: allPacks, packNames, isEnabled: packEnabled }),
     [allPacks, packNames, doc.packs], // eslint-disable-line react-hooks/exhaustive-deps
   );
-  /** 地址 → 已解析过的实例类型，用于「同地址已知类型」推荐 */
-  const knownTypes = useMemo(() => knownTypesAt(nodes, fullResult.views), [nodes, fullResult.views]);
+  const knownInMapping = (buffer: BufferValue) => knownTypesAt(nodes, fullResult.views, nodeId => {
+    const src = fullResult.sources.get(nodeId)?.buffer;
+    return !!src && src.assetId === buffer.assetId
+      && BigInt(src.mappingBase ?? src.base) === BigInt(buffer.mappingBase ?? buffer.base);
+  });
 
+  const resolveFollowTarget = (value: unknown, nodeId?: string, type?: PortType) => {
+    const typeIssue = followTypeIssue(type);
+    if (typeIssue) return { reason: typeIssue } as const;
+    const address = followAddress(value);
+    if (address === null) return { reason: followHint(value) } as const;
+    const info = nodeId ? fullResult.sources.get(nodeId) : undefined;
+    if (info?.conflict || info?.wireMissing || info?.pinMissing) {
+      return { address, reason: '来源不明确或不可用，请先确认使用哪份转储' } as const;
+    }
+    const mapped = isMappedAddress(value) ? value : isInstanceView(value) ? value.location : undefined;
+    const candidates = (info?.buffer ? [info.buffer] : buffers).filter(
+      (b) => !mapped || sameMapping(mapped, b),
+    );
+    const available = candidates.filter((b) => offsetIn(b, address) !== undefined);
+    if (available.length !== 1) {
+      if (available.length > 1) {
+        return { address, candidates: available, info } as const;
+      }
+      return { address, reason: bufferIssue(address, candidates) } as const;
+    }
+    return { address, buffer: available[0], info } as const;
+  };
   const openFollow = (
     value: unknown,
     description: string,
     source?: { nodeId: string; port: string },
+    contextNodeId = source?.nodeId,
+    type?: PortType,
   ): boolean => {
-    const address = followAddress(value);
-    if (address === null) {
-      say(`无法跟随：${followHint(value)}`);
+    const target = resolveFollowTarget(value, contextNodeId, type);
+    if (!target.buffer && !('candidates' in target && target.candidates)) {
+      say(`无法跟随：${target.reason}`);
       return false;
     }
-    if (!addressInBuffer(address)) {
-      say(`无法跟随：${bufferIssue(address, buffers)}`);
-      return false;
-    }
+    const { address, info } = target;
+    const buffer = 'buffer' in target ? target.buffer : undefined;
+    const candidates = 'candidates' in target ? target.candidates : undefined;
     // 元素端口 / 同地址已解析过的类型 → 元素解析默认选中它，省掉手选工具
     const sourceNode = source ? docRef.current.nodes.find((x) => x.id === source.nodeId) : undefined;
-    const hint = inferFollowType({
-      value, address, packs: allPacks, sourcePackId: sourceNode?.packId, knownAt: knownTypes,
-    });
-    setFollow({ address, description, source, hint });
+    const safe = safeNumber(address);
+    const hint = buffer && safe !== undefined ? inferFollowType({
+      value, address: safe, packs: packsMap, sourcePackId: sourceNode?.packId || sourceNode?.params.packId, knownAt: knownInMapping(buffer),
+    }) : null;
+    const file = info?.fileId ?? (buffer ? [...fullResult.sources].find(([, s]) => s.mode === 'file' && s.buffer === buffer)?.[0] : undefined);
+    const bufferSource = info?.valueSource
+      ? { nodeId: info.valueSource.node, port: info.valueSource.port }
+      : file ? { nodeId: file, port: SOURCE_PORT } : undefined;
+    setFollow({ address, description, source, hint, buffer, bufferSource, candidates });
     return true;
   };
 
   const onFollowPort = (nodeId: string, port: string) => {
     const v = fullResult.outputs.get(nodeId)?.[port];
     const n = docRef.current.nodes.find((x) => x.id === nodeId);
-    openFollow(v, `${n ? nodeTitleOf(n) : nodeId} · ${port}`, { nodeId, port });
+    const type = fullResult.ports.get(nodeId)?.outputs.find(p => p.name === port)?.type;
+    openFollow(v, `${n ? nodeTitleOf(n) : nodeId} · ${port}`, { nodeId, port }, nodeId, type);
   };
 
   const onFollowInPort = (nodeId: string, port: string) => {
@@ -791,6 +841,8 @@ export default function BlueprintApp() {
       v,
       `${n ? nodeTitleOf(n) : nodeId} · ${port}（输入）`,
       edge ? { nodeId: edge.from.node, port: edge.from.port } : undefined,
+      nodeId,
+      fullResult.ports.get(nodeId)?.inputs.find(p => p.name === port)?.type,
     );
   };
 
@@ -802,13 +854,19 @@ export default function BlueprintApp() {
     const node = docRef.current.nodes.find((n) => n.id === nodeId);
     const view = fullResult.views.get(nodeId);
     if (!node || !view) return;
+    if (((view.kind === 'struct' || view.kind === 'element') && view.inst?.location)
+      || ((view.kind === 'list' || view.kind === 'array') && view.local)) {
+      setLocalTree(nodeId);
+      return;
+    }
     const pack = node.packId ? allPacks.get(node.packId) : undefined;
     const def = pack?.nodes[node.nodeId];
     const buffer = fullResult.sources.get(nodeId)?.buffer;
-    const fallbackMem = buffer ? new Memory(buffer.bytes, buffer.base) : undefined;
+    const fallbackMem = buffer ? packMemory(buffer) : undefined;
     const numInput = (name: string): number | undefined => {
       const v = fullResult.inputs.get(nodeId)?.[name]?.value;
-      return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+      const at = isMappedAddress(v) ? v.value : addressInteger(v);
+      return at === undefined ? undefined : safeNumber(at);
     };
     const ownerOf = (typeName: string, prefer?: BlueprintPack): BlueprintPack | undefined => {
       if (prefer?.types[typeName]) return prefer;
@@ -862,20 +920,26 @@ export default function BlueprintApp() {
   };
 
   /** 多级指针预览：结构树优先使用自己的缓冲区，不按地址猜文件。 */
-  const previewChain = (base: number, width: 4 | 8, offsets: number[]): FollowPreview | null => {
-    const buf = buffers.find((b) => base >= b.base && base < b.base + b.bytes.length);
-    const mem = followFromTree.current ? tree?.root.mem : buf && new Memory(buf.bytes, buf.base);
-    if (!mem) return { steps: [], final: base, error: '起始地址不在任何缓冲区内' };
+  const previewChain = (
+    request: FollowRequest, width: 4 | 8, offsets: bigint[], bufferOverride?: BufferValue,
+  ): FollowPreview | null => {
+    const base = request.address;
+    const buf = bufferOverride ?? request.buffer;
+    if (!buf) return { steps: [], final: base, error: '起始地址不在任何缓冲区内' };
     const steps: FollowStep[] = [];
-    let cur = base;
+    let cur = BigInt(base);
     for (let i = 0; i < offsets.length; i += 1) {
-      const readAt = cur + offsets[i];
-      if (!mem.contains(readAt, width)) {
-        return { steps, final: readAt, error: `第 ${i + 1} 级越界：0x${(readAt >>> 0).toString(16)}` };
+      try {
+        const readAt = addOffset(cur, offsets[i]);
+        const read = pointerRead(buf, readAt, width, 'little');
+        steps.push({ offset: offsets[i], readAt, target: read.raw });
+        if (read.state !== 'mapped') {
+          return { steps, final: read.raw, error: `第 ${i + 1} 级${read.state === 'null' ? '为空指针' : '目标未映射'}：${addressHex(read.raw)}` };
+        }
+        cur = read.raw;
+      } catch (err) {
+        return { steps, final: cur, error: `第 ${i + 1} 级：${err instanceof Error ? err.message : String(err)}` };
       }
-      const target = Number(mem.readBig(readAt, width, 'little', false));
-      steps.push({ offset: offsets[i], readAt, target });
-      cur = target;
     }
     return { steps, final: cur };
   };
@@ -889,9 +953,10 @@ export default function BlueprintApp() {
 
   /** 跟随落点：按请求创建解析节点并连线；返回是否真的落了节点。 */
   const addFollowNodes = (
-    req: FollowRequest, item: FollowItem, offsets: number[] = [], width: 4 | 8 = 8,
+    req: FollowRequest, item: FollowItem, offsets: bigint[] = [], width: 4 | 8 = 8, bufferOverride?: BufferValue,
   ): boolean => {
-    const pv = offsets.length ? previewChain(req.address, width, offsets) : null;
+    const buffer = bufferOverride ?? req.buffer;
+    const pv = offsets.length ? previewChain(req, width, offsets, buffer) : null;
     if (pv?.error) { say(pv.error); return false; }
     // 元素解析的类型只能来自推断；没有类型就不创建，避免硬解出错误内容。
     if (item.nodeId === 'element' && (!item.typePackId || !item.typeName)) {
@@ -915,27 +980,43 @@ export default function BlueprintApp() {
     let y = startY;
     for (let i = 0; i < 12 && clashes(startX, y); i += 1) y += 190;
 
-    // 链式节点纵向排布：每级一个「指针步进」，最后接解析节点。
+    // 非零偏移显式生成换算节点，每次解引用只由读指针负责。
     const nodes: BPNode[] = [];
     const edges: BPEdge[] = [];
     let cursorY = y;
-    let prevOut: { node: string; port: string } | null = req.source
-      ? { node: req.source.nodeId, port: req.source.port }
-      : null;
+    const sourcePort = req.source
+      ? result.ports.get(req.source.nodeId)?.outputs.find((p) => p.name === req.source?.port) : undefined;
+    const connected = !!(req.source && sourcePort && canConnect(sourcePort.type, offsets.length ? 'address' : item.addressType));
+    const pinnedFile = bufferOverride && !connected && buffer
+      ? [...fullResult.sources].find(([, s]) => s.mode === 'file' && s.buffer
+        && s.buffer.assetId === buffer.assetId
+        && BigInt(s.buffer.mappingBase ?? s.buffer.base) === BigInt(buffer.mappingBase ?? buffer.base))?.[0]
+      : undefined;
+    let prevOut: { node: string; port: string } | null = connected && req.source
+      ? { node: req.source.nodeId, port: req.source.port } : null;
     let prevAddr = req.address;
     for (let i = 0; i < offsets.length; i += 1) {
+      if (offsets[i] !== 0n) {
+        const id = `n${++seq.current}`;
+        nodes.push({
+          id, packId: '', nodeId: 'address', x: startX, y: cursorY,
+          params: { ...builtinDefaults('address'), base: addressHex(prevAddr), offset: String(offsets[i]) },
+        });
+        if (prevOut) edges.push({ id: `e${++seq.current}`, from: prevOut, to: { node: id, port: 'base' } });
+        prevOut = { node: id, port: 'address' };
+        cursorY += 190;
+      }
       const id = `n${++seq.current}`;
       nodes.push({
         id, packId: '', nodeId: 'ptrwalk', x: startX, y: cursorY,
         params: {
           ...builtinDefaults('ptrwalk'),
-          ...inheritOptions('ptrwalk', nodes),
-          base: `0x${prevAddr.toString(16)}`,
-          offset: `0x${(offsets[i] >>> 0).toString(16)}`,
+          address: addressHex(pv?.steps[i]?.readAt ?? prevAddr),
           pointerSize: String(width),
+          endian: 'little',
         },
       });
-      if (prevOut) edges.push({ id: `e${++seq.current}`, from: prevOut, to: { node: id, port: 'base' } });
+      if (prevOut) edges.push({ id: `e${++seq.current}`, from: prevOut, to: { node: id, port: 'address' } });
       prevOut = { node: id, port: 'target' };
       prevAddr = pv?.steps[i]?.target ?? prevAddr;
       cursorY += 190;
@@ -949,33 +1030,35 @@ export default function BlueprintApp() {
      * 字段端口随实际类型生成（不依赖用户预先选了哪个结构体工具）。
      */
     const params: Record<string, string> = item.packId
-      ? { address: finalHex }
+      ? { [item.inputPort]: finalHex, ...(pinnedFile ? { sourceId: pinnedFile } : {}) }
       : item.nodeId === 'element'
         ? {
             ...builtinDefaults('element'),
             ...inheritOptions('element', nodes),
-            address: finalHex,
+            [item.inputPort]: finalHex,
             packId: item.typePackId ?? '',
             typeId: item.typeName ?? '',
             index: '0',
+            ...(pinnedFile ? { sourceId: pinnedFile } : {}),
           }
-        : { ...builtinDefaults(item.nodeId), ...inheritOptions(item.nodeId, nodes), address: finalHex };
+        : {
+            ...builtinDefaults(item.nodeId),
+            ...inheritOptions(item.nodeId, nodes),
+            [item.inputPort]: finalHex,
+            ...(pinnedFile ? { sourceId: pinnedFile } : {}),
+          };
     nodes.push({
       id: finalId, packId: item.packId, nodeId: item.nodeId, x: startX, y: cursorY,
       params,
     });
-    if (!item.packId && item.nodeId === 'ptrwalk') {
-      params.base = finalHex;
-      delete params.address;
-    }
-    if (prevOut) edges.push({
+    const linkTarget = !!prevOut && (!offsets.length || canConnect('address', item.addressType));
+    if (prevOut && linkTarget) edges.push({
       id: `e${++seq.current}`, from: prevOut,
-      to: { node: finalId, port: !item.packId && item.nodeId === 'ptrwalk' ? 'base' : 'address' },
+      to: { node: finalId, port: item.inputPort },
     });
-    if (req.bufferSource) {
+    if (req.bufferSource && (!connected || (offsets.length > 0 && !linkTarget))) {
       const { nodeId, port } = req.bufferSource;
-      // 字节/文本值不能像 File 一样沿地址线继承，每一级都显式接原值。
-      const targets = result.sources.get(nodeId)?.mode === 'file' ? nodes.slice(0, 1) : nodes;
+      const targets = [...(!connected ? nodes.slice(0, 1) : []), ...(offsets.length && !linkTarget ? nodes.slice(-1) : [])];
       for (const target of targets) edges.push({
         id: `e${++seq.current}`, from: { node: nodeId, port }, to: { node: target.id, port: SOURCE_PORT },
       });
@@ -994,10 +1077,12 @@ export default function BlueprintApp() {
     return true;
   };
 
-  const doFollow = (item: FollowItem, offsets: number[] = [], width: 4 | 8 = 8) => {
+  const doFollow = (
+    item: FollowItem, offsets: bigint[] = [], width: 4 | 8 = 8, buffer?: BufferValue,
+  ) => {
     const req = follow;
     if (!req) return;
-    if (addFollowNodes(req, item, offsets, width)) restoreTree();
+    if (addFollowNodes(req, item, offsets, width, buffer)) restoreTree();
   };
 
   /** 树上的行不一定有画布端口（例如截断之后的元素）；仅连接真实、匹配的输出。 */
@@ -1007,21 +1092,20 @@ export default function BlueprintApp() {
     const outputs = result.outputs.get(id);
     const spec = result.ports.get(id)?.outputs.find((p) => p.name === port);
     const value = port ? outputs?.[port] : undefined;
-    const source = spec && canConnect(spec.type, 'number') && followAddress(value) === addr
+    const found = followAddress(value);
+    const source = spec && canConnect(spec.type, 'pack-address') && found !== null && BigInt(found) === BigInt(addr)
       ? { nodeId: id, port: spec.name } : undefined;
     const info = result.sources.get(id);
-    if (!info?.buffer || info.buffer.base !== tree.root.mem.base
+    if (!info?.buffer || BigInt(info.buffer.base) !== BigInt(tree.root.mem.base)
       || (info.buffer.bytes !== tree.root.mem.buf && info.buffer.assetId !== tree.sourceAssetId)) return undefined;
     let bufferSource: FollowRequest['bufferSource'];
     if (!source && info.fileId) {
       bufferSource = { nodeId: info.fileId, port: SOURCE_PORT };
-    } else if (!info.fileId && info.via
-      && result.ports.get(info.via.node)?.outputs.some((p) => p.name === info.via?.port
-        && (p.type === 'bytes' || p.type === 'string'))) {
-      bufferSource = { nodeId: info.via.node, port: info.via.port };
+    } else if (info.valueSource) {
+      bufferSource = { nodeId: info.valueSource.node, port: info.valueSource.port };
     }
     if (!source && !bufferSource) return undefined;
-    return { address: addr, description, source, bufferSource };
+    return { address: addr, description, source, bufferSource, buffer: info.buffer };
   };
 
   /** 结构树里点 ⊕：按该行实际类型直接落一个元素解析节点，树保持打开。 */
@@ -1047,7 +1131,8 @@ export default function BlueprintApp() {
     if (!q) return list.map(describe);
 
     if (/^0x[0-9a-f]+$/i.test(q) || /^\d+$/.test(q)) {
-      const addr = q.startsWith('0x') ? Number.parseInt(q.slice(2), 16) : Number(q);
+      const addr = addressInteger(q);
+      if (addr === undefined) return [];
       const out: SearchHit[] = [];
       for (const [nodeId, view] of fullResult.views) {
         const insts = view.kind === 'struct' || view.kind === 'element'
@@ -1055,12 +1140,13 @@ export default function BlueprintApp() {
           : view.kind === 'list' || view.kind === 'array' ? view.items : [];
         const n = list.find((x) => x.id === nodeId);
         for (const inst of insts) {
-          if (addr < inst.addr || addr >= inst.addr + inst.size) continue;
+          const start = inst.location?.value ?? BigInt(inst.addr);
+          if (addr < start || addr >= start + BigInt(inst.size)) continue;
           out.push({
             nodeId,
-            address: inst.addr,
+            address: start,
             title: `${n ? nodeTitleOf(n) : nodeId} · ${inst.typeName}`,
-            detail: `0x${inst.addr.toString(16)} +${addr - inst.addr} / ${inst.size} B`,
+            detail: `${addressHex(start)} +${addr - start} / ${inst.size} B`,
           });
         }
       }
@@ -1207,24 +1293,26 @@ export default function BlueprintApp() {
     deleteObjects(s, deleteLabel(n, e));
   };
 
-  const onLoadPack = async (f: File) => {
+  const onLoadPack = async (f: File): Promise<boolean> => {
     const src = await f.text();
     const r = loadBlueprintPack(src);
-    if (!r.pack) { say(`加载失败：${r.error ?? '未知错误'}`); setPackIssues(r.issues); return; }
+    if (!r.pack) { say(`加载失败：${r.error ?? '未知错误'}`); setPackIssues(r.issues); return false; }
     const pack = r.pack;
     const id = `p${++seq.current}`;
     const added = addPack(docRef.current, { id, name: pack.name, source: src, pack, enabled: true });
     commit(() => added.doc, `导入 pack：${added.pack.name}`);
     setPackIssues((xs) => [...xs, ...r.issues]);
     say(`加载：${f.name}`);
+    return true;
   };
 
-  const onFileNode = async (id: string, f: File) => {
+  /** 读取失败返回错误文本（由检查器显示在来源旁），成功返回 undefined */
+  const onFileNode = async (id: string, f: File): Promise<string | undefined> => {
     try {
       let bytes: Uint8Array;
       if (/\.hex$|\.txt$/i.test(f.name)) {
         const parsed = parseHexText(await f.text());
-        if (parsed.error) throw new Error(parsed.error);
+        if (parsed.error) return parsed.error;
         bytes = parsed.bytes;
       } else {
         bytes = await readFile(f);
@@ -1234,37 +1322,105 @@ export default function BlueprintApp() {
         ...d,
         nodes: d.nodes.map((n) => {
           if (n.id !== id) return n;
-          const base = n.source?.base ?? 0;
+          const base = n.source?.base ?? '0x0';
           return { ...n, params: { ...n.params, name: f.name }, source: { name: f.name, base, data } };
         }),
       }), '载入文件');
       say(`文件：${f.name} · ${bytes.length} B`);
+      return undefined;
     } catch (e) {
-      say(`读取失败：${e instanceof Error ? e.message : String(e)}`);
+      return e instanceof Error ? e.message : String(e);
     }
   };
 
-  const onFileHex = (id: string, text: string) => {
+  const onFileHex = (id: string, text: string): string | undefined => {
     const parsed = parseHexText(text);
-    if (parsed.error) { say(`HEX 解析失败：${parsed.error}`); return; }
+    if (parsed.error) return parsed.error;
     const data = bytesToBase64(parsed.bytes);
     commit((d) => ({
       ...d,
       nodes: d.nodes.map((n) => {
         if (n.id !== id) return n;
-        const base = n.source?.base ?? 0;
+        const base = n.source?.base ?? '0x0';
         return { ...n, params: { ...n.params, name: 'pasted.hex' }, source: { name: 'pasted.hex', base, data } };
       }),
     }), '载入 HEX');
     say(`HEX：${parsed.bytes.length} B`);
+    return undefined;
   };
 
   // 基址改动就地显示在检查器字段里，不再走 toast。
-  const onFileBase = (id: string, base: number) => {
+  const onFileBase = (id: string, base: string) => {
     commit((d) => ({
       ...d,
-      nodes: d.nodes.map((n) => (n.id === id && n.source ? { ...n, source: { ...n.source, base } } : n)),
+      nodes: d.nodes.map((n) => (n.id === id ? { ...n, source: { name: n.source?.name ?? '未载入', data: n.source?.data ?? '', base } } : n)),
     }), '改基址', `base:${id}`);
+  };
+
+  /**
+   * 字节预览 → 读数值节点：来源、地址、类型、字节序全部沿用刚才的试读，
+   * 一次提交（一次撤销），并放到来源右侧的空位。
+   */
+  const onAddRead = (
+    sourceId: string,
+    cfg: { address: bigint; kind: string; endian: 'little' | 'big' },
+  ) => {
+    const src = docRef.current.nodes.find((n) => n.id === sourceId);
+    const center = canvasApi.current?.centerWorld() ?? { x: 0, y: 0 };
+    const vis = canvasApi.current?.visibleWorld();
+    const maxX = vis ? vis.maxX - 8 - NODE_WIDTH : Number.POSITIVE_INFINITY;
+    const maxY = vis ? vis.maxY - 8 - 140 : Number.POSITIVE_INFINITY;
+    const minX = vis ? vis.minX + 8 : Number.NEGATIVE_INFINITY;
+    const minY = vis ? vis.minY + 8 : Number.NEGATIVE_INFINITY;
+    const x = Math.min(Math.max(src ? src.x + 360 : Math.round(center.x - NODE_WIDTH / 2), minX), Math.max(minX, maxX));
+    const clashes = (px: number, py: number) => docRef.current.nodes.some(
+      (n) => Math.abs(n.x - px) < 300 && Math.abs(n.y - py) < 190,
+    );
+    let y = Math.min(Math.max(src ? src.y : Math.round(center.y - 16), minY), Math.max(minY, maxY));
+    for (let i = 0; i < 12 && y + 190 <= maxY && clashes(x, y); i += 1) y += 190;
+    const id = `n${++seq.current}`;
+    const next: BPNode = {
+      id,
+      packId: '',
+      nodeId: 'readint',
+      x,
+      y,
+      params: {
+        ...builtinDefaults('readint'),
+        ...inheritOptions('readint', docRef.current.nodes),
+        address: addressHex(cfg.address),
+        scalar: cfg.kind,
+        endian: cfg.endian,
+        sourceId,
+      },
+    };
+    commit((d) => ({ ...d, nodes: [...d.nodes, next] }), '添加读数值节点');
+    setSelection(selectOnlyNode(id));
+    say(`读数值：${cfg.kind} @ ${addressHex(cfg.address)}`);
+  };
+
+  const createLayout = (nodeId: string) => {
+    const id = `l${++seq.current}`;
+    commit(d => {
+      const next: BinaryLayout = {
+        id, name: `布局 ${1 + (d.layouts?.length ?? 0)}`, size: '1', endian: 'little', nextField: 2,
+        fields: [{ id: 'f1', name: 'field1', kind: 'u8', offset: '0' }],
+      };
+      return {
+        ...d, layouts: [...(d.layouts ?? []), next],
+        nodes: d.nodes.map(n => n.id === nodeId ? { ...n, params: { ...n.params, layoutId: id, nextField: '' } } : n),
+      };
+    }, '新建结构布局');
+  };
+
+  const editLayout = (layout: BinaryLayout, field?: string) => {
+    commit(d => ({ ...d, layouts: d.layouts?.map(l => l.id === layout.id ? layout : l) }),
+      '修改结构布局', field ? `layout:${layout.id}:${field}` : undefined);
+  };
+
+  const selectLayout = (id: string, layoutId: string) => {
+    commit(d => ({ ...d, nodes: d.nodes.map(n => n.id === id
+      ? { ...n, params: { ...n.params, layoutId, nextField: '' } } : n) }), '选择布局');
   };
 
   // ---- pack 管理：全部经 commit，一次 Ctrl+Z 完整回滚 ----------------------
@@ -1309,31 +1465,63 @@ export default function BlueprintApp() {
     say(`清理 ${removed} 个节点：${pack.name}`);
   };
 
-  /** 新建 pack：最小模板（definePack 骨架），创建后立即可用 */
-  const onNewPack = () => {
-    const r = loadBlueprintPack(TEMPLATE_PACK_SOURCE);
-    if (!r.pack) { say(`模板加载失败：${r.error ?? '未知错误'}`); return; }
-    const id = `p${++seq.current}`;
-    const added = addPack(docRef.current, {
-      id,
-      name: r.pack.name,
-      source: TEMPLATE_PACK_SOURCE,
-      pack: r.pack,
-      enabled: true,
-    });
-    commit(() => added.doc, `新建 pack：${added.pack.name}`);
-    if (r.issues.length) setPackIssues((xs) => [...xs, ...r.issues]);
-    say(`新建 pack：${added.pack.name}`);
+  // ---- 工作区 / 文件 --------------------------------------------------------
+  const askConfirm = (req: ConfirmRequest): Promise<boolean> => new Promise((resolve) => {
+    // 同时出现第二个确认时，先让前一个以「取消」结束，避免两个异步动作争抢
+    confirmResolve.current?.(false);
+    confirmResolve.current = resolve;
+    setConfirm(req);
+  });
+  const closeConfirm = (ok: boolean) => {
+    setConfirm(null);
+    const r = confirmResolve.current;
+    confirmResolve.current = null;
+    r?.(ok);
   };
 
-  const onSaveDoc = () => {
-    // `enabled` 是 memlink-blueprint/1 的可选扩展字段：带上它，导出的图能保留禁用态
-    const packEntries = packs.map((p) => ({
+  const hasWork = (d: DocState) => d.nodes.length > 0 || d.edges.length > 0 || d.packs.length > 0;
+  /** 示例模式下要保护的是工作图，而不是临时副本 */
+  const workDocNow = () => (sampleModeRef.current ? workSession.current?.doc ?? docRef.current : docRef.current);
+
+  /** 导出当前图；浏览器只能确认「已发起下载」，不声称落盘成功 */
+  const exportNow = () => {
+    const d = docRef.current;
+    const packEntries = d.packs.map((p) => ({
       id: p.id, name: p.name, source: p.source, enabled: isPackEnabled(p),
     }));
-    const out = makeDoc(packEntries, nodes, edges);
+    const out = makeDoc(packEntries, d.nodes, d.edges, d.layouts);
     downloadBlob(new TextEncoder().encode(JSON.stringify(out, null, 2)), 'blueprint.json', 'application/json');
-    say('导出：blueprint.json');
+    setExportAt(Date.now());
+    say('已发起导出：blueprint.json');
+  };
+
+  const onSaveDoc = (warnMissing = true) => {
+    const missing = docRef.current.nodes.filter((n) => n.source?.name && !n.source.data);
+    if (warnMissing && missing.length) {
+      const names = [...new Set(missing.map((n) => n.source!.name))];
+      void askConfirm({
+        title: '部分转储需要重新载入',
+        body: `${names.join('、')} 的字节不在缓存中。导出的图只保留文件名与基址，不含这些内容。`,
+        confirmLabel: '仍要导出',
+        secondaryLabel: '先重新载入',
+        onSecondary: () => closeConfirm(false),
+      }).then((ok) => { if (ok) exportNow(); });
+      return;
+    }
+    exportNow();
+  };
+
+  /** 替换非空工作图前必须确认；即使已经自动缓存也一样 */
+  const confirmReplace = (title: string): Promise<boolean> => {
+    if (!hasWork(workDocNow())) return Promise.resolve(true);
+    return askConfirm({
+      title,
+      body: '当前工作图会被替换。自动缓存不是备份，建议先导出；取消会保留当前图。',
+      confirmLabel: '替换',
+      secondaryLabel: '导出当前图',
+      onSecondary: () => { exportNow(); closeConfirm(false); },
+      tone: 'danger',
+    });
   };
 
   /** 换图/重置后把视角调到可读档，避免一打开就是 38% 的缩略图 */
@@ -1341,45 +1529,141 @@ export default function BlueprintApp() {
     window.setTimeout(() => canvasApi.current?.openReadable(), 0);
   };
 
-  /** 顶栏「载入 dump」与全局拖放共用：新建 File 节点并写入内容 */
-  const addFileNode = (f: File, at?: { x: number; y: number }) => {
-    const id = onAdd('', 'file', at);
-    void onFileNode(id, f);
-    return id;
+  const enterSample = () => {
+    if (sampleModeRef.current) {
+      resetDoc(initialDoc(), false);
+      setPackIssues([]);
+      openReadableSoon();
+      say('示例：已重置临时副本');
+      return;
+    }
+    workSession.current = {
+      doc: docRef.current,
+      history: historyRef.current,
+      selection: selectionRef.current,
+      nav: navRef.current,
+      persist,
+    };
+    sampleModeRef.current = true;
+    setSampleMode(true);
+    resetDoc(initialDoc(), false);
+    setPackIssues([]);
+    openReadableSoon();
+    say('示例：临时副本，不影响我的蓝图');
   };
 
-  const onOpenDoc = async (f: File) => {
-    if (dirtyRef.current && !window.confirm('打开图会替换当前未保存的改动，继续？')) return;
-    const r = parseDoc(await f.text());
-    if (!r.doc) { say(`打开失败：${r.error}`); return; }
+  const exitSample = () => {
+    const s = workSession.current;
+    workSession.current = null;
+    sampleModeRef.current = false;
+    setSampleMode(false);
+    if (!s) return;
+    sessionSeq.current += 1;
+    docRef.current = s.doc;
+    setDoc(s.doc);
+    historyRef.current = s.history;
+    setHistory(s.history);
+    setSelection(s.selection);
+    setNav(s.nav);
+    setPersist(s.persist);
+    say('已返回我的蓝图');
+  };
+
+  const newBlueprint = async () => {
+    if (!(await confirmReplace('新建空白蓝图？'))) return;
+    if (sampleModeRef.current) exitSample();
+    resetDoc(emptyDoc(), false);
+    setPackIssues([]);
+    setPersist(null);
+    openReadableSoon();
+    say('新建：空白蓝图');
+  };
+
+  /** 顶栏「导入转储」与全局拖放共用：新建 File 节点并写入内容 */
+  const addFileNode = async (f: File, at?: { x: number; y: number }) => {
+    const id = onAdd('', 'file', at);
+    const error = await onFileNode(id, f);
+    return { id, ok: !error, name: f.name, error };
+  };
+
+  const onOpenDoc = async (f: File): Promise<boolean> => {
+    const sid = sessionSeq.current;
+    let text: string;
+    try {
+      text = await f.text();
+    } catch (e) {
+      say(`打开失败：${e instanceof Error ? e.message : String(e)}`);
+      return false;
+    }
+    if (sid !== sessionSeq.current) return false;
+    const r = parseDoc(text);
+    if (!r.doc) { say(`打开失败：${r.error}`); return false; }
+
+    if (!(await confirmReplace(`打开「${f.name}」？`))) return false;
+    if (sid !== sessionSeq.current) return false;
+
     const loaded: LoadedPack[] = [];
     const issues: Problem[] = [];
     for (const p of r.doc.packs) {
       const l = loadBlueprintPack(p.source);
-      if (!l.pack) { say(`pack ${p.name} 加载失败：${l.error}`); return; }
-      // `memlink-blueprint/1` 的 enabled 是可选字段，缺省视为启用
+      if (!l.pack) { say(`pack ${p.name} 加载失败：${l.error}`); return false; }
+      // enabled 是可选字段，缺省视为启用
       const enabled = (p as { enabled?: boolean }).enabled !== false;
       loaded.push({ id: p.id, name: p.name, source: p.source, pack: l.pack, enabled });
       issues.push(...l.issues);
     }
-    resetDoc({ packs: loaded, nodes: r.doc.nodes, edges: r.doc.edges });
+    if (sampleModeRef.current) exitSample();
+    resetDoc({ packs: loaded, nodes: r.doc.nodes, edges: r.doc.edges, layouts: r.doc.layouts });
     setPackIssues(issues);
+    setPersist(null);
     openReadableSoon();
     say(`打开：${f.name}`);
-  };
-
-  const resetDemo = () => {
-    if (dirtyRef.current && !window.confirm('恢复示例会替换当前未保存的改动，继续？')) return;
-    const d = initialDoc();
-    resetDoc(d);
-    setPackIssues([]);
-    openReadableSoon();
-    say('示例：已重置');
+    return true;
   };
 
   const errors = fullResult.problems.filter((p) => p.severity === 'error').length;
 
   // ---- 全局拖放：.bin/.hex → File 节点，.json → 打开图，.bp.ts → 导入 pack ----
+  // ---- 全局拖放：先分类整批文件，再逐项处理并汇总结果 ----
+  const DUMP_EXT = new Set(['bin', 'hex', 'txt', 'dmp', 'raw', 'img']);
+  const handleDropFiles = async (files: File[], at?: { x: number; y: number }) => {
+    const ext = (f: File) => f.name.toLowerCase().split('.').pop() ?? '';
+    const blueprints = files.filter((f) => ext(f) === 'json');
+    const packs = files.filter((f) => f.name.toLowerCase().endsWith('.bp.ts') || ext(f) === 'ts');
+    const dumps = files.filter((f) => DUMP_EXT.has(ext(f)));
+    const skipped = files.filter((f) => !blueprints.includes(f) && !packs.includes(f) && !dumps.includes(f));
+
+    if (blueprints.length > 1) {
+      say('一次只能打开一张蓝图，请分开拖入；本批文件均未导入');
+      return;
+    }
+    if (blueprints.length === 1) {
+      const ok = await dropApi.current.onOpenDoc(blueprints[0]);
+      if (!ok) { say('蓝图未打开，本批其它文件未导入'); return; }
+    }
+
+    let packOk = 0;
+    for (const p of packs) {
+      if (await dropApi.current.onLoadPack(p)) packOk += 1;
+    }
+    let dumpOk = 0;
+    const failures: string[] = [];
+    for (let i = 0; i < dumps.length; i += 1) {
+      // 蓝图刚打开时视口已重置，落点交给自动找空位
+      const r = await dropApi.current.addFileNode(dumps[i], !blueprints.length && i === 0 ? at : undefined);
+      if (r.ok) dumpOk += 1;
+      else failures.push(`${r.name}：${r.error ?? '读取失败'}`);
+    }
+
+    const parts: string[] = [];
+    if (blueprints.length === 1) parts.push(`蓝图 ${blueprints[0].name}`);
+    if (dumpOk) parts.push(`${dumpOk} 个转储`);
+    if (packOk) parts.push(`${packOk} 个 pack`);
+    if (skipped.length) parts.push(`跳过 ${skipped.length} 个不支持的文件`);
+    if (failures.length) parts.push(`失败 ${failures.length} 个（${failures.join('；')}）`);
+    say(parts.length ? `导入：${parts.join('，')}` : '没有可导入的文件');
+  };
+
   const dropApi = useRef({ onOpenDoc, onLoadPack, addFileNode });
   dropApi.current = { onOpenDoc, onLoadPack, addFileNode };
 
@@ -1413,13 +1697,7 @@ export default function BlueprintApp() {
       const at = api?.contains(e.clientX, e.clientY)
         ? api.clientToWorld(e.clientX, e.clientY)
         : undefined;
-      const ext = (f: File) => f.name.toLowerCase().split('.').pop() ?? '';
-      const json = files.find((f) => ext(f) === 'json');
-      if (json) { void dropApi.current.onOpenDoc(json); return; }
-      const pack = files.find((f) => ext(f) === 'ts');
-      if (pack) { void dropApi.current.onLoadPack(pack); return; }
-      // 多个 dump：第一个落在指针处，其余走「自动找空位」，避免叠在一起
-      files.forEach((f, i) => dropApi.current.addFileNode(f, i === 0 ? at : undefined));
+      void handleDropFiles(files, at);
     };
     window.addEventListener('dragenter', onEnter);
     window.addEventListener('dragover', onOver);
@@ -1485,14 +1763,11 @@ export default function BlueprintApp() {
       : t?.kind === 'in-port'
         ? fullResult.inputs.get(t.nodeId)?.[t.port]?.value
         : undefined;
-    const portAddr = isPort ? (followAddress(portRaw) ?? undefined) : undefined;
-    const portFollowReason = !isPort
-      ? undefined
-      : portAddr === undefined
-        ? followHint(portRaw)
-        : addressInBuffer(portAddr)
-          ? undefined
-          : bufferIssue(portAddr, buffers);
+    const portSpec = isPort ? fullResult.ports.get(t.nodeId)?.[t.kind === 'out-port' ? 'outputs' : 'inputs']
+      .find(p => p.name === t.port) : undefined;
+    const target = isPort ? resolveFollowTarget(portRaw, t.nodeId, portSpec?.type) : undefined;
+    const portAddr = target?.address;
+    const portFollowReason = target?.reason;
     return {
       clipboardEmpty: clipCount === 0,
       selectionCount: selection.nodes.size + selection.edges.size,
@@ -1656,11 +1931,11 @@ export default function BlueprintApp() {
   /** 任一浮层打开时，注册表让位（浮层自己处理按键） */
   const overlayOpenRef = useRef(false);
   overlayOpenRef.current = helpOpen || quickAddOpen || menu !== null
-    || follow !== null || searchOpen || tree !== null;
+    || follow !== null || searchOpen || tree !== null || localTree !== null || confirm !== null;
 
   const commands: Command[] = [
-    { id: 'save', keys: ['Mod+S'], when: 'global', label: '保存到本地缓存', run: () => { runSave(docRef.current); } },
-    { id: 'export', keys: ['Mod+Shift+E'], when: 'global', label: '导出蓝图 JSON', run: onSaveDoc },
+    { id: 'save', keys: ['Mod+S'], when: 'global', label: '导出蓝图 JSON', run: () => onSaveDoc() },
+    { id: 'export', keys: ['Mod+Shift+E'], when: 'global', label: '导出蓝图 JSON', run: () => onSaveDoc() },
     { id: 'open', keys: ['Mod+O'], when: 'global', label: '打开图', run: () => openInputRef.current?.click() },
     { id: 'undo', keys: ['Mod+Z'], when: 'global', label: '撤销', run: doUndo },
     { id: 'redo', keys: ['Mod+Shift+Z', 'Mod+Y'], when: 'global', label: '重做', run: doRedo },
@@ -1748,6 +2023,8 @@ export default function BlueprintApp() {
     const onKey = (e: KeyboardEvent) => {
       // Alt 组合用于「返回 / 前进」导航历史，不能在这里整体拦掉。
       if (e.defaultPrevented || e.repeat) return;
+      // 中文输入法组合期间的按键属于候选词编辑，不触发应用命令
+      if (e.isComposing || e.keyCode === 229) return;
       // 输入框内只放行 Mod+S / Mod+Shift+E / Escape
       if (isEditable(e.target) && !allowInInput(e)) return;
       // 浮层（菜单 / 快速添加 / 帮助）自己处理按键
@@ -1766,23 +2043,33 @@ export default function BlueprintApp() {
   const selectionSummary = summaryOf(selection);
   const selectionText = selectionSummary.text;
 
-  // 保存态：未持久化 > 未保存 > 已保存 · HH:MM
+  // 保存态：示例临时副本 > 未持久化 > 未保存 > 已缓存（可能部分转储需重载）
+  const dropped = persist?.dropped ?? [];
+  const trimmed = persist?.code === 'TRIMMED';
   const degraded = persist?.code === 'NO_STORAGE' || persist?.code === 'TOO_LARGE';
-  const saveText = degraded
-    ? '未持久化 · 仅内存'
-    : dirty
-      ? '未保存'
-      : persist?.at
-        ? `已保存 · ${hhmm(persist.at)}`
-        : '已保存';
-  const saveTone = degraded ? 'bad' : dirty ? 'warn' : 'ok';
-  const saveTitle = degraded
-    ? (persist?.code === 'TOO_LARGE'
-      ? `图超过 ${MAX_WRITE_BYTES / 1024 / 1024} MB 写入上限，未写入缓存`
-      : '浏览器存储不可用，本次修改仅保留在内存中')
-    : dirty
-      ? '有未保存的改动（Ctrl+S 立即持久化）'
-      : '已写入浏览器缓存';
+  const saveText = sampleMode
+    ? '示例 · 临时副本'
+    : degraded
+      ? '未持久化 · 仅内存'
+      : dirty
+        ? '未保存'
+        : trimmed
+          ? `已缓存 · ${dropped.length} 个转储需重载`
+          : persist?.at
+            ? `已缓存 · ${hhmm(persist.at)}`
+            : '已缓存';
+  const saveTone = degraded ? 'bad' : (dirty || sampleMode || trimmed) ? 'warn' : 'ok';
+  const saveTitle = sampleMode
+    ? '正在查看示例临时副本；返回我的蓝图后原工作图与撤销状态会恢复'
+    : degraded
+      ? (persist?.code === 'TOO_LARGE'
+        ? `图超过 ${MAX_WRITE_BYTES / 1024 / 1024} MB 写入上限，未写入缓存`
+        : '浏览器存储不可用，本次修改仅保留在内存中')
+      : dirty
+        ? '有未缓存的改动（Ctrl+S 导出蓝图；自动缓存仍在后台运行）'
+        : trimmed
+          ? `草稿已缓存，但以下转储的字节未写入：${[...new Set(dropped.map((d) => d.name))].join('、')}。重新载入后可完整导出。`
+          : '当前文档已写入浏览器草稿缓存';
 
   // 栅格轨道由 CSS 变量驱动，作用域限定在 .bp-app 内。
   const gridStyle = {
@@ -1854,27 +2141,41 @@ export default function BlueprintApp() {
             布局
           </button>
           <span className="bp-nav-sep" />
-          <label className="btn ghost file-label" title="载入 .bin / .hex 等内存转储，新建 File 节点；也可以直接把文件拖进窗口">
-            <IconUpload size={13} /> 载入 dump
+          <button
+            className="btn ghost"
+            onClick={() => void newBlueprint()}
+            title="新建空白蓝图（不会带入当前图的 pack、布局、节点或连线）"
+          >
+            新建
+          </button>
+          <label className="btn ghost file-label" title="把 .bin / .hex 等内存转储加入当前图；也可以直接把文件拖进窗口">
+            <IconUpload size={13} /> 导入转储
             <input
               type="file"
               accept=".bin,.hex,.txt,.dmp,.raw,.img"
               hidden
               onChange={(e) => {
                 const f = e.target.files?.[0];
-                if (f) addFileNode(f);
+                if (f) void addFileNode(f);
                 e.currentTarget.value = '';
               }}
             />
           </label>
           <label className="btn ghost file-label" title="打开 .json 蓝图（Ctrl+O）；也可以把 .json 拖进窗口">
             <IconFolder size={13} /> 打开图
-            <input type="file" accept=".json" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) onOpenDoc(f); e.currentTarget.value = ''; }} />
+            <input type="file" accept=".json" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) void onOpenDoc(f); e.currentTarget.value = ''; }} />
           </label>
-          <button className="btn ghost" onClick={onSaveDoc} title="导出蓝图 JSON（Ctrl+Shift+E）"><IconDownload size={13} /> 保存图</button>
-          <button className="btn ghost" onClick={resetDemo} title="恢复默认 NVMe 示例（未保存的改动会先确认）"><IconRefresh size={13} /> 示例</button>
+          <button className="btn ghost" onClick={() => onSaveDoc()} title="导出蓝图 JSON（Ctrl+S）；浏览器只能确认已发起下载"><IconDownload size={13} /> 导出</button>
+          <button
+            className="btn ghost"
+            onClick={sampleMode ? exitSample : enterSample}
+            title={sampleMode ? '返回我的蓝图，恢复之前的编辑与撤销状态' : '在临时副本中查看默认 NVMe 示例，不影响我的蓝图'}
+          >
+            <IconRefresh size={13} /> {sampleMode ? '返回我的蓝图' : '示例'}
+          </button>
         </div>
         <div className="top-right">
+          {sampleMode && <span className="bp-sample-flag mono">示例 · 临时副本</span>}
           <span className={`bp-save mono ${saveTone}`} aria-live="polite" title={saveTitle}>
             <i className="bp-save-dot" />
             {saveText}
@@ -1913,7 +2214,6 @@ export default function BlueprintApp() {
             onRenamePack={onRenamePack}
             onDeletePack={onDeletePack}
             onCleanupPack={onCleanupPack}
-            onNewPack={onNewPack}
             collapsedGroups={groups}
             onToggleGroup={toggleGroup}
             onCollapse={() => toggleCollapsed('left')}
@@ -2011,12 +2311,20 @@ export default function BlueprintApp() {
             onFile={onFileNode}
             onHex={onFileHex}
             onBase={onFileBase}
+            onAddRead={onAddRead}
+            layouts={doc.layouts}
+            onCreateLayout={createLayout}
+            onEditLayout={editLayout}
+            onSelectLayout={selectLayout}
             onCollapse={() => toggleCollapsed('right')}
             multi={{ nodes: selectionSummary.nodes, edges: selectionSummary.edges }}
             renameId={renameAt === 'panel' ? renameId : null}
             onRenameDone={() => setRenameId(null)}
             onCopy={(_text, label) => say(label)}
-            onFollow={(addr, description) => openFollow(addr, description)}
+            onFollow={(addr, description, nodeId) => {
+              const primary = selectionRef.current.primary;
+              openFollow(addr, description, undefined, nodeId ?? (primary?.kind === 'node' ? primary.id : undefined));
+            }}
             onOpenNode={openNodeTree}
             tab={rightTab}
             onTab={setRightTab}
@@ -2031,7 +2339,25 @@ export default function BlueprintApp() {
         <span>{nodes.length} 节点 · {edges.length} 连线</span>
         <span>{result.ms.toFixed(1)} ms</span>
         <span>{selectionText}</span>
-        <span className={`bp-save-text ${saveTone}`}>{saveText}</span>
+        {trimmed && dropped.length ? (
+          <button
+            type="button"
+            className={`bp-save-text ${saveTone} bp-save-action`}
+            title={`${saveTitle}\n点击选择第一个需要重新载入的来源`}
+            onClick={() => {
+              const target = dropped.find((d) => nodes.some((n) => n.id === d.nodeId));
+              if (!target) return;
+              setSelection(selectOnlyNode(target.nodeId));
+              setRightTab('inspect');
+              canvasApi.current?.centerOn(target.nodeId);
+            }}
+          >
+            {saveText} · 选择并重新载入
+          </button>
+        ) : (
+          <span className={`bp-save-text ${saveTone}`}>{saveText}</span>
+        )}
+        {exportAt && <span>已发起导出 · {hhmm(exportAt)}</span>}
         <span className="grow" />
         <span>本地求值</span>
       </footer>
@@ -2055,7 +2381,7 @@ export default function BlueprintApp() {
           request={follow}
           items={followItems}
           lastKey={lastFollowKey.current}
-          onPreview={(offsets, w) => (follow ? previewChain(follow.address, w, offsets) : null)}
+           onPreview={(offsets, w, buffer) => (follow ? previewChain(follow, w, offsets, buffer) : null)}
           onPick={doFollow}
           onClose={() => { setFollow(null); restoreTree(); }}
         />
@@ -2086,8 +2412,8 @@ export default function BlueprintApp() {
             const source = req.source;
             const value = source ? result.outputs.get(source.nodeId)?.[source.port] : addr;
             setFollow({ ...req, hint: inferFollowType({
-              value, address: addr, packs: allPacks, sourcePackId: nodes.find((n) => n.id === tree.nodeId)?.packId,
-              knownAt: knownTypes,
+              value, address: addr, packs: packsMap, sourcePackId: nodes.find((n) => n.id === tree.nodeId)?.packId,
+              knownAt: req.buffer && knownInMapping(req.buffer),
             }) });
             followFromTree.current = true;
             setTreeHidden(true);
@@ -2095,6 +2421,17 @@ export default function BlueprintApp() {
           onResolve={resolveFromTree}
         />
       )}
+      {localTree && (() => {
+        const node = nodes.find(n => n.id === localTree);
+        const view = result.views.get(localTree);
+        if (!node || !view) return null;
+        const collection = view.kind === 'list' || view.kind === 'array' ? view : undefined;
+        const items = collection?.items ?? ((view.kind === 'struct' || view.kind === 'element') && view.inst ? [view.inst] : []);
+        return <LocalTree key={localTree} title={nodeTitleOf(node)} items={items} stop={collection?.stop}
+          onClose={() => setLocalTree(null)} tools={{ onCopy: (_text, label) => say(label), onFollow: (addr, description) => {
+            if (openFollow(addr, description, undefined, node.id)) setLocalTree(null);
+          } }} />;
+      })()}
       {menu && (
         <ContextMenu
           x={menu.x}
@@ -2116,6 +2453,13 @@ export default function BlueprintApp() {
           e.currentTarget.value = '';
         }}
       />
+      {confirm && (
+        <ConfirmDialog
+          request={confirm}
+          onConfirm={() => closeConfirm(true)}
+          onCancel={() => closeConfirm(false)}
+        />
+      )}
       {toast && <div className="toast">{toast}</div>}
       {dropping && (
         <div className="bp-drop" aria-hidden="true">
@@ -2127,7 +2471,7 @@ export default function BlueprintApp() {
           </div>
         </div>
       )}
-      <div className="bp-watermark mono">BLUEPRINT · memlink-blueprint/1</div>
+      <div className="bp-watermark mono">BLUEPRINT · {BLUEPRINT_FORMAT}</div>
     </div>
   );
 }

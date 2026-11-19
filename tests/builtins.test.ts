@@ -8,6 +8,7 @@ import {
   builtinSubtitle, evalExpression, getBuiltin, inheritOptions, makeBuiltinCtx, parseOffsetChain,
 } from '../src/bp/builtins';
 import { evaluateGraph, portsFor } from '../src/bp/eval';
+import { byteSpan, isByteSpan } from '../src/bp/binary-read';
 import { assetIdOf } from '../src/bp/assets';
 import { bytesToBase64 } from '../src/bp/doc';
 import type { BPNode, BufferValue } from '../src/bp/types';
@@ -38,25 +39,26 @@ describe('built-in registry', () => {
       const outputs = d.outputs.map((p) => p.name);
       expect(new Set(inputs).size).toBe(inputs.length);
       expect(new Set(outputs).size).toBe(outputs.length);
+      if (d.followPort) expect(inputs).toContain(d.followPort);
     }
   });
 
-  it('keeps the original built-in labels and exposes defaults', () => {
-    expect(builtinLabel('file')).toBe('文件 / Buffer');
+  it('publishes the built-in labels and defaults', () => {
+    expect(builtinLabel('file')).toBe('载入转储');
     expect(builtinLabel('number')).toBe('数值');
     expect(builtinLabel('element')).toBe('元素解析');
     expect(builtinLabel('unknown')).toBe('unknown');
     expect(builtinDefaults('number')).toEqual({ value: '0' });
-    expect(builtinDefaults('readint').size).toBe('4');
+    expect(builtinDefaults('readint').scalar).toBe('u32');
     expect(builtinDefaults('readint').endian).toBe('little');
-    expect(builtinDefaults('prp').pageSize).toBe('512');
+    expect(getBuiltin('prp')).toBeUndefined(); // 协议逻辑只属于 NVMe pack
     expect(builtinDefaults('missing')).toEqual({});
   });
 
   it('summarises the active configuration in the node header', () => {
     expect(builtinSubtitle({ nodeId: 'number', params: {} })).toBe('内置');
-    const sub = builtinSubtitle({ nodeId: 'readint', params: { size: '8', signed: '1', endian: 'big' } });
-    expect(sub).toContain('u64 / i64');
+    const sub = builtinSubtitle({ nodeId: 'readint', params: { scalar: 'i64', endian: 'big' } });
+    expect(sub).toContain('i64');
     expect(sub).toContain('大端');
   });
 
@@ -65,11 +67,10 @@ describe('built-in registry', () => {
     const read = portsFor({ id: 'r', packId: '', nodeId: 'readint', x: 0, y: 0, params: {} }, packs as never);
     expect(read.inputs.map((p) => p.name)).toEqual(['buffer', 'address']);
     expect(read.inputs[0].context).toBe(true);
-    expect(read.outputs.map((p) => p.name)).toEqual(['value', 'hex', 'binary', 'width']);
+    expect(read.outputs).toMatchObject([{ name: 'value', type: 'integer' }]);
     expect(getBuiltin('nope')).toBeUndefined();
   });
 });
-
 describe('expression evaluator', () => {
   it('respects precedence, parentheses, hex literals and bitwise operators', () => {
     expect(evalExpression('(a + 1) * b', { a: 5, b: 512 })).toBe(3072);
@@ -90,96 +91,63 @@ describe('built-in evaluation', () => {
   const run = (id: string, values: Record<string, unknown>, bytes: number[], params: Record<string, string> = {}) =>
     getBuiltin(id)!.run!(values, ctx(bytes, params));
 
-  it('slices a buffer into bytes, hex, ASCII and size', () => {
+  it('slices a buffer without losing provenance', () => {
     const out = run('slice', { address: 2, length: 5 }, [0, 1, 0x41, 0x42, 0x43, 0x00, 0xff]);
-    expect(out.size).toBe(5);
-    expect((out.bytes as Uint8Array)).toEqual(new Uint8Array([0x41, 0x42, 0x43, 0x00, 0xff]));
-    expect(out.hex).toBe('41 42 43 00 ff');
-    expect(out.ascii).toBe('ABC..');
+    expect(isByteSpan(out.span)).toBe(true);
+    if (isByteSpan(out.span)) {
+      expect(out.span.buffer.base).toBe(2n);
+      expect(out.span.buffer.bytes).toEqual(new Uint8Array([0x41, 0x42, 0x43, 0x00, 0xff]));
+    }
   });
 
   it('reads integers with width, sign and endian options', () => {
-    expect(run('readint', { address: 0 }, [0x78, 0x56, 0x34, 0x12], { size: '4' }).value).toBe(0x12345678);
-    expect(run('readint', { address: 0 }, [0x12, 0x34], { size: '2', endian: 'big' }).value).toBe(0x1234);
-    expect(run('readint', { address: 0 }, [0xff], { size: '1', signed: '1' }).value).toBe(-1);
-    expect(run('readint', { address: 0 }, [0xff], { size: '1' }).value).toBe(255);
+    expect(run('readint', { address: 0 }, [0x78, 0x56, 0x34, 0x12], { scalar: 'u32' }).value).toBe(0x12345678n);
+    expect(run('readint', { address: 0 }, [0x12, 0x34], { scalar: 'u16', endian: 'big' }).value).toBe(0x1234n);
+    expect(run('readint', { address: 0 }, [0xff], { scalar: 'i8' }).value).toBe(-1n);
+    expect(run('readint', { address: 0 }, [0xff], { scalar: 'u8' }).value).toBe(255n);
   });
 
   it('reads floats and strings', () => {
     const f = new Float32Array([1.5]);
     const fbytes = [...new Uint8Array(f.buffer)];
-    // 浮点已并入「数值读取」：size = f4 / f8，hex/binary 是 IEEE 754 位模式
-    const fl = run('readint', { address: 0 }, fbytes, { size: 'f4' });
+    // 原始位模式只供检查器展示。
+    const fl = run('readint', { address: 0 }, fbytes, { scalar: 'f32' });
     expect(fl.value).toBe(1.5);
-    expect(fl.hex).toBe('0x3FC00000');
-    expect(fl.binary).toBe('00111111 11000000 00000000 00000000');
+    expect(fl.raw).toBe(0x3fc00000n);
     const text = [...'NVMe\0rest'].map((c) => c.charCodeAt(0));
-    expect(run('text', { address: 0, length: 12 }, text, { mode: 'cstr' }).text).toBe('NVMe');
+    expect(run('text', { address: 0, length: 12 }, text, { mode: 'nul' })).toEqual({ text: 'NVMe', length: 5n });
   });
 
   it('reads arrays with a stride', () => {
-    const out = run('arrayread', { address: 0, count: 3, stride: 2 }, [1, 0, 2, 0, 3, 0], { size: '2' });
-    expect(out.values).toBe('1, 2, 3');
+    const out = run('arrayread', { address: 0, count: 3, stride: 2 }, [1, 0, 2, 0, 3, 0], { scalar: 'u16' });
+    expect(out.list).toMatchObject([1n, 2n, 3n].map(value => ({ fields: [{ value }] })));
   });
 
-  it('evaluates expressions and bitfields', () => {
+  it('evaluates expressions', () => {
     expect(run('expr', { a: 5, b: 512 }, [], { formula: '(a + 1) * b' }).value).toBe(3072);
     // 位运算已并入表达式求值器：& | ^ << >> ~ 都是合法操作符
     expect(run('expr', { a: 0xf0, b: 0x0f }, [], { formula: 'a | b' }).value).toBe(0xff);
     expect(run('expr', { a: 1, b: 4 }, [], { formula: 'a << b' }).value).toBe(16);
-    const bits = run('bitfield', { value: 0b1011 }, [], { width: '8' });
-    expect(bits.popcount).toBe(3);
-    expect(bits.set).toBe('0, 1, 3');
-    expect(bits.lsb).toBe(0);
-    expect(bits.msb).toBe(3);
   });
 
-  it('maps enums and timestamps', () => {
-    const out = run('enum', { value: 2 }, [], { mapping: '0=Flush,1=Write,2=Read' });
-    expect(out.name).toBe('Read');
-    expect(out.known).toBe(true);
-    expect(run('enum', { value: 9 }, [], { mapping: '0=Flush,2=Read' }).known).toBe(false);
-    expect(run('timestamp', { value: 0 }, [], { unit: 's' }).utc).toContain('1970-01-01');
+  it('computes addresses without requiring the target to be mapped', () => {
+    expect(run('address', { base: 0x1000, index: 4, stride: 0x40 }, [0], { mode: 'index' }).address)
+      .toMatchObject({ value: 0x1100n });
   });
 
-  it('computes addresses, walks pointers and expands PRP lists', () => {
-    expect(run('address', { base: 0x1000, offset: 4, scale: 0x40 }, []).address).toBe(0x1100);
-    // pointer 已并入「指针步进」：offset = 0 时就是纯解引用
-    const ptrBytes = [0x00, 0x12, 0, 0, 0, 0, 0, 0];
-    const walked = run('ptrwalk', { base: 0, offset: 0 }, ptrBytes, { pointerSize: '8' });
-    expect(walked.target).toBe(0x1200);
-    expect(walked.hex).toBe('0x1200');
-    expect(walked.valid).toBe(false); // 0x1200 在 8 字节缓冲区之外
-
-    // PRP1 = 0x1200, PRP2 = 0x1100 points at a list of 5 page addresses.
-    const img = new Uint8Array(0x1000);
-    const put = (off: number, v: number) => {
-      for (let i = 0; i < 8; i++) img[off + i] = Number((BigInt(v) >> BigInt(8 * i)) & 0xffn);
-    };
-    [0x1400, 0x1600, 0x1800, 0x1a00, 0x1c00].forEach((a, i) => put(0x100 + i * 8, a));
-    const bctx = makeBuiltinCtx({ assetId: assetIdOf(img), name: 't.bin', base: 0x1000, bytes: img }, { pageSize: '512' });
-    const prp = getBuiltin('prp')!.run!({ prp1: 0x1200, prp2: 0x1100, count: 6 }, bctx);
-    expect(prp.pages).toBe(6);
-    expect(prp.p0).toBe(0x1200);
-    expect(prp.p1).toBe(0x1400);
-    expect(String(prp.list)).toContain('0x1c00');
+  it('computes the selected checksum only', () => {
+    const span = byteSpan(buffer([0, ...crcInput, 0]), 1n, 9n);
+    expect(run('checksum', { span }, [])).toEqual({ value: 0xcbf43926n });
+    expect(run('checksum', { span }, [], { algorithm: 'sum32' }).value).toBe(BigInt(crcInput.reduce((a, b) => a + b, 0)));
   });
 
-  it('computes standard CRC32, sum and FNV-1a over input bytes', () => {
-    const out = run('checksum', { address: 0, length: 9 }, crcInput);
-    expect(out.crc32).toBe(0xcbf43926);
-    expect(out.hex).toBe('0xcbf43926');
-    expect(out.sum).toBe(crcInput.reduce((a, b) => a + b, 0));
+  it('asserts numbers without inventing a result for missing inputs', () => {
+    expect(run('assert', { actual: 7n, expected: 7 }, [])).toEqual({ status: '通过', ok: true });
+    expect(run('assert', { actual: 7n, expected: 3n }, [])).toEqual({ status: '不通过', ok: false });
+    expect(run('assert', {}, [])).toEqual({ status: '未能校验', ok: undefined });
   });
 
-  it('compares numbers and reports booleans', () => {
-    const out = run('compare', { a: 7, b: 3 }, []);
-    expect(out.equal).toBe(false);
-    expect(out.greater).toBe(true);
-    expect(out.delta).toBe(4);
-  });
-
-  it('指针步进按宽度读指针，断链时 target 置 0 并给出 valid=false', () => {
+  it('读指针按宽度区分目标和读取越界', () => {
     const bytes = new Uint8Array(0x40);
     // 注意不要用 `>>>` 填 8 字节：它的移位量取 mod 32，i≥4 会循环重复。
     const put = (off: number, v: number, n = 8) => {
@@ -189,20 +157,14 @@ describe('built-in evaluation', () => {
     put(0x20, 0x30, 4);
     const ctx8 = ctx([...bytes], { pointerSize: '8' });
 
-    const walk = getBuiltin('ptrwalk')!.run!({ base: 0x10, offset: 0 }, ctx8);
-    expect(walk.address).toBe(0x10);
-    expect(walk.target).toBe(0x2000);
-    expect(walk.valid).toBe(false); // 0x2000 在 0x40 缓冲区之外
-
-    const broken = getBuiltin('ptrwalk')!.run!({ base: 0x38, offset: 4 }, ctx8);
-    expect(broken.target).toBe(0);
-    expect(broken.valid).toBe(false);
+    expect(() => getBuiltin('ptrwalk')!.run!({ address: 0x10 }, ctx8)).toThrow(/目标未映射：0x2000/);
+    expect(() => getBuiltin('ptrwalk')!.run!({ address: 0x3c }, ctx8)).toThrow(/超出可读范围/);
 
     const ctx4 = ctx([...bytes], { pointerSize: '4' });
-    const back = getBuiltin('ptrwalk')!.run!({ base: 0x24, offset: -4 }, ctx4);
-    expect(back.address).toBe(0x20);
-    expect(back.target).toBe(0x30);
-    expect(back.valid).toBe(true);
+    const back = getBuiltin('ptrwalk')!.run!({ address: 0x20 }, ctx4);
+    expect(back.at).toBe(0x20n);
+    expect(back.target).toMatchObject({ value: 0x30n });
+    expect(back.state).toBe('mapped');
   });
 
   it('标注节点不携带文件上下文，端口行为空', () => {
@@ -234,23 +196,23 @@ describe('built-in evaluation', () => {
     type P = { packId: string; nodeId: string; params: Record<string, string> };
     const nodes: P[] = [
       { packId: '', nodeId: 'readint', params: { address: '0x0' } },
-      { packId: '', nodeId: 'readint', params: { address: '0x10', size: '2', endian: 'big' } },
+      { packId: '', nodeId: 'readint', params: { address: '0x10', scalar: 'u16', endian: 'big' } },
       { packId: 'p1', nodeId: 'sq', params: { size: '99' } },
     ];
     // 只继承与默认值不同的下拉项，且 pack 节点不参与
-    expect(inheritOptions('readint', nodes)).toEqual({ size: '2', endian: 'big' });
+    expect(inheritOptions('readint', nodes)).toEqual({ scalar: 'u16', endian: 'big' });
     expect(inheritOptions('sq', nodes)).toEqual({});
     expect(inheritOptions('checksum', nodes)).toEqual({});
     // 「最近」生效：新出现的一组配置覆盖更早的
-    const more: P[] = [...nodes, { packId: '', nodeId: 'readint', params: { address: '0x20', size: '1' } }];
-    expect(inheritOptions('readint', more)).toEqual({ size: '1' });
+    const more: P[] = [...nodes, { packId: '', nodeId: 'readint', params: { address: '0x20', scalar: 'u8' } }];
+    expect(inheritOptions('readint', more)).toEqual({ scalar: 'u8' });
   });
 
   it('解析多级指针偏移链输入', () => {
-    expect(parseOffsetChain('+0x10, +0x24').offsets).toEqual([16, 36]);
-    expect(parseOffsetChain('0x10 0x24').offsets).toEqual([16, 36]);
-    expect(parseOffsetChain('16,-8').offsets).toEqual([16, -8]);
-    expect(parseOffsetChain('0x10；-0x8').offsets).toEqual([16, -8]);
+    expect(parseOffsetChain('+0x10, +0x24').offsets).toEqual([16n, 36n]);
+    expect(parseOffsetChain('0x10 0x24').offsets).toEqual([16n, 36n]);
+    expect(parseOffsetChain('16,-8').offsets).toEqual([16n, -8n]);
+    expect(parseOffsetChain('0x10；-0x8').offsets).toEqual([16n, -8n]);
     expect(parseOffsetChain('')).toEqual({ offsets: [] });
     expect(parseOffsetChain('0xzz').error).toContain('无法解析偏移');
   });
@@ -267,67 +229,5 @@ describe('built-in evaluation', () => {
     const r = evaluateGraph([file, slice], [{ id: 'e', from: { node: 'f', port: 'buffer' }, to: { node: 's', port: 'buffer' } }], new Map());
     expect(r.problems.some((p) => p.severity === 'error')).toBe(true);
     expect(r.views.get('s')?.kind).toBe('calc');
-  });
-});
-
-describe('多级指针端到端', () => {
-  it('连续指针步进解析到最终地址', () => {
-    const bytes = new Uint8Array(0x40);
-    const put64 = (off: number, v: number) => {
-      for (let i = 0; i < 8; i += 1) bytes[off + i] = Number((BigInt(v) >> BigInt(8 * i)) & 0xffn);
-    };
-    put64(0x10, 0x20);
-    put64(0x30, 0x38);
-    const file: BPNode = {
-      id: 'f', packId: '', nodeId: 'file', x: 0, y: 0, params: { name: 't.bin' },
-      source: { name: 't.bin', base: 0, data: bytesToBase64(bytes) },
-    };
-    const walk1: BPNode = {
-      id: 'w1', packId: '', nodeId: 'ptrwalk', x: 0, y: 0,
-      params: { base: '0x0', offset: '0x10', pointerSize: '8' },
-    };
-    const walk2: BPNode = {
-      id: 'w2', packId: '', nodeId: 'ptrwalk', x: 0, y: 0,
-      params: { base: '0x0', offset: '0x10', pointerSize: '8' },
-    };
-    const r = evaluateGraph([file, walk1, walk2], [
-      { id: 'e1', from: { node: 'f', port: 'buffer' }, to: { node: 'w1', port: 'buffer' } },
-      { id: 'e2', from: { node: 'w1', port: 'target' }, to: { node: 'w2', port: 'base' } },
-    ], new Map());
-    expect(r.outputs.get('w1')?.address).toBe(0x10);
-    expect(r.outputs.get('w1')?.target).toBe(0x20);
-    expect(r.outputs.get('w2')?.address).toBe(0x30);
-    expect(r.outputs.get('w2')?.target).toBe(0x38);
-    expect(r.problems.filter((p) => p.severity === 'error')).toEqual([]);
-  });
-
-  it('断链与目标越界都能标记出来，且不中断求值', () => {
-    const bytes = new Uint8Array(0x20);
-    // 0x10 处放 0x99：读取本身成功，但目标落在 0x20 缓冲区之外。
-    for (let i = 0; i < 8; i += 1) bytes[0x10 + i] = Number((BigInt(0x99) >> BigInt(8 * i)) & 0xffn);
-    const file: BPNode = {
-      id: 'f', packId: '', nodeId: 'file', x: 0, y: 0, params: { name: 't.bin' },
-      source: { name: 't.bin', base: 0, data: bytesToBase64(bytes) },
-    };
-    const walk: BPNode = {
-      id: 'w', packId: '', nodeId: 'ptrwalk', x: 0, y: 0,
-      params: { base: '0x0', offset: '0x10', pointerSize: '8' },
-    };
-    const broken: BPNode = {
-      id: 'b', packId: '', nodeId: 'ptrwalk', x: 0, y: 0,
-      params: { base: '0x18', offset: '0x10', pointerSize: '8' },
-    };
-    const r = evaluateGraph([file, walk, broken], [
-      { id: 'e1', from: { node: 'f', port: 'buffer' }, to: { node: 'walk', port: 'buffer' } },
-      { id: 'e2', from: { node: 'f', port: 'buffer' }, to: { node: 'broken', port: 'buffer' } },
-    ], new Map());
-    const w = r.outputs.get('w')!;
-    expect(w.target).toBe(0x99);   // 读到了真实指针值
-    expect(w.valid).toBe(false);   // 但目标在缓冲区外
-    const b = r.outputs.get('b')!;
-    expect(b.address).toBe(0x28);
-    expect(b.target).toBe(0);      // 读取地址本身越界
-    expect(b.valid).toBe(false);
-    expect(r.problems.filter((p) => p.severity === 'error')).toEqual([]);
   });
 });

@@ -54,6 +54,29 @@ describe('字符串作为数据源（值依赖）', () => {
 });
 
 describe('非字节端口作为数据源（来源依赖）', () => {
+  it('来源线不引入值依赖环，调用方可反向提供计算值', () => {
+    const loaded = loadBlueprintPack(`const Dummy = struct('Dummy', 1, [u8('value', 0)]);
+    export default definePack({
+      name: 'two-way',
+      types: { Dummy },
+      nodes: {
+        producer: calcNode({ inputs: { n: 'number' }, outputs: { buffer: 'buffer', value: 'number' },
+          run: ({n}) => ({ value: n }) }),
+        consumer: calcNode({ inputs: {}, outputs: { value: 'number' }, run: () => ({ value: 42 }) })
+      }
+    });`);
+    expect(loaded.error).toBeUndefined();
+    const a = { ...header('a'), nodeId: 'producer' };
+    const b = { ...header('b'), nodeId: 'consumer' };
+    const result = evaluateGraph([fileNode('f', [1]), a, b], [
+      wire('fa', ['f', 'buffer'], ['a', 'buffer']),
+      wire('ab', ['a', 'buffer'], ['b', 'buffer']),
+      wire('ba', ['b', 'value'], ['a', 'n']),
+    ], new Map([['p', loaded.pack!]]));
+    expect(result.outputs.get('a')?.value).toBe(42);
+    expect(result.sources.get('b')?.fileId).toBe('f');
+    expect(result.problems.some(p => p.code === 'CYCLE')).toBe(false);
+  });
   it('数字端口接数据源时不算"文本镜像"', () => {
     const nodes: BPNode[] = [
       { id: 'n', packId: '', nodeId: 'number', x: 0, y: 0, params: { value: '305419896' } },

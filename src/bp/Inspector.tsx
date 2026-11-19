@@ -1,13 +1,17 @@
 import { useMemo, useRef, useState } from 'react';
 import { Memory } from '../core/mem';
-import type { BlueprintPack, BPEdge, BPNode, BPResult } from './types';
+import type { BlueprintPack, BPEdge, BPNode, BPResult, BufferValue, ByteOrigin } from './types';
 import { builtinLabel, displayTitle, type InstanceView } from './types';
 import { getBuiltin } from './builtins';
 import { portsFor } from './eval';
-import { base64ToBytes } from './doc';
 import type { BPSelection } from './selection';
 import HexView from '../ui/HexView';
 import { IconAlert, IconFile, IconX } from '../ui/icons';
+import { addressHex, addressInteger, exactInteger, isExactPort, isMappedAddress, MAX_ADDRESS, offsetIn, type AddressInt } from './precision';
+import { isByteSpan } from './binary-read';
+import { displayField, type BinaryLayout } from './layouts';
+import LayoutEditor from './LayoutEditor';
+import InterpretValue, { ByteProbe } from './InterpretValue';
 
 interface Props {
   packs: Map<string, BlueprintPack>;
@@ -21,9 +25,13 @@ interface Props {
   onMode: (id: string, mode: 'value' | 'raw') => void;
   onDisconnect: (nodeId: string, port: string) => void;
   onDeleteEdge: (id: string) => void;
-  onFile: (id: string, f: File) => void;
-  onHex: (id: string, text: string) => void;
-  onBase: (id: string, n: number) => void;
+  onFile: (id: string, f: File) => Promise<string | undefined>;
+  onHex: (id: string, text: string) => string | undefined;
+  onBase: (id: string, n: string) => void;
+  layouts?: BinaryLayout[];
+  onCreateLayout: (nodeId: string) => void;
+  onEditLayout: (layout: BinaryLayout, field?: string) => void;
+  onSelectLayout: (nodeId: string, layoutId: string) => void;
   /** 折叠整个检查器为 36px 竖排条 */
   onCollapse: () => void;
   /** 当前选择的规模：多选时顶部显示「已选 N 个对象」 */
@@ -38,7 +46,8 @@ interface Props {
   onFocusProblem?: (nodeId: string) => void;
   /** 字段级逆向工具：复制提示与「在此地址解析」 */
   onCopy?: (text: string, label: string) => void;
-  onFollow?: (addr: number, description: string) => void;
+  onFollow?: (addr: AddressInt, description: string, nodeId?: string) => void;
+  onAddRead?: (nodeId: string, cfg: { address: bigint; kind: string; endian: 'little' | 'big' }) => void;
   /** 全屏结构树：struct / list / array 节点可用 */
   onOpenNode?: (nodeId: string) => void;
 }
@@ -100,16 +109,21 @@ function elementTypeOf(result: BPResult, id: string): string | undefined {
 /** 字段行的逆向工具：复制值 / 地址 / 十六进制，以及按字段值跳转解析。 */
 export interface FieldTools {
   onCopy: (text: string, label: string) => void;
-  onFollow: (addr: number, description: string) => void;
+  onFollow: (addr: AddressInt, description: string, nodeId?: string) => void;
+  /** 把一次试读保存成读数值节点（来源、地址、类型、字节序与预览一致） */
+  onAddRead?: (nodeId: string, cfg: { address: bigint; kind: string; endian: 'little' | 'big' }) => void;
 }
 
-function FieldTable({ inst, name, tools }: {
+export function FieldTable({ inst, name, tools }: {
   inst: InstanceView; name?: string; tools?: FieldTools;
 }) {
   const [hover, setHover] = useState<string | null>(null);
   const [pinned, setPinned] = useState<string | null>(null);
   const mem = inst.mem;
   const hot = hover ?? pinned;
+  const abs = BigInt(inst.location?.value ?? inst.addr);
+  const activeField = inst.fields.find(f => f.name === hot);
+  const previewAt = activeField && activeField.offset >= 64 ? inst.addr + activeField.offset : inst.addr;
 
   const copy = (text: string, label: string) => {
     const cb = navigator.clipboard;
@@ -121,7 +135,9 @@ function FieldTable({ inst, name, tools }: {
     return [...mem.bytesAt(inst.addr + f.offset, f.size)]
       .map((b) => b.toString(16).padStart(2, '0')).join(' ');
   };
-  const followable = (f: (typeof inst.fields)[number]): number | undefined => {
+  const followable = (f: (typeof inst.fields)[number]): AddressInt | undefined => {
+    if (isMappedAddress(f.value)) return f.value.value;
+    if (inst.location) return undefined;
     // 优先用转换后的值：索引转地址的字段（next = idx → base + idx*stride）里，
     // raw 是池下标，直接把 raw 当地址会跟到 0x5 这种错误位置。
     const v = typeof f.value === 'number' ? f.value : f.raw;
@@ -134,7 +150,7 @@ function FieldTable({ inst, name, tools }: {
     <>
       <div className="bp-inst-head">
         <span className="mono">{name ?? inst.typeName}</span>
-        <span className="mono">0x{inst.addr.toString(16)} · {inst.size} B</span>
+        <span className="mono">{addressHex(abs)} · {inst.size} B</span>
       </div>
       <table className="field-table bp-ft">
         <thead>
@@ -152,7 +168,7 @@ function FieldTable({ inst, name, tools }: {
             >
               <td className="ft-name mono">{f.label ?? f.name}</td>
               <td className="ft-type mono">{f.type}</td>
-              <td className="ft-off mono" title={`0x${(inst.addr + f.offset).toString(16)}`}>+{f.offset}</td>
+              <td className="ft-off mono" title={addressHex(abs + BigInt(f.offset))}>+{f.offset}</td>
               <td className="ft-raw mono">{f.rawDisplay}</td>
               <td className="ft-val mono">{f.display}</td>
             </tr>
@@ -166,17 +182,17 @@ function FieldTable({ inst, name, tools }: {
       {hot && (() => {
         const f = inst.fields.find((x) => x.name === hot);
         if (!f) return null;
-        const addr = inst.addr + f.offset;
+        const addr = abs + BigInt(f.offset);
         const follow = followable(f);
         return (
           <div className="bp-field-addr">
             <div className="bp-field-addr-text mono" title="字段在缓冲区中的绝对地址范围">
-              {f.label ?? f.name} · 0x{addr.toString(16)}–0x{(addr + f.size).toString(16)} · {f.size} B
+              {f.label ?? f.name} · {addressHex(addr)}–{addressHex(addr + BigInt(f.size))} · {f.size} B
               {pinned === hot && <em> · 已锁定</em>}
             </div>
             <div className="bp-field-tools">
               <button className="bp-ft-btn" title="复制转换值" aria-label="复制转换值"
-                onClick={() => copy(String(f.value), '已复制字段值')}>值</button>
+                onClick={() => copy(displayField(f.value), '已复制字段值')}>值</button>
               <button className="bp-ft-btn" title="复制绝对地址" aria-label="复制绝对地址"
                 onClick={() => copy(`0x${addr.toString(16)}`, '已复制地址')}>地址</button>
               <button className="bp-ft-btn" title="复制原始字节（HEX）" aria-label="复制原始字节"
@@ -189,15 +205,20 @@ function FieldTable({ inst, name, tools }: {
           </div>
         );
       })()}
+      {(() => {
+        const value = inst.fields.find(f => f.name === pinned)?.value;
+        return typeof value === 'bigint' || typeof value === 'number' ? <InterpretValue value={value} /> : null;
+      })()}
       {mem && inst.size > 0 && (
         <>
           <div className="bp-sub">字节</div>
           <HexView
             mem={mem}
-            addr={inst.addr}
-            len={inst.size}
+            addr={previewAt}
+            len={inst.size - (previewAt - inst.addr)}
             compact
             maxRows={8}
+            displayBase={inst.location?.value}
             highlight={hot ? (() => {
               const f = inst.fields.find((x) => x.name === hot);
               return f ? [{ start: inst.addr + f.offset, end: inst.addr + f.offset + f.size, tone: 'field' as const }] : [];
@@ -216,46 +237,46 @@ function FieldTable({ inst, name, tools }: {
 }
 
 function FileEditor({
-  node, onFile, onHex, onBase, tools,
+  node, buffer, onFile, onHex, onBase, tools,
 }: {
   node: BPNode;
-  onFile: (id: string, f: File) => void;
-  onHex: (id: string, text: string) => void;
-  onBase: (id: string, n: number) => void;
+  buffer?: BufferValue;
+  onFile: (id: string, f: File) => Promise<string | undefined>;
+  onHex: (id: string, text: string) => string | undefined;
+  onBase: (id: string, n: string) => void;
   tools?: FieldTools;
 }) {
   const [hex, setHex] = useState('');
   const mem = useMemo(
-    () => (node.source ? new Memory(base64ToBytes(node.source.data), node.source.base) : undefined),
-    [node.source],
+    () => (buffer ? new Memory(buffer.bytes) : undefined),
+    [buffer],
   );
-  const [base, setBase] = useState(`0x${(node.source?.base ?? 0).toString(16)}`);
+  const fileBase = addressInteger(node.source?.base) ?? 0n;
+  const [base, setBase] = useState<string | null>(null);
+  const [baseBad, setBaseBad] = useState(false);
   // 缓冲区视图：起始地址（由跳转框控制）与点选的字节（hex → 画布的入口）
   const [viewAddr, setViewAddr] = useState<number | null>(null);
   const [go, setGo] = useState('');
   const [goBad, setGoBad] = useState(false);
   const [picked, setPicked] = useState<number | null>(null);
-  const start = viewAddr ?? mem?.base ?? 0;
+  const [loadError, setLoadError] = useState('');
+  const start = viewAddr ?? 0;
 
   /** 支持 `0x1200`、十进制，以及相对文件基址的 `+0x100` / `-0x40`。 */
-  const parseGo = (text: string): number | null => {
-    const t = text.trim();
-    if (!t || !mem) return null;
-    const rel = /^([+-])(0[xX][0-9a-fA-F]+|\d+)$/.exec(t);
-    if (rel) {
-      const v = /^0[xX]/.test(rel[2]) ? Number.parseInt(rel[2].slice(2), 16) : Number(rel[2]);
-      return rel[1] === '-' ? mem.base - v : mem.base + v;
-    }
-    if (/^0[xX][0-9a-fA-F]+$/.test(t)) return Number.parseInt(t.slice(2), 16);
-    if (/^\d+$/.test(t)) return Number(t);
-    return null;
-  };
   const applyGo = () => {
-    const v = parseGo(go);
-    if (v == null || !mem) { setGoBad(true); return; }
+    const v = exactInteger(go);
+    const offset = v === undefined ? undefined : /^[+-]/.test(go.trim()) ? v : v - fileBase;
+    if (offset === undefined || offset < 0n || !mem || offset >= BigInt(mem.size)) { setGoBad(true); return; }
     setGoBad(false);
-    setViewAddr(Math.max(mem.base, v));
-    setPicked(null);
+    setViewAddr(Number(offset));
+    // 跳转和点选共用同一个位点：键盘跳转后也能立刻试读
+    setPicked(Number(offset));
+  };
+
+  const submitHex = () => {
+    const error = onHex(node.id, hex);
+    setLoadError(error ?? '');
+    if (!error) setHex('');
   };
 
   return (
@@ -269,30 +290,53 @@ function FileEditor({
 
       <label className="bp-file-btn wide">
         <IconFile size={13} /> 选择 .bin / .hex
-        <input type="file" accept=".bin,.hex,.txt" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(node.id, f); e.currentTarget.value = ''; }} />
+        <input
+          type="file"
+          accept=".bin,.hex,.txt"
+          hidden
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) {
+              void onFile(node.id, f).then((error) => setLoadError(error ?? ''));
+            }
+            e.currentTarget.value = '';
+          }}
+        />
       </label>
 
       <div className="bp-sub">或粘贴 HEX</div>
       <textarea
         className="bp-hex-input mono"
         value={hex}
-        onChange={(e) => setHex(e.target.value)}
+        onChange={(e) => { setHex(e.target.value); setLoadError(''); }}
         placeholder="de ad be ef 01 02 …"
         spellCheck={false}
       />
-      <button className="btn" disabled={!hex.trim()} onClick={() => onHex(node.id, hex)}>载入 HEX</button>
+      <button className="btn" disabled={!hex.trim()} onClick={submitHex}>载入 HEX</button>
+      {loadError && (
+        <div className="bp-banner bad" role="alert" title={loadError}>{loadError}</div>
+      )}
 
       <label className="bp-param">
         <span>基址</span>
         <input
-          className="in mono"
-          value={base}
-          onChange={(e) => setBase(e.target.value)}
+          className={`in mono${baseBad ? ' bad' : ''}`}
+          aria-label="基址"
+          aria-invalid={baseBad}
+          title={baseBad ? '基址或转储范围超出无符号 64 位地址空间' : undefined}
+          value={base ?? addressHex(fileBase)}
+          onChange={(e) => { setBase(e.target.value); setBaseBad(false); }}
           onBlur={() => {
-            const n = Number(base);
-            if (Number.isFinite(n) && n >= 0) onBase(node.id, n);
-            else setBase(`0x${(node.source?.base ?? 0).toString(16)}`);
+            if (base === null) return;
+            const n = addressInteger(base);
+            if (n === undefined || n + BigInt(mem?.size ?? 0) > MAX_ADDRESS + 1n) {
+              setBaseBad(true);
+              return;
+            }
+            if (n !== fileBase) onBase(node.id, addressHex(n));
+            setBase(null);
           }}
+          onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
         />
       </label>
 
@@ -305,7 +349,7 @@ function FileEditor({
               placeholder="跳转 0x1200 / +0x100"
               aria-label="跳转到缓冲区地址"
               aria-invalid={goBad}
-              title={goBad ? '无法识别的地址：支持 0x1200、十进制，或相对基址的 +0x100' : undefined}
+              title={goBad ? '请输入转储内的地址（十进制、十六进制或相对基址）' : undefined}
               spellCheck={false}
               value={go}
               onChange={(e) => { setGo(e.target.value); setGoBad(false); }}
@@ -319,25 +363,48 @@ function FileEditor({
             len={256}
             compact
             maxRows={14}
-            focusAddr={picked}
+            focusAddr={picked ?? viewAddr}
+            displayBase={fileBase}
             onPickByte={(a) => setPicked(a)}
           />
           {picked != null && (
             <div className="bp-field-addr">
               <div className="bp-field-addr-text mono" title="点选的字节地址">
-                选中 0x{picked.toString(16)} · 点击其它字节可切换
+                 选中 {addressHex(fileBase + BigInt(picked))} · 点击其它字节可切换
               </div>
               <div className="bp-field-tools">
                 <button type="button" className="bp-ft-btn" title="复制地址"
-                  onClick={() => tools?.onCopy(`0x${picked.toString(16)}`, '已复制地址')}>地址</button>
+                   onClick={() => tools?.onCopy(addressHex(fileBase + BigInt(picked)), '已复制地址')}>地址</button>
                 <button type="button" className="bp-ft-btn go" title="以该地址为起点跟随解析"
-                  onClick={() => tools?.onFollow(picked, `${node.source?.name ?? '缓冲区'} 点选字节`)}>在此解析 →</button>
+                   onClick={() => tools?.onFollow(fileBase + BigInt(picked), `${node.source?.name ?? '缓冲区'} 点选字节`, node.id)}>在此解析 →</button>
               </div>
             </div>
+          )}
+          {picked !== null && (
+            <ByteProbe
+              bytes={mem.buf}
+              offset={picked}
+              baseAddress={fileBase}
+              sourceNodeId={node.id}
+              onAddRead={tools?.onAddRead}
+            />
           )}
         </>
       )}
     </>
+  );
+}
+
+function OriginPreview({ origin }: { origin: ByteOrigin }) {
+  const { buffer, address, length } = origin;
+  const at = offsetIn(buffer, address, 0);
+  return (
+    <div className="bp-issue-origin">
+      <div className="bp-sub">问题字节</div>
+      <div className="bp-kv"><span>{buffer.name}</span><b className="mono">{addressHex(address)} · {length} B</b></div>
+      {at !== undefined && length > 0 && <HexView mem={new Memory(buffer.bytes)} addr={at} len={Math.max(length, 1)}
+        compact maxRows={8} displayBase={BigInt(buffer.base)} highlight={[{ start: at, end: at + length, tone: 'warn' }]} />}
+    </div>
   );
 }
 
@@ -347,9 +414,9 @@ function NodeBody({
   node: BPNode;
   result: BPResult;
   onSelect: (s: BPSelection) => void;
-  onFile: (id: string, f: File) => void;
-  onHex: (id: string, text: string) => void;
-  onBase: (id: string, n: number) => void;
+  onFile: (id: string, f: File) => Promise<string | undefined>;
+  onHex: (id: string, text: string) => string | undefined;
+  onBase: (id: string, n: string) => void;
   tools?: FieldTools;
   onParam?: (id: string, key: string, value: string) => void;
 }) {
@@ -376,19 +443,34 @@ function NodeBody({
     );
   }
   if (view.kind === 'file') {
-    return <FileEditor node={node} onFile={onFile} onHex={onHex} onBase={onBase} tools={tools} />;
+    return <>
+      {view.error && node.source?.data && <div className="bp-banner">{view.error}</div>}
+      <FileEditor key={node.id} node={node} buffer={result.sources.get(node.id)?.buffer} onFile={onFile} onHex={onHex} onBase={onBase} tools={tools} />
+    </>;
   }
   if (view.kind === 'number') {
-    return <div className="bp-kv"><span>值</span><b className="mono">{view.value}</b></div>;
+    return <>
+      <div className="bp-kv"><span>值</span><b className="mono">{String(view.value)}</b></div>
+      {!view.error && <InterpretValue value={view.value} />}
+    </>;
   }
   if (view.kind === 'calc') {
     return (
       <div className="bp-kv-list">
         {view.error && <div className="bp-banner">{view.error}</div>}
         {Object.entries(view.outputs).map(([k, v]) => (
-          <div key={k} className="bp-kv"><span>{k}</span><b className="mono">{String(v ?? '∅')}</b></div>
+           <div key={k} className="bp-kv"><span>{k}</span><b className="mono">
+             {isMappedAddress(v) ? addressHex(v.value) : isByteSpan(v)
+               ? `${v.buffer.bytes.length} B @ ${addressHex(v.buffer.base)}` : String(v ?? '∅')}
+           </b></div>
         ))}
         {view.detail && <pre className="bp-detail mono">{view.detail}</pre>}
+        {(() => {
+          const origin = result.problemOrigins?.get(node.id);
+          return origin && <OriginPreview origin={origin} />;
+        })()}
+        {!node.packId && (typeof view.outputs.value === 'bigint' || typeof view.outputs.value === 'number')
+          && <InterpretValue value={view.outputs.value} />}
       </div>
     );
   }
@@ -400,6 +482,7 @@ function NodeBody({
   if (view.kind === 'list' || view.kind === 'array') {
     return (
       <>
+        {view.stop && <div className="bp-kv"><span>停止状态</span><b>{view.stop}</b></div>}
         <div className="bp-kv"><span>元素</span><b className="mono">{view.count}</b></div>
         {view.kind === 'list' && view.cycle && <div className="bp-banner">检测到回环，已停止遍历</div>}
         {view.trunc && (
@@ -417,7 +500,7 @@ function NodeBody({
               onClick={() => onSelect({ kind: 'entry', nodeId: node.id, index: i })}
             >
               <span className="mono">#{i}</span>
-              <span className="mono">0x{it.addr.toString(16)}</span>
+              <span className="mono">{addressHex(it.location?.value ?? it.addr)}</span>
               <span className="mono">{String(it.fields.find((f) => f.name === 'name')?.value ?? '')}</span>
             </button>
           ))}
@@ -432,10 +515,11 @@ function NodeBody({
 export default function Inspector({
   packs, packNames, nodes, edges, result, selection, onSelect, onParam, onMode,
   onDisconnect, onDeleteEdge, onFile, onHex, onBase, onCollapse, multi,
-  renameId, onRenameDone, onCopy, onFollow, tab, onTab, onFocusProblem, onOpenNode,
+  renameId, onRenameDone, onCopy, onFollow, onAddRead, tab, onTab, onFocusProblem, onOpenNode,
+  layouts = [], onCreateLayout, onEditLayout, onSelectLayout,
 }: Props) {
   const problemListRef = useRef<HTMLDivElement>(null);
-  const tools: FieldTools | undefined = onCopy && onFollow ? { onCopy, onFollow } : undefined;
+  const tools: FieldTools | undefined = onCopy && onFollow ? { onCopy, onFollow, onAddRead } : undefined;
   const node = selection?.kind === 'node'
     ? nodes.find((n) => n.id === selection.id)
     : selection?.kind === 'entry'
@@ -509,7 +593,7 @@ export default function Inspector({
               <div className="bp-hero">未选择对象</div>
               <div className="bp-tips">
                 {!fileCount && <div><b>拖入文件</b> .bin / .hex 会直接生成 File 节点</div>}
-                {!packs.size && <div><b>导入 .bp.ts</b> 定义可解析的结构</div>}
+                {!packs.size && <div><b>读结构</b> 可在检查器直接定义布局，无需 pack</div>}
                 <div><b>双击端口</b> 跟随地址继续解析</div>
                 <div><b>选中节点</b> 查看字段、来源与端口</div>
               </div>
@@ -701,7 +785,8 @@ export default function Inspector({
                 return (
                   <>
                     <div className="bp-sub">配置</div>
-                    {def.options.map((o) => (
+                    {def.options.filter(o => node.nodeId !== 'arrayread' || node.params.elementType !== 'record'
+                      || !['scalar', 'endian'].includes(o.key)).map((o) => (
                       <label key={o.key} className="bp-param">
                         <span>{o.label}</span>
                         {o.kind === 'select' ? (
@@ -728,8 +813,15 @@ export default function Inspector({
                 );
               })()}
 
+              {!node.packId && (node.nodeId === 'structread' || node.nodeId === 'listread'
+                || (node.nodeId === 'arrayread' && node.params.elementType === 'record')) && (
+                <LayoutEditor node={node} layouts={layouts} onCreate={() => onCreateLayout(node.id)}
+                  onEdit={onEditLayout} onSelect={id => onSelectLayout(node.id, id)}
+                  onParam={(key, value) => onParam(node.id, key, value)} />
+              )}
+
               {(() => {
-                const items = portsFor(node, packs).inputs.filter((p) => !p.context);
+                const items = portsFor(node, packs, undefined, layouts).inputs.filter((p) => !p.context);
                 if (!items.length) return null;
                 return (
                   <>
@@ -750,12 +842,12 @@ export default function Inspector({
                                 onClick={(e) => { e.preventDefault(); onDisconnect(node.id, p.name); }}
                               >×</button>
                             </span>
-                          ) : p.type === 'number' || p.type === 'string' ? (
+                           ) : p.type === 'number' || p.type === 'numeric' || p.type === 'pack-address' || isExactPort(p.type) || p.type === 'string' ? (
                             <input
                               className="in mono"
                               value={node.params[p.name] ?? ''}
                               onChange={(e) => onParam(node.id, p.name, e.target.value)}
-                              placeholder={p.type === 'number' ? '0x0' : '文本'}
+                               placeholder={p.type === 'string' ? '文本' : '0x0'}
                             />
                           ) : (
                             <span className="bp-port-type mono">{p.type} · 待连线</span>

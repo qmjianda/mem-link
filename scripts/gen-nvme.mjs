@@ -110,26 +110,22 @@ const edge = (id, from, fromPort, to, toPort) => ({
 });
 
 const doc = {
-  format: 'memlink-blueprint/1',
+  format: 'memlink-blueprint/2',
   packs: [{ id: 'p1', name: 'nvme-sq', source: packSource }],
   nodes: [
     node('n_file', '', 'file', 0, 40, { name: FILE_NAME },
       { name: FILE_NAME, base: BASE, data: base64 }),
     node('n_sq', 'p1', 'sq', 330, 0, { address: '0x1000' }),
     node('n_sqe', '', 'element', 660, 0, { index: '0', packId: 'p1', typeId: 'Sqe' }),
-    node('n_opc', '', 'enum', 1000, 0, {
-      value: '0', mapping: '0=Flush,1=Write,2=Read,4=Write Uncorrectable,6=Identify,8=Abort,9=Set Features,10=Get Features',
-    }),
+    node('n_opc', 'p1', 'opcode', 1000, 0, { value: '0' }),
     node('n_transfer', 'p1', 'transfer', 1000, 190, { nlb: '0', lbaSize: '512' }),
-    node('n_prp', '', 'prp', 1000, 380, {
-      prp1: '0x0', prp2: '0x0', count: '1', pageSize: '512', pointerSize: '8', endian: 'little',
-    }),
+    node('n_prp', 'p1', 'prp', 1000, 380, { prp1: '0x0', prp2: '0x0', count: '1' }),
     node('n_prpList', 'p1', 'prpList', 660, 660, { address: '0x0' }),
     node('n_prp0', '', 'element', 1000, 660, { index: '0', packId: 'p1', typeId: 'PrpEntry' }),
     node('n_data1', 'p1', 'data', 1340, 0, { address: '0x0' }),
     node('n_data2', 'p1', 'data', 1340, 340, { address: '0x0' }),
     node('n_dump', '', 'slice', 1340, 660, { address: '0x0', length: '64' }),
-    node('n_sum', '', 'checksum', 1680, 0, { address: '0x0', length: '512' }),
+    node('n_sum', '', 'checksum', 1680, 0, { algorithm: 'crc32' }),
   ],
   edges: [
     edge('e1', 'n_file', 'buffer', 'n_sq', 'buffer'),
@@ -144,7 +140,7 @@ const doc = {
     edge('e10', 'n_sqe', 'prp1', 'n_data1', 'address'),
     edge('e11', 'n_prp0', 'addr', 'n_data2', 'address'),
     edge('e12', 'n_sqe', 'prp1', 'n_dump', 'address'),
-    edge('e13', 'n_sqe', 'prp1', 'n_sum', 'address'),
+    edge('e13', 'n_dump', 'span', 'n_sum', 'span'),
   ],
 };
 writeFileSync(resolve(root, 'samples/nvme-sq.blueprint.json'), `${JSON.stringify(doc, null, 2)}\n`);

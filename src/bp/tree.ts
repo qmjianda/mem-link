@@ -52,8 +52,8 @@ export interface TreeFocus {
 /** 把图上求值的截断信息翻译成树里的落点。 */
 export function focusFromTruncation(trunc: Truncation): TreeFocus {
   return trunc.unit === 'index'
-    ? { index: trunc.at, label: `图上从第 ${trunc.at} 项截断 · 已跳到该处` }
-    : { addr: trunc.at, label: `图上在 0x${trunc.at.toString(16)} 截断 · 已跳到该处` };
+    ? { index: Number(trunc.at), label: `图上从第 ${trunc.at} 项截断 · 已跳到该处` }
+    : { addr: typeof trunc.at === 'number' ? trunc.at : undefined, label: `图上在 0x${trunc.at.toString(16)} 截断` };
 }
 
 export interface TreeRow {

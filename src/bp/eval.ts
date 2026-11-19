@@ -31,13 +31,18 @@ import { decodeRecord, formatPackValue, packMemApi } from '../core/packgraph';
 import type { Problem } from '../core/types';
 import type {
   BPEdge, BPNode, BlueprintPack, BPResult, EntryView, EvalCtx, FieldView,
-  BufferValue, InputValue, InstanceView, NodeDef, NodeView, PortSpec, PortType,
+  BufferValue, ByteOrigin, InputValue, InstanceView, NodeDef, NodeView, PortSpec, PortType,
   SourceInfo, StoredMemory, Truncation,
 } from './types';
-import { fieldPortType, fieldPorts, builtinLabel, displayTitle, isInstanceView, brandInstance, looksLikeInstance } from './types';
+import { canConnect, fieldPortType, fieldPorts, builtinLabel, displayTitle, isInstanceView, brandInstance, looksLikeInstance } from './types';
 import { createAssetTable, assetIdOf } from './assets';
 import { getBuiltin, makeBuiltinCtx } from './builtins';
 import { base64ToBytes } from './doc';
+import {
+  addressHex, addressInteger, exactInteger, isExactPort, isMappedAddress, mappedAddress, MAX_ADDRESS, packMemory, safeNumber, sameMapping,
+} from './precision';
+import { isByteSpan, ReadIssue } from './binary-read';
+import { layoutFieldType, type BinaryLayout } from './layouts';
 
 /** Prefix of runtime-generated ports. Names are rebuilt from the node view. */
 export const ELEMENT_PORT = 'elem:';
@@ -59,7 +64,9 @@ const SOURCE_INPUT: PortSpec = {
 function shortValue(v: unknown): string {
   if (v == null) return '∅';
   if (typeof v === 'string') return v.length > 18 ? `${v.slice(0, 17)}…` : v;
-  if (typeof v === 'number') return String(v);
+  if (typeof v === 'number' || typeof v === 'bigint') return String(v);
+  if (isMappedAddress(v)) return addressHex(v.value);
+  if (isByteSpan(v)) return `⟨${v.buffer.bytes.length} B @ ${addressHex(v.buffer.base)}⟩`;
   if (typeof v === 'boolean') return String(v);
   if (v instanceof Uint8Array) return `⟨${v.length} B⟩`;
   if (Array.isArray(v)) return `[${v.length}]`;
@@ -92,6 +99,7 @@ function isBufferValue(v: unknown): v is BufferValue {
  * 而不是被拒之门外、或悄悄改读上游文件。
  */
 export function valueAsBuffer(v: unknown): BufferValue | undefined {
+  if (isByteSpan(v)) return v.buffer;
   if (typeof v === 'string') {
     const bytes = new TextEncoder().encode(v);
     return { assetId: assetIdOf(bytes), name: `字符串 ${v.length} 字符`, base: 0, bytes };
@@ -115,8 +123,11 @@ function nodeLabelOf(node: BPNode | undefined, packs: Map<string, BlueprintPack>
 /** Text shown where an inline input box used to be once a wire feeds it. */
 function formatInputValue(v: unknown, portName: string, inline: string, type?: PortType): string {
   if (v == null) return '∅';
+  if (isMappedAddress(v)) return addressHex(v.value);
+  if (isByteSpan(v)) return `⟨${v.buffer.bytes.length} B @ ${addressHex(v.buffer.base)}⟩`;
+  if (typeof v === 'bigint') return type === 'address' || /^-?0x/i.test(inline) ? addressHex(v) : String(v);
   if (typeof v === 'number' && Number.isFinite(v)) {
-    const hexish = type === 'number' && (portName === 'address' || /^\s*(0x|-?0X)/i.test(inline));
+    const hexish = type === 'pack-address' || type === 'number' && (portName === 'address' || /^\s*-?0x/i.test(inline));
     if (hexish && Number.isInteger(v) && v >= 0) return `0x${v.toString(16)}`;
     return String(Number(v.toPrecision(8)));
   }
@@ -124,7 +135,7 @@ function formatInputValue(v: unknown, portName: string, inline: string, type?: P
   if (typeof v === 'boolean') return String(v);
   if (v instanceof Uint8Array) return `⟨${v.length} B⟩`;
   if (isBufferValue(v)) return v.name;
-  if (isInstanceView(v)) return `#${v.index ?? '?'} · 0x${v.addr.toString(16)}`;
+  if (isInstanceView(v)) return `#${v.index ?? '?'} · ${addressHex(v.location?.value ?? v.addr)}`;
   if (Array.isArray(v)) return `[${v.length} 项]`;
   if (typeof v === 'object') return '{…}';
   return String(v);
@@ -147,7 +158,7 @@ function dynamicOf(view?: NodeView): { ports: PortSpec[]; values: Record<string,
         name,
         type: 'instance',
         label: `#${i}`,
-        hint: `0x${item.addr.toString(16)} · ${elementText(item)}`,
+        hint: `${addressHex(item.location?.value ?? item.addr)} · ${elementText(item)}`,
         dynamic: true,
       });
       values[name] = item;
@@ -159,6 +170,7 @@ function dynamicOf(view?: NodeView): { ports: PortSpec[]; values: Record<string,
   // expose the members of their nested array/record fields as ports.
   if ((view.kind === 'struct' || view.kind === 'element') && view.inst) {
     for (const f of view.inst.fields) {
+      if (f.portType) continue;
       const v = f.value;
       const label = f.label ?? f.name;
       if (Array.isArray(v)) {
@@ -203,6 +215,7 @@ export function portsFor(
   node: BPNode,
   packs: Map<string, BlueprintPack>,
   view?: NodeView,
+  layouts: readonly BinaryLayout[] = [],
 ): { inputs: PortSpec[]; outputs: PortSpec[] } {
   if (node.packId === '') {
     if (node.nodeId === 'element') {
@@ -217,7 +230,7 @@ export function portsFor(
         const bound = (node.params.typeId ?? '') !== '';
         const inputs: PortSpec[] = [
           { ...SOURCE_INPUT },
-          ...(bound ? [{ name: 'address', type: 'number' as PortType, label: '地址' }] : []),
+          ...(bound ? [{ name: 'address', type: 'pack-address' as const, label: '地址' }] : []),
           { name: 'instance', type: 'instance', label: '元素' },
           { name: 'list', type: 'list', label: '列表' },
           { name: 'index', type: 'number', label: '下标' },
@@ -238,7 +251,7 @@ export function portsFor(
                 const fd = byName.get(f.name);
                 return {
                   name: f.name,
-                  type: fd ? fieldPortType(fd) : portTypeOf(f.value),
+                  type: f.portType ?? (fd ? fieldPortType(fd) : portTypeOf(f.value)),
                   label: f.label ?? fd?.label ?? f.name,
                 };
               }),
@@ -254,7 +267,7 @@ export function portsFor(
     // Every other built-in is declarative: the registry is the single source
     // for ports, palette entries and evaluation.
     const def = getBuiltin(node.nodeId);
-    if (def) return { inputs: def.inputs, outputs: def.outputs };
+    if (def) return def.ports?.(node.params, layouts, view) ?? { inputs: def.inputs, outputs: def.outputs };
     return { inputs: [], outputs: [] };
   }
 
@@ -274,7 +287,7 @@ export function portsFor(
 
   const inputs: PortSpec[] = [
     { ...SOURCE_INPUT },
-    { name: 'address', type: 'number', label: '地址' },
+    { name: 'address', type: 'pack-address', label: '地址' },
   ];
   if (def.kind === 'array' && def.count == null) {
     inputs.push({ name: 'count', type: 'number', label: '数量' });
@@ -408,13 +421,28 @@ function toPlainJson(v: unknown, depth = 0): unknown {
 
 function toNumber(v: unknown): number | undefined {
   if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'bigint') return safeNumber(v);
   if (typeof v === 'string' && v.trim() !== '') {
     const n = Number(v);
     return Number.isFinite(n) ? n : undefined;
   }
   // an element wired into a number input means "that element's address"
-  if (isInstanceView(v)) return v.addr;
+  if (isInstanceView(v)) return v.location ? safeNumber(v.location.value) : v.addr;
   return undefined;
+}
+
+function constantValue(text: string): number | bigint | undefined {
+  const integer = exactInteger(text);
+  return integer === undefined ? toNumber(text) : safeNumber(integer) ?? integer;
+}
+
+function packAddressOf(value: unknown, buffer?: BufferValue): number | undefined {
+  if (isInstanceView(value) && value.location) return packAddressOf(value.location, buffer);
+  if (isMappedAddress(value)) {
+    return buffer && sameMapping(value, buffer) ? safeNumber(value.value) : undefined;
+  }
+  const addr = addressInteger(isInstanceView(value) ? value.addr : value);
+  return addr === undefined ? undefined : safeNumber(addr);
 }
 
 /**
@@ -442,11 +470,12 @@ export type ProblemCode =
   | 'SOURCE_CYCLE'
   | 'INVALID_VALUE'
   | 'TRUNCATED'
-  | 'PORT_MISSING';
+  | 'PORT_MISSING'
+  | ReadIssue['code'];
 
 export function evaluateGraph(
   nodes: BPNode[], edges: BPEdge[], packs: Map<string, BlueprintPack>,
-  opts?: { disabledPacks?: Set<string> },
+  opts?: { disabledPacks?: Set<string>; layouts?: readonly BinaryLayout[] },
 ): BPResult {
   countEvalRun();
   const started = performance.now();
@@ -463,8 +492,11 @@ export function evaluateGraph(
   const ports = new Map<string, { inputs: PortSpec[]; outputs: PortSpec[] }>();
   const sources = new Map<string, SourceInfo>();
   const inputValues = new Map<string, Record<string, InputValue>>();
+  const origins = new Map<string, Record<string, ByteOrigin>>();
+  const problemOrigins = new Map<string, ByteOrigin>();
   const problems: Problem[] = [];
   const state = new Map<string, 0 | 1 | 2>();
+  const declaredPorts = (node: BPNode, view?: NodeView) => portsFor(node, packs, view, opts?.layouts);
 
   /**
    * 问题条目：`message` 只写「对象：事实」，可执行建议放 `detail`，原因码放
@@ -476,20 +508,43 @@ export function evaluateGraph(
     message: string,
     code: ProblemCode,
     detail?: string,
+    addr?: bigint,
+    origin?: ByteOrigin,
   ) => {
-    problems.push({ severity, code, nodeKey: node.id, message, ...(detail ? { detail } : {}) });
+    problems.push({ severity, code, nodeKey: node.id, message, ...(detail ? { detail } : {}),
+      ...(addr === undefined ? {} : { addr }), ...(origin?.fieldId ? { fieldId: origin.fieldId } : {}) });
+    if (origin) problemOrigins.set(node.id, origin);
+  };
+  const publishOrigin = (nodeId: string, port: string, origin: ByteOrigin) => {
+    let byPort = origins.get(nodeId);
+    if (!byPort) origins.set(nodeId, (byPort = Object.create(null) as Record<string, ByteOrigin>));
+    byPort[port] = origin;
+  };
+  const inputOrigin = (nodeId: string, port: string) => {
+    const input = incoming.get(nodeId)?.get(port);
+    return input && (origins.get(input.from.node)?.[input.from.port] ?? problemOrigins.get(input.from.node));
   };
 
   /* ---------------------------------------------------------- source trace */
   const assets = createAssetTable();
   const fileBuffers = new Map<string, BufferValue>();
+  const fileErrors = new Map<string, string>();
   const bufferOfFile = (n: BPNode): BufferValue | undefined => {
-    if (!n.source) return undefined;
+    if (!n.source?.data) return undefined;
     const hit = fileBuffers.get(n.id);
     if (hit) return hit;
     // 同内容只保留一份字节：第二次解码的数组被资产表里的第一份替换掉
-    const asset = assets.ensure(decodeBuffer(n.source));
-    const value: BufferValue = { assetId: asset.id, name: n.source.name, base: n.source.base, bytes: asset.bytes };
+    if (fileErrors.has(n.id)) return undefined;
+    const base = addressInteger(n.source.base);
+    let bytes: Uint8Array;
+    try { bytes = decodeBuffer(n.source); }
+    catch { fileErrors.set(n.id, '文件内联字节无效'); return undefined; }
+    if (base === undefined || base + BigInt(bytes.length) > MAX_ADDRESS + 1n) {
+      fileErrors.set(n.id, '转储映射超出 64 位地址范围');
+      return undefined;
+    }
+    const asset = assets.ensure(bytes);
+    const value: BufferValue = { assetId: asset.id, name: n.source.name, base: safeNumber(base) ?? base, bytes: asset.bytes };
     fileBuffers.set(n.id, value);
     return value;
   };
@@ -500,8 +555,17 @@ export function evaluateGraph(
    * the graph's default file, and its children inherit exactly that file.
    */
   const carriesContext = (n: BPNode): boolean =>
-    isFile(n) || portsFor(n, packs).inputs.some((p) => p.context);
-  const defaultFile = nodes.find((n) => isFile(n) && n.source);
+    isFile(n) || declaredPorts(n).inputs.some((p) => p.context);
+  const mappings = new Map<string, BPNode>();
+  for (const n of nodes) {
+    const buffer = isFile(n) ? bufferOfFile(n) : undefined;
+    if (buffer) {
+      const key = `${buffer.assetId}@${buffer.base}`;
+      if (!mappings.has(key)) mappings.set(key, n);
+    }
+  }
+  const availableFiles = [...mappings.values()];
+  const defaultFile = availableFiles.length === 1 ? availableFiles[0] : undefined;
   const defaultBuffer = defaultFile ? bufferOfFile(defaultFile) : undefined;
 
   const chainOf = (self: BPNode, from: SourceInfo): string[] =>
@@ -514,8 +578,15 @@ export function evaluateGraph(
    * 判定只看端口声明类型，不执行任何节点。
    */
   const handsBytes = (src: BPNode, port: string): boolean => {
-    const spec = portsFor(src, packs).outputs.find((p) => p.name === port);
-    return spec?.type === 'string' || spec?.type === 'bytes';
+    const spec = declaredPorts(src).outputs.find((p) => p.name === port);
+    if (spec) return spec.type === 'string' || spec.type === 'bytes' || spec.type === 'span';
+    // Stable field IDs let us classify local record outputs even before a collection item is selected.
+    if (!src.packId && (src.nodeId === 'item' || src.nodeId === 'element')) {
+      const field = /^field:([^:]+):([^:]+)$/.exec(port);
+      const f = field && opts?.layouts?.find((l) => l.id === field[1])?.fields.find((f) => f.id === field[2]);
+      return !!f && ['string', 'bytes'].includes(layoutFieldType(f));
+    }
+    return false;
   };
 
   const infoCache = new Map<string, SourceInfo>();
@@ -558,6 +629,7 @@ export function evaluateGraph(
           chain: [node.id, src.id],
           via: { node: wire.from.node, port: wire.from.port },
           pendingValue: true,
+          valueSource: { node: wire.from.node, port: wire.from.port },
         };
       }
       const r = src ? trace(src, visiting, false) : undefined;
@@ -567,7 +639,11 @@ export function evaluateGraph(
         mode: 'explicit',
         chain: chainOf(node, r ?? { mode: 'none', chain: src ? [src.id] : [] }),
         via: { node: wire.from.node, port: wire.from.port },
-        wireMissing: !r?.buffer,
+        wireMissing: !r?.buffer && !r?.pendingValue,
+        pendingValue: r?.pendingValue,
+        valueSource: r?.valueSource,
+        conflict: r?.conflict,
+        candidates: r?.candidates,
         sourceCycle: r?.sourceCycle,
       };
     }
@@ -590,36 +666,43 @@ export function evaluateGraph(
 
     // 4. inherit through every other incoming edge, one hop at a time
     const found: { info: SourceInfo; edge: BPEdge }[] = [];
+    const onlyPort = !node.packId ? getBuiltin(node.nodeId)?.inheritSourceFrom : undefined;
     for (const e of inc?.values() ?? []) {
-      if (e.to.port === SOURCE_PORT) continue;
+      if (e.to.port === SOURCE_PORT || (onlyPort && e.to.port !== onlyPort)) continue;
       const src = byId.get(e.from.node);
       if (!src) continue;
       const r = trace(src, visiting, false);
-      if (r.buffer) found.push({ info: r, edge: e });
+      if (r.buffer || r.pendingValue || r.wireMissing || r.pinMissing || r.conflict) found.push({ info: r, edge: e });
     }
     if (found.length) {
       const first = found[0].info;
-      const names = found.map((f) => f.info.buffer?.name ?? '?');
-      const conflict = found.some((f) => f.info.fileId !== first.fileId);
+      const names = found.map(({ info, edge }) => info.buffer?.name ?? nodeLabelOf(byId.get(edge.from.node), packs));
+      const identity = (r: SourceInfo): string => r.valueSource
+        ? JSON.stringify(r.valueSource)
+        : r.buffer ? `${r.buffer.assetId}@${r.buffer.mappingBase ?? r.buffer.base}:${r.buffer.base}+${r.buffer.bytes.length}`
+          : `missing:${r.chain[r.chain.length - 1]}`;
+      const conflict = found.some((f) => f.info.conflict || identity(f.info) !== identity(first));
       return {
-        buffer: first.buffer,
-        fileId: first.fileId,
+        buffer: conflict ? undefined : first.buffer,
+        fileId: conflict ? undefined : first.fileId,
         mode: 'upstream',
         chain: chainOf(node, first),
         via: { node: found[0].edge.from.node, port: found[0].edge.from.port },
         conflict,
+        pendingValue: !conflict && first.pendingValue,
+        valueSource: !conflict ? first.valueSource : undefined,
+        wireMissing: first.wireMissing,
+        pinMissing: first.pinMissing,
         candidates: conflict ? [...new Set(names)] : undefined,
         sourceCycle: found.some((f) => f.info.sourceCycle),
       };
     }
 
-    // 5. A node with no upstream file context falls back to the graph's first
-    //    loaded File. An intermediate hop only gets that fallback when it is
-    //    itself a parsing node; constants stay context-free.
+    // 5. Fall back only to a unique mapping; constants stay context-free.
     if (!root && !carriesContext(node)) return { mode: 'none', chain: [node.id] };
     // 没有任何输入端口且不是 File 的节点（「标注 / Note」这类纯文档）：
     // 永远不归属文件，即使它自己就是当前解析目标。
-    if (!isFile(node) && portsFor(node, packs).inputs.length === 0) {
+    if (!isFile(node) && declaredPorts(node).inputs.length === 0) {
       return { mode: 'none', chain: [node.id] };
     }
     return {
@@ -627,6 +710,7 @@ export function evaluateGraph(
       fileId: defaultFile?.id,
       mode: defaultBuffer ? 'default' : 'none',
       chain: defaultFile ? [node.id, defaultFile.id] : [node.id],
+      ...(availableFiles.length > 1 ? { conflict: true, candidates: availableFiles.map((f) => f.source!.name) } : {}),
     };
   };
 
@@ -641,27 +725,19 @@ export function evaluateGraph(
   const sourceOf = (node: BPNode): SourceInfo => trace(node, new Set(), true);
 
   /** 值依赖的数据源线：在求值该节点时才算上游端口，环由状态机判定 */
-  const resolvePendingValue = (node: BPNode, info: SourceInfo): SourceInfo => {
-    if (!info.pendingValue) return info;
-    const wire = incoming.get(node.id)?.get(SOURCE_PORT);
-    const src = wire && byId.get(wire.from.node);
-    if (!wire || !src) return info;
-    const handed = evalNode(src)?.[wire.from.port];
+  const resolvePendingValue = (info: SourceInfo): SourceInfo => {
+    if (!info.pendingValue || !info.valueSource) return info;
+    const { node: sourceId, port } = info.valueSource;
+    const src = byId.get(sourceId);
+    if (!src) return { ...info, pendingValue: false, wireMissing: true };
+    const handed = evalNode(src)[port];
     const buffer = valueAsBuffer(handed);
     if (buffer) {
-      return { ...info, buffer, pendingValue: undefined, chain: [node.id, src.id] };
+      if (!isByteSpan(handed)) buffer.bytes = assets.ensure(buffer.bytes).bytes;
+      return { ...info, buffer, pendingValue: false };
     }
-    // 上游没有给出字节：退回"沿该节点的来源上下文"的解释，并标记这条线是空的
-    const r = trace(src, new Set(), false);
-    return {
-      buffer: r.buffer,
-      fileId: r.fileId,
-      mode: 'explicit',
-      chain: chainOf(node, r),
-      via: { node: src.id, port: wire.from.port },
-      wireMissing: !r.buffer,
-      sourceCycle: r.sourceCycle,
-    };
+    // 明确选中的范围或字节失效，不得扩大到上游的整份转储。
+    return { ...info, pendingValue: false, wireMissing: true };
   };
 
   /** 同一节点的有效来源只算一次：evalBody 与发布 `sources` 都读它 */
@@ -669,7 +745,7 @@ export function evaluateGraph(
   const effectiveSourceOf = (node: BPNode): SourceInfo => {
     const hit = resolvedSources.get(node.id);
     if (hit) return hit;
-    const info = resolvePendingValue(node, sourceOf(node));
+    const info = resolvePendingValue(sourceOf(node));
     const withAsset = info.buffer?.assetId ? { ...info, assetId: info.buffer.assetId } : info;
     resolvedSources.set(node.id, withAsset);
     return withAsset;
@@ -694,16 +770,29 @@ export function evaluateGraph(
     for (const [name, value] of Object.entries(extra.values)) {
       if (!(name in out)) out[name] = value;
     }
-    ports.set(node.id, portsFor(node, packs, view));
+    ports.set(node.id, declaredPorts(node, view));
     const info = effectiveSourceOf(node);
     sources.set(node.id, info);
+    const instance = view?.kind === 'struct' || view?.kind === 'element' ? view.inst : undefined;
+    if (instance?.location && info.buffer && sameMapping(instance.location, info.buffer)) {
+      const buffer = info.buffer;
+      const address = instance.location.value;
+      for (const f of instance.fields) {
+        publishOrigin(node.id, f.name, { buffer, address: address + BigInt(f.offset), length: f.size, fieldId: f.name });
+      }
+    }
+    for (const [port, value] of Object.entries(out)) {
+      if (isByteSpan(value)) publishOrigin(node.id, port, {
+        buffer: value.buffer, address: BigInt(value.buffer.base), length: value.buffer.bytes.length,
+      });
+    }
     if (info.sourceCycle) {
       add(node, 'warn', '数据源：继承链形成环', 'SOURCE_CYCLE',
         '断开其中一条连线，或在检查器里指定数据源');
     }
-    if (info.conflict && !isFile(node)) {
+    if (info.conflict && !isFile(node) && carriesContext(node)) {
       add(node, 'warn', '数据源：上游连到了不同的输入文件', 'SOURCE_CONFLICT',
-        `候选 ${(info.candidates ?? []).join('、')}；当前使用 ${info.buffer?.name ?? '?'}`);
+        `候选 ${(info.candidates ?? []).join('、')}；请明确选择数据源`);
     }
     // An explicit source that hands over no file is reported once: a buffer
     // consumer already fails inside the body with the same explanation, and a
@@ -724,12 +813,13 @@ export function evaluateGraph(
   const portLabelOf = (src: BPNode | undefined, port: string): string => {
     if (!src) return port;
     const spec = ports.get(src.id)?.outputs.find((p) => p.name === port)
-      ?? portsFor(src, packs).outputs.find((p) => p.name === port);
+      ?? declaredPorts(src).outputs.find((p) => p.name === port);
     return spec?.label ?? port;
   };
 
   const evalBody = (node: BPNode): Record<string, unknown> => {
-    const portInfo = portsFor(node, packs);
+    const portInfo = declaredPorts(node);
+    const builtin = !node.packId ? getBuiltin(node.nodeId) : undefined;
     const resolved: Record<string, InputValue> = {};
     inputValues.set(node.id, resolved);
 
@@ -738,14 +828,24 @@ export function evaluateGraph(
 
     const inputOf = (name: string): unknown => {
       const spec = portInfo.inputs.find((p) => p.name === name);
-      const inline = node.params[name] ?? '';
+      const inline = node.params[name] ?? (builtin?.precise ? builtin.defaults?.[name] : '') ?? '';
       const e = incoming.get(node.id)?.get(name);
       if (e) {
         const src = byId.get(e.from.node);
         let value: unknown;
-        if (src) {
+        if (spec?.context) {
+          value = sourceInfo.buffer;
+        } else if (src) {
           const srcOut = evalNode(src);
           value = srcOut[e.from.port];
+          const from = ports.get(src.id)?.outputs.find((p) => p.name === e.from.port);
+          if (spec && (builtin?.precise || spec.type === 'pack-address') && (!from || !canConnect(from.type, spec.type))) value = undefined;
+          if (spec?.type === 'address' && (from?.type === 'pack-address' || isInstanceView(value))) {
+            const location = isInstanceView(value) ? value.location : undefined;
+            const at = addressInteger(isInstanceView(value) ? value.addr : value);
+            const buffer = resolvedSources.get(src.id)?.buffer;
+            value = location ?? (buffer && at !== undefined ? mappedAddress(buffer, at) : undefined);
+          }
         }
         resolved[name] = {
           value,
@@ -761,7 +861,11 @@ export function evaluateGraph(
         };
         return value;
       }
-      const value = spec?.type === 'number' ? toNumber(inline === '' ? undefined : inline) : (inline === '' ? undefined : inline);
+      const value = spec?.context ? sourceInfo.buffer : spec?.type === 'numeric' ? (exactInteger(inline) ?? (
+        /^[+-]?(?:\d*\.\d+|\d+\.)(?:e[+-]?\d+)?$/i.test(inline.trim()) ? toNumber(inline) : undefined
+      )) : spec?.type === 'pack-address' ? packAddressOf(inline)
+        : isExactPort(spec?.type) ? exactInteger(inline)
+          : spec?.type === 'number' ? toNumber(inline) : (inline === '' ? undefined : inline);
       resolved[name] = {
         value,
         display: value === undefined ? '∅' : formatInputValue(value, name, inline, spec?.type),
@@ -774,7 +878,7 @@ export function evaluateGraph(
     const requireNumber = (name: string, fallback?: number): number | undefined => {
       const v = inputOf(name);
       if (v == null) return fallback;
-      const n = toNumber(v);
+      const n = name === 'address' ? packAddressOf(v, sourceInfo.buffer) : toNumber(v);
       if (n == null) {
         add(node, 'error', `输入 ${name}：不是数字`, 'BAD_INPUT', `收到 ${String(v)}`);
         return undefined;
@@ -793,35 +897,29 @@ export function evaluateGraph(
         : undefined;
 
     try {
-      // Resolve every declared input up front. The UI then always has the real
-      // value for each port, including context ports the node body never reads.
+      // A context input displays the resolved source, without evaluating a source-only edge.
       for (const p of portInfo.inputs) inputOf(p.name);
 
       /* built-ins */
       if (node.packId === '') {
         if (node.nodeId === 'file') {
           const src = node.source;
-          if (!src) {
-            add(node, 'error', '文件：还没有载入 .bin', 'NO_SOURCE');
-            setView({ kind: 'file', name: node.params.name || '未载入', size: 0, base: 0, error: '未载入文件' });
-            out[SOURCE_PORT] = undefined;
-            out.base = 0;
+          const buffer = bufferOfFile(node);
+          if (!buffer) {
+            const error = fileErrors.get(node.id) ?? '未载入文件';
+            add(node, 'error', `文件：${error}`, src?.data ? 'BAD_INPUT' : 'NO_SOURCE');
+            setView({ kind: 'file', name: src?.name ?? node.params.name ?? '未载入', size: 0, base: 0, error });
             out.size = 0;
           } else {
-            // 与 bufferOfFile 共用同一份资产：File 节点的 buffer 输出
-            // 和"数据源继承"必须指向同一个 assetId，否则跟随列表会出现两条
-            const bytes = decodeBuffer(src);
-            const asset = assets.ensure(bytes);
-            const value: BufferValue = { assetId: asset.id, name: src.name, base: src.base, bytes: asset.bytes };
-            out[SOURCE_PORT] = value;
-            out.base = src.base;
-            out.size = bytes.length;
-            setView({ kind: 'file', name: src.name, size: bytes.length, base: src.base });
+            out[SOURCE_PORT] = buffer;
+            out.base = mappedAddress(buffer, BigInt(buffer.base));
+            out.size = buffer.bytes.length;
+            setView({ kind: 'file', name: buffer.name, size: buffer.bytes.length, base: buffer.base });
           }
           return out;
         }
         if (node.nodeId === 'number') {
-          const n = toNumber(node.params.value ?? '0');
+          const n = constantValue(node.params.value ?? '0');
           if (n == null) {
             add(node, 'error', '数值：需要一个数字', 'BAD_INPUT');
             setView({ kind: 'number', value: 0, error: '需要一个数字' });
@@ -844,7 +942,8 @@ export function evaluateGraph(
             const list = inputOf('list');
             if (Array.isArray(list)) {
               index = requireNumber('index', 0) ?? 0;
-              item = list[index] as InstanceView | undefined;
+              const entry = list[index];
+              item = isInstanceView(entry) ? entry : undefined;
               if (!item) {
                 add(node, 'error', `元素：下标 ${index} 超出范围`, 'INDEX_OUT_OF_RANGE', `列表共 ${list.length} 项`);
                 setView({ kind: 'element', error: `下标 ${index} 越界` });
@@ -852,7 +951,7 @@ export function evaluateGraph(
             } else {
               // 地址模式：没有接元素/列表时，按跟随地址推断出的类型在该地址解码。
               // 没有绑定类型的空节点是合法状态——不铺字段、也不报错。
-              const addr = toNumber(inputOf('address'));
+              const addr = packAddressOf(inputOf('address'), sourceInfo.buffer);
               if (addr == null) {
                 if (bound) {
                   add(node, 'error', '元素：已绑定类型但缺少地址', 'BAD_INPUT', '接一个地址端口，或删除这个节点');
@@ -882,7 +981,8 @@ export function evaluateGraph(
                   sourceNote ?? '把 File 节点连到「数据源」，或放到某条继承链下游');
                   setView({ kind: 'element', error: '需要输入文件' });
                 } else {
-                  const mem = new Memory(sourceInfo.buffer.bytes, sourceInfo.buffer.base);
+                  const mem = packMemory(sourceInfo.buffer);
+                  if (!mem) throw new Error('该 pack 只支持安全整数地址');
                   const compat = compatPack(pack);
                   const entry = makeEntry(mem, pack, compat, packMemApi(mem), type.name, addr);
                   item = makeView(entry, compat, mem);
@@ -897,11 +997,12 @@ export function evaluateGraph(
           }
           return out;
         }
-        const def = getBuiltin(node.nodeId);
+        const def = builtin;
         if (def?.run) {
           const values: Record<string, unknown> = {};
+          let invalid = false;
           for (const p of portInfo.inputs) {
-            let v = inputOf(p.name);
+            let v = resolved[p.name]?.value;
             // A context input with no wire still sees the inherited file.
             if (v == null && p.name === SOURCE_PORT && p.type === 'buffer') {
               v = sourceInfo.buffer;
@@ -912,20 +1013,38 @@ export function evaluateGraph(
                 rec.invalid = v == null;
               }
             }
-            if (v == null) {
+            if (def.precise) {
+              if (p.context) {
+                if (sourceInfo.conflict) throw new ReadIssue('SOURCE_CONFLICT', '来源不唯一，请指定数据源');
+              } else if (!def.acceptMissing && v == null && (resolved[p.name]?.wired || resolved[p.name]?.inline.trim())) {
+                throw new ReadIssue('BAD_INPUT', `${p.label}：输入未能求值或类型不匹配`);
+              }
+              values[p.name] = v;
+            } else if (v == null) {
               add(node, 'error', `输入 ${p.name}：缺少值`, 'BAD_INPUT');
+              invalid = true;
             } else if (p.type === 'number' && toNumber(v) == null) {
-              add(node, 'error', `输入 ${p.name}：不是数字`, 'BAD_INPUT');
+              add(node, 'error', `输入 ${p.name}：不能无损地作为数值使用`, 'BAD_INPUT');
+              invalid = true;
             } else {
               values[p.name] = p.type === 'number' ? toNumber(v) : v;
             }
           }
-          const bctx = makeBuiltinCtx(sourceInfo.buffer, node.params, sourceNote);
+          if (invalid) {
+            setView({ kind: 'calc', outputs: out, error: '输入缺失或无法无损转换' });
+            return out;
+          }
+          const bctx = makeBuiltinCtx(sourceInfo.buffer, node.params, sourceNote, opts?.layouts,
+            (issue, warn, origin) => add(node, warn ? 'warn' : 'error', issue.message, issue.code, undefined, issue.address,
+              origin ?? (issue.address !== undefined && sourceInfo.buffer
+                ? { buffer: sourceInfo.buffer, address: issue.address, length: issue.length ?? 1 } : undefined)),
+            (port) => inputOrigin(node.id, port), (port, origin) => publishOrigin(node.id, port, origin));
           const produced = def.run(values, bctx) ?? {};
-          for (const p of portInfo.outputs) out[p.name] = produced[p.name];
+          const view = def.view?.(produced);
+          for (const p of declaredPorts(node, view).outputs) out[p.name] = produced[p.name];
           let detail: string | undefined;
-          try { detail = def.detail?.(values, out, bctx); } catch { detail = undefined; }
-          setView({ kind: 'calc', outputs: out, detail });
+          try { detail = def.detail?.(values, produced, bctx); } catch { detail = undefined; }
+          setView(view ?? { kind: 'calc', outputs: out, detail });
           return out;
         }
         add(node, 'error', `节点：未知内置类型 ${node.nodeId}`, 'UNKNOWN_NODE');
@@ -945,7 +1064,8 @@ export function evaluateGraph(
       }
       const compat = compatPack(pack);
       const buffer = sourceInfo.buffer;
-      const mem = buffer ? new Memory(buffer.bytes, buffer.base) : new Memory(new Uint8Array(0), 0);
+      const mem = buffer ? packMemory(buffer) : new Memory(new Uint8Array(0), 0);
+      if (!mem) throw new Error('该 pack 只支持安全整数地址');
       const memApi = packMemApi(mem);
       const ctxBase = {
         mem, pack, nodeId: node.id, endian: pack.endian, pointerSize: pack.pointerSize,
@@ -1107,7 +1227,12 @@ export function evaluateGraph(
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      add(node, 'error', '节点：求值失败', /越界|超出|不在缓冲|out of range/i.test(msg) ? 'OUT_OF_BOUNDS' : 'EVAL_FAILED', msg);
+      const code = e instanceof ReadIssue ? e.code : /越界|超出|不在缓冲|out of range/i.test(msg) ? 'OUT_OF_BOUNDS' : 'EVAL_FAILED';
+      const at = e instanceof ReadIssue ? e.address : undefined;
+      const origin = at !== undefined && sourceInfo.buffer
+        ? { buffer: sourceInfo.buffer, address: at, length: e instanceof ReadIssue ? e.length ?? 1 : 1 }
+        : inputOrigin(node.id, 'span');
+      add(node, 'error', '节点：求值失败', code, msg, at ?? origin?.address, origin);
       const builtin = node.packId === '';
       if (builtin && node.nodeId === 'number') setView({ kind: 'number', value: 0, error: msg });
       else if (builtin && node.nodeId === 'element') setView({ kind: 'element', error: msg });
@@ -1150,7 +1275,7 @@ export function evaluateGraph(
     );
   }
 
-  return { outputs, views, ports, sources, inputs: inputValues, assets, problems, ms: performance.now() - started, msSource };
+  return { outputs, views, ports, sources, inputs: inputValues, assets, problems, origins, problemOrigins, ms: performance.now() - started, msSource };
 }
 
 /** Rough node height for layout; the canvas can use this for auto placement. */

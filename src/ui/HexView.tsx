@@ -19,6 +19,8 @@ interface Props {
   cols?: 8 | 16;
   /** 在缓冲区中点选 / 跳转到的字节：强调显示，便于确认位置 */
   focusAddr?: number | null;
+  /** For file-relative views, render exact absolute addresses without changing byte indexes. */
+  displayBase?: bigint;
 }
 
 const TONE_BG: Record<string, string> = {
@@ -28,7 +30,7 @@ const TONE_BG: Record<string, string> = {
 };
 
 export default function HexView({
-  mem, addr, len, highlight = [], maxRows = 64, onPickByte, onHoverAddr, compact, cols, focusAddr,
+  mem, addr, len, highlight = [], maxRows = 64, onPickByte, onHoverAddr, compact, cols, focusAddr, displayBase,
 }: Props) {
   const width = cols ?? (compact ? 8 : 16);
   const rows = useMemo(() => {
@@ -68,7 +70,7 @@ export default function HexView({
       <div className="hex-body">
         {rows.map((r) => (
           <div className={`hex-row${focusAddr != null && focusAddr >= r.addr && focusAddr < r.addr + width ? ' focus' : ''}`} key={r.addr}>
-            <span className="hex-addr">{r.addr.toString(16).toUpperCase().padStart(8, '0')}</span>
+            <span className="hex-addr">{(displayBase === undefined ? r.addr : displayBase + BigInt(r.addr - mem.base)).toString(16).toUpperCase().padStart(8, '0')}</span>
             <span className="hex-bytes">
               {r.bytes.map((b, i) => {
                 const a = r.addr + i;

@@ -349,6 +349,11 @@ button.bp-hist:disabled { opacity: 0.4; cursor: default; }
 .bp-save-text { opacity: 0.85; }
 .bp-save-text.bad { color: var(--red); }
 .bp-save-text.warn { color: var(--amber); }
+.bp-save-action {
+  border: 0; background: none; padding: 0; cursor: pointer; font: inherit;
+  text-decoration: underline dotted; text-underline-offset: 2px;
+}
+.bp-save-action:hover { color: var(--text); }
 
 /* 面板折叠按钮（节点库标题栏 / 检查器标签栏各一个） */
 button.bp-fold {
@@ -391,7 +396,7 @@ button.bp-fold:hover { color: var(--text); border-color: var(--line-2); backgrou
 .bp-group-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bp-group-btn em { margin-left: auto; font-style: normal; font-size: 9px; letter-spacing: 0; text-transform: none; color: var(--dim); }
 /* --- pack 管理：工具栏 / 开关 / 就地确认 / 行内重命名 --- */
-.bp-pack-new { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding: 0 2px 6px; }
+.bp-pack-import { display: flex; padding: 0 2px 6px; }
 .bp-mini {
   height: 18px; padding: 0 6px; flex: none;
   display: inline-flex; align-items: center;
@@ -462,8 +467,8 @@ button.bp-fold:hover { color: var(--text); border-color: var(--line-2); backgrou
 .bp-drag-ghost.out .bp-drag-dot { background: var(--dim); }
 .bp-pal-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
 .bp-pal-dot[data-kind="计算"] { background: var(--violet); }
-.bp-pal-dot[data-kind="解析"] { background: var(--amber); }
-.bp-pal-dot[data-kind="数据源"], .bp-pal-dot[data-kind="常量"] { background: #7dd3fc; }
+.bp-pal-dot[data-kind="解析"], .bp-pal-dot[data-kind="读取"] { background: var(--amber); }
+.bp-pal-dot[data-kind="数据源"], .bp-pal-dot[data-kind="辅助"] { background: #7dd3fc; }
 .bp-pal-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bp-pal-kind { font-size: 9px; color: var(--dim); }
 .bp-file-btn {
@@ -474,12 +479,11 @@ button.bp-fold:hover { color: var(--text); border-color: var(--line-2); backgrou
 .bp-file-btn:hover { color: var(--text); border-color: var(--accent); }
 .bp-file-btn.wide { width: 100%; justify-content: center; }
 .bp-empty { padding: 10px 6px; font-size: 10px; color: var(--dim); }
-.bp-empty-pack { display: flex; align-items: center; gap: 8px; padding: 10px 4px; }
-.bp-empty-pack .bp-file-btn { height: 22px; padding: 0 6px; font-size: 10px; }
+.bp-empty-pack { padding: 10px 4px; }
 
 .bp-canvas-wrap { position: relative; min-width: 0; min-height: 0; }
 .bp-canvas {
-  position: absolute; inset: 0; overflow: hidden; cursor: default; user-select: none;
+  position: absolute; inset: 0; overflow: clip; cursor: default; user-select: none;
   background:
     radial-gradient(circle at 1px 1px, rgba(120,150,180,.13) 1px, transparent 0) 0 0 / 22px 22px,
     radial-gradient(1000px 600px at 65% 40%, rgba(78,216,192,.045), transparent 70%),
@@ -819,6 +823,28 @@ button.bp-fold:hover { color: var(--text); border-color: var(--line-2); backgrou
 .bp-quick-label { flex: none; }
 .bp-quick-foot { padding: 6px 10px; border-top: 1px solid var(--line); font-size: 9px; color: var(--dim); }
 
+/* 工作区确认 */
+.bp-confirm {
+  width: min(440px, 92vw);
+  padding: 16px 18px 14px;
+  background: var(--panel); border: 1px solid var(--line-2); border-radius: 10px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+}
+.bp-confirm-title { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+.bp-confirm-body { margin: 0 0 14px; font-size: 11px; line-height: 1.65; color: var(--text-2); white-space: pre-line; }
+.bp-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.btn.danger { border-color: rgba(226, 90, 90, 0.55); color: #f08a8a; }
+.btn.danger:hover { background: rgba(226, 90, 90, 0.14); border-color: #e25a5a; color: #ffb0b0; }
+.bp-sample-flag {
+  padding: 2px 7px; border: 1px solid rgba(214, 158, 46, 0.5); border-radius: 999px;
+  color: #d9a63a; font-size: 9px; letter-spacing: 0.06em;
+}
+.bp-follow-source-pick { padding: 0 10px 8px; }
+.bp-follow-source-pick .in { width: 100%; height: 26px; font-size: 10px; }
+.bp-follow-advanced { margin: 0 10px 8px; border-top: 1px solid var(--line); padding-top: 6px; }
+.bp-follow-advanced summary { cursor: pointer; font-size: 9px; color: var(--dim); }
+.bp-follow-advanced .bp-follow-chain { padding: 6px 0 0; }
+
 /* 连线失败：指针落点气泡（3s） */
 .bp-wire-error {
   position: absolute; z-index: 12; transform: translate(-50%, calc(-100% - 10px));
@@ -852,8 +878,8 @@ button.bp-fold:hover { color: var(--text); border-color: var(--line-2); backgrou
 }
 
 /* --- 内置节点分组、配置与数据明细 --- */
-.bp-pal-dot[data-kind="数值"], .bp-pal-dot[data-kind="校验"] { background: var(--violet); }
-.bp-pal-dot[data-kind="地址"] { background: #f0a868; }
+.bp-pal-dot[data-kind="集合"], .bp-pal-dot[data-kind="校验"] { background: var(--violet); }
+.bp-pal-dot[data-kind="定位"] { background: #f0a868; }
 .bp-name-error { flex: none; font-size: 9px; color: var(--red); }
 .bp-empty-search { padding: 16px 4px; text-align: center; }
 
@@ -1076,6 +1102,17 @@ button.bp-hist.bp-nav { font-size: 17px; line-height: 1; }
   color: #53647b;
 }
 .bp-tree-body { position: relative; flex: 1; min-height: 0; overflow: auto; }
+.bp-layout-editor { margin: 8px 0; }
+.bp-layout-fields { margin-top: 8px; }
+.bp-layout-fields summary { cursor: pointer; color: var(--dim); font-size: 11px; }
+.bp-layout-field { min-width: 0; margin: 7px 0; border: 1px solid var(--line); border-radius: 5px; padding: 7px; }
+.bp-layout-field legend { color: var(--dim); font-size: 10px; }
+.bp-interpret { margin: 7px 0; font-size: 11px; }
+.bp-interpret summary { cursor: pointer; color: var(--accent); }
+.bp-local-tree { display: flex; flex: 1; min-height: 0; }
+.bp-local-tree-list { display: flex; flex-direction: column; gap: 4px; width: min(255px, 35%); overflow: auto; padding: 8px; border-right: 1px solid var(--line); }
+.bp-local-tree-pages { display: flex; gap: 6px; position: sticky; top: 0; background: var(--panel); }
+.bp-local-tree-fields { flex: 1; min-width: 0; overflow: auto; padding: 14px; }
 .bp-tree-spacer { position: relative; }
 .bp-tree-row {
   position: absolute; left: 0; right: 0; height: 22px;

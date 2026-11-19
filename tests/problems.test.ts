@@ -10,6 +10,8 @@ const CODES = [
   'CYCLE', 'NO_SOURCE', 'BAD_INPUT', 'INDEX_OUT_OF_RANGE', 'UNKNOWN_NODE',
   'NODE_MISSING', 'PACK_DISABLED', 'EVAL_FAILED', 'OUT_OF_BOUNDS', 'SOURCE_CONFLICT',
   'SOURCE_CYCLE', 'INVALID_VALUE', 'TRUNCATED', 'PORT_MISSING',
+  'READ_LIMIT', 'MISSING_TERMINATOR', 'INVALID_ENCODING', 'UNMAPPED_POINTER', 'INVALID_LAYOUT',
+  'RECORD_CYCLE', 'ASSERT_FAILED', 'ASSERT_UNAVAILABLE',
 ];
 
 function pack() {
@@ -59,10 +61,12 @@ describe('问题原因码与文案格式', () => {
 
   it('数据源冲突 → SOURCE_CONFLICT，消息仍含「不同的输入文件」', () => {
     const loaded = loadBlueprintPack(demoSource).pack!;
+    const other = demoBinary();
+    other[0] ^= 1; // 相同内容、相同基址是同一映射；冲突需要不同映射
     const r = evaluateGraph(
       [
         fileNode('f1'),
-        { ...fileNode('f2'), source: { name: 'other.bin', base: 0, data: bytesToBase64(demoBinary()) } },
+        { ...fileNode('f2'), source: { name: 'other.bin', base: 0, data: bytesToBase64(other) } },
         node('h1', 'p', 'header', { address: '0x0' }),
         node('h2', 'q', 'header', { address: '0x0' }),
         node('both', 'p', 'header', { address: '0x0' }),

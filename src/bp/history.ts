@@ -25,8 +25,12 @@ export interface HistoryState {
   entries: HistoryEntry[];
   /** -1 .. entries.length - 1 */
   cursor: number;
-  /** 保存点所在游标；null 表示保存点已被挤出栈（视为始终有未保存改动） */
-  savedCursor: number | null;
+  /**
+   * 实际写入缓存的那份文档快照；null 表示保存点已被挤出栈或从未保存。
+   * 只比较快照身份：撤销后改写 redo 分支会复用同一个游标数字，
+   * 但文档已经不是保存时的那一份。
+   */
+  savedDoc: DocState | null;
   lastMerge: { key: string; at: number; cursor: number } | null;
 }
 
@@ -37,13 +41,13 @@ export interface PushOptions {
   windowMs?: number;
 }
 
-export function initHistory(doc: DocState): HistoryState {
-  return { base: doc, entries: [], cursor: -1, savedCursor: -1, lastMerge: null };
+export function initHistory(doc: DocState, saved = true): HistoryState {
+  return { base: doc, entries: [], cursor: -1, savedDoc: saved ? doc : null, lastMerge: null };
 }
 
 /** 打开图 / 恢复示例：清空 undo 与 redo */
-export function resetHistory(doc: DocState): HistoryState {
-  return initHistory(doc);
+export function resetHistory(doc: DocState, saved = false): HistoryState {
+  return initHistory(doc, saved);
 }
 
 export function currentDoc(h: HistoryState): DocState {
@@ -68,6 +72,11 @@ export function redoLabel(h: HistoryState): string | null {
   return h.cursor < h.entries.length - 1 ? h.entries[h.cursor + 1].label : null;
 }
 
+/** 保存点是否仍在当前撤销栈里（base 或任一条 entry 的文档快照） */
+function reachable(h: Pick<HistoryState, 'base' | 'entries'>, doc: DocState): boolean {
+  return doc === h.base || h.entries.some((e) => e.doc === doc);
+}
+
 /** 提交一份新文档：同一 `mergeKey` 在窗口内覆盖上一条，不新增历史 */
 export function push(h: HistoryState, doc: DocState, label: string, opts: PushOptions = {}): HistoryState {
   if (sameDoc(currentDoc(h), doc)) return h;
@@ -81,13 +90,15 @@ export function push(h: HistoryState, doc: DocState, label: string, opts: PushOp
     && now - h.lastMerge.at <= windowMs) {
     const entries = h.entries.slice();
     entries[h.cursor] = { doc, label, at: now };
-    return { ...h, entries, lastMerge: { key, at: now, cursor: h.cursor } };
+    const next = { ...h, entries, lastMerge: { key, at: now, cursor: h.cursor } };
+    // 被覆盖的那条如果正是保存点，保存点已经不存在于新历史里
+    return { ...next, savedDoc: h.savedDoc && reachable(next, h.savedDoc) ? h.savedDoc : null };
   }
 
   const entries = h.entries.slice(0, h.cursor + 1);
   entries.push({ doc, label, at: now });
   let cursor = entries.length - 1;
-  let savedCursor = h.savedCursor;
+  let savedDoc = h.savedDoc;
   let base = h.base;
 
   // 超深：丢最旧的一条，并把 base 前移到被丢那条的 after
@@ -96,16 +107,11 @@ export function push(h: HistoryState, doc: DocState, label: string, opts: PushOp
     base = entries[drop - 1].doc;
     entries.splice(0, drop);
     cursor -= drop;
-    if (savedCursor !== null) savedCursor = savedCursor - drop >= -1 ? savedCursor - drop : null;
   }
 
-  return {
-    base,
-    entries,
-    cursor,
-    savedCursor,
-    lastMerge: key ? { key, at: now, cursor } : null,
-  };
+  const next = { base, entries, cursor, savedDoc, lastMerge: key ? { key, at: now, cursor } : null };
+  if (savedDoc && !reachable(next, savedDoc)) savedDoc = null;
+  return { ...next, savedDoc };
 }
 
 export function undo(h: HistoryState): HistoryState {
@@ -118,11 +124,11 @@ export function redo(h: HistoryState): HistoryState {
   return { ...h, cursor: h.cursor + 1, lastMerge: null };
 }
 
-/** 记录「当前游标即保存点」 */
-export function markSaved(h: HistoryState): HistoryState {
-  return h.savedCursor === h.cursor ? h : { ...h, savedCursor: h.cursor };
+/** 记录「这份文档快照已写入缓存」 */
+export function markSaved(h: HistoryState, doc: DocState = currentDoc(h)): HistoryState {
+  return h.savedDoc === doc ? h : { ...h, savedDoc: doc };
 }
 
 export function isDirty(h: HistoryState): boolean {
-  return h.savedCursor === null || h.cursor !== h.savedCursor;
+  return h.savedDoc === null || h.savedDoc !== currentDoc(h);
 }

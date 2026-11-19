@@ -1,6 +1,8 @@
 /** Save/load a blueprint document (pack sources + graph + optional buffer). */
 
-import { migrateNode, type BPEdge, type BPDoc, type BPNode } from './types';
+import { BLUEPRINT_FORMAT, type BPEdge, type BPDoc, type BPNode } from './types';
+import { addressInteger } from './precision';
+import { validLayoutDocument, type BinaryLayout } from './layouts';
 
 export function bytesToBase64(bytes: Uint8Array): string {
   let s = '';
@@ -22,8 +24,9 @@ export function makeDoc(
   packs: { id: string; name: string; source: string }[],
   nodes: BPNode[],
   edges: BPEdge[],
+  layouts?: BinaryLayout[],
 ): BPDoc {
-  return { format: 'memlink-blueprint/1', packs, nodes, edges };
+  return { format: BLUEPRINT_FORMAT, packs, nodes, edges, ...(layouts ? { layouts } : {}) };
 }
 
 export function parseDoc(text: string): { doc?: BPDoc; error?: string } {
@@ -34,12 +37,13 @@ export function parseDoc(text: string): { doc?: BPDoc; error?: string } {
     return { error: `JSON 解析失败：${e instanceof Error ? e.message : String(e)}` };
   }
   const d = raw as Partial<BPDoc>;
-  if (!d || d.format !== 'memlink-blueprint/1') {
-    return { error: '不是 memlink-blueprint/1 文件' };
+  if (!d || d.format !== BLUEPRINT_FORMAT) {
+    return { error: `不支持此蓝图版本，请使用新版蓝图（${BLUEPRINT_FORMAT}）` };
   }
   if (!Array.isArray(d.packs) || !Array.isArray(d.nodes) || !Array.isArray(d.edges)) {
     return { error: '文件缺少 packs/nodes/edges' };
   }
+  if (d.layouts !== undefined && !validLayoutDocument(d.layouts)) return { error: '蓝图的结构布局数据非法' };
   for (const p of d.packs) {
     if (!p || typeof p.id !== 'string' || typeof p.source !== 'string') {
       return { error: 'pack 条目缺少 id/source' };
@@ -50,7 +54,7 @@ export function parseDoc(text: string): { doc?: BPDoc; error?: string } {
       return { error: '节点条目缺少 id/packId/nodeId' };
     }
     if (!Number.isFinite(n.x) || !Number.isFinite(n.y)) return { error: `节点 ${n.id} 的坐标非法` };
-    if (n.source && (typeof n.source.name !== 'string' || !Number.isFinite(n.source.base) || typeof n.source.data !== 'string')) {
+    if (n.source && (typeof n.source.name !== 'string' || addressInteger(n.source.base) === undefined || typeof n.source.data !== 'string')) {
       return { error: `节点 ${n.id} 的 buffer 数据非法` };
     }
   }
@@ -60,10 +64,8 @@ export function parseDoc(text: string): { doc?: BPDoc; error?: string } {
     }
   }
 
-  // `buffer` is a real context input again, so both old and new graphs keep
-  // their source wires verbatim. Only drop edges whose endpoints disappeared.
-  // 打开图时同样套用旧内置节点的合并迁移。
-  const nodeList: BPNode[] = d.nodes.map((n) => migrateNode({ ...n, params: { ...(n.params ?? {}) } }));
+  // Keep source wires verbatim. Only drop edges whose endpoints disappeared.
+  const nodeList: BPNode[] = d.nodes.map((n) => ({ ...n, params: { ...(n.params ?? {}) } }));
   const ids = new Set(nodeList.map((n) => n.id));
   const edgeList: BPEdge[] = (d.edges as BPEdge[]).filter(
     (e) => ids.has(e.from.node) && ids.has(e.to.node) && !!e.from.port && !!e.to.port,

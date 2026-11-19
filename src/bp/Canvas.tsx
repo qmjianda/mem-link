@@ -3,6 +3,8 @@ import type {
   BlueprintPack, BPEdge, BPNode, BPResult, PortSpec, PortType, SourceInfo, Truncation,
 } from './types';
 import { builtinLabel, canConnect, displayTitle, NODE_HEADER, NODE_WIDTH } from './types';
+import { addressHex, isExactPort, isMappedAddress } from './precision';
+import { isByteSpan } from './binary-read';
 import { focusFromTruncation, type TreeFocus } from './tree';
 import { builtinSubtitle } from './builtins';
 import { portsFor } from './eval';
@@ -35,6 +37,8 @@ export interface CanvasApi {
   contains: (clientX: number, clientY: number) => boolean;
   /** 视口中心的世界坐标（快速添加落点） */
   centerWorld: () => { x: number; y: number };
+  /** 当前可见区域的世界坐标范围（避免把新节点放到侧栏下面） */
+  visibleWorld: () => { minX: number; minY: number; maxX: number; maxY: number };
   /** 取消正在拖拽的连线；返回是否真的取消了（Esc 的第一级） */
   cancelPending: () => boolean;
   fitAll: () => void;
@@ -309,6 +313,9 @@ function metaFor(
 
 function valueText(v: unknown): string {
   if (v == null) return '∅';
+  if (isMappedAddress(v)) return addressHex(v.value);
+  if (isByteSpan(v)) return `${v.buffer.bytes.length} B @ ${addressHex(v.buffer.base)}`;
+  if (typeof v === 'bigint') return v.toString();
   if (typeof v === 'string') return v.length > 18 ? `${v.slice(0, 17)}…` : v;
   if (typeof v === 'number') return Number.isInteger(v) ? String(v) : String(Number(v.toPrecision(6)));
   if (typeof v === 'boolean') return v ? 'true' : 'false';
@@ -625,6 +632,17 @@ export default function Canvas({
         const w = r?.width || s.w;
         const h = r?.height || s.h;
         return toWorld((r?.left ?? 0) + w / 2, (r?.top ?? 0) + h / 2);
+      },
+      visibleWorld: () => {
+        const r = hostRef.current?.getBoundingClientRect();
+        const s = canvasSizeRef.current;
+        const left = r?.left ?? 0;
+        const top = r?.top ?? 0;
+        const right = left + (r?.width || s.w);
+        const bottom = top + (r?.height || s.h);
+        const a = toWorld(left, top);
+        const b = toWorld(right, bottom);
+        return { minX: a.x, minY: a.y, maxX: b.x, maxY: b.y };
       },
       cancelPending: () => {
         if (!pendingRef.current) return false;
@@ -1244,6 +1262,8 @@ export default function Canvas({
                 <path
                   d={lod === 'minimal' ? `M ${a.x} ${a.y} L ${b.x} ${b.y}` : edgePath(a.x, a.y, b.x, b.y)}
                   data-edge-id={e.id}
+                  data-edge-from={`${e.from.node}:${e.from.port}`}
+                  data-edge-to={`${e.to.node}:${e.to.port}`}
                   className={`bp-edge ${hot ? 'hot' : ''}${isPrimary ? ' primary' : ''} ${e.to.port === 'buffer' ? 'ctx' : ''}`}
                   style={{ stroke: typeColor(a.p.type) }}
                   markerEnd={lod === 'minimal' ? undefined : 'url(#bp-arrow)'}
@@ -1464,7 +1484,7 @@ export default function Canvas({
                       <span className="bp-row-type" title={contextSourceTitle(src)}>
                         {contextSourceLabel(src)}
                       </span>
-                    ) : p.type === 'number' ? (
+                    ) : p.type === 'number' || p.type === 'numeric' || p.type === 'pack-address' || isExactPort(p.type) ? (
                       <input
                         className="bp-in mono"
                         value={node.params[p.name] ?? ''}
@@ -1490,11 +1510,11 @@ export default function Canvas({
                     <span className="bp-row-label">{p.label}</span>
                     {val != null && <span className="bp-row-val mono" title={val}>{val}</span>}
                     {val == null && viewNode?.kind === 'calc' && viewNode.outputs[p.name] != null && (
-                      <span className="bp-row-val mono" title={String(viewNode.outputs[p.name])}>
+                      <span className="bp-row-val mono" title={isMappedAddress(viewNode.outputs[p.name]) ? valueText(viewNode.outputs[p.name]) : String(viewNode.outputs[p.name])}>
                         {valueText(viewNode.outputs[p.name])}
                       </span>
                     )}
-                    {p.name === 'count' && viewNode?.kind === 'list' && <span className="bp-row-val mono">{viewNode.count}</span>}
+                    {p.name === 'count' && (viewNode?.kind === 'list' || viewNode?.kind === 'array') && <span className="bp-row-val mono">{viewNode.count}</span>}
                     {p.name === 'value' && viewNode?.kind === 'number' && <span className="bp-row-val mono">{valueText(viewNode.value)}</span>}
                     {p.name === 'buffer' && viewNode?.kind === 'file' && <span className="bp-row-val mono">{viewNode.size} B</span>}
                     {p.name === 'base' && viewNode?.kind === 'file' && <span className="bp-row-val mono">0x{viewNode.base.toString(16)}</span>}

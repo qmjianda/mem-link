@@ -53,7 +53,7 @@ export interface MenuCtx {
   /** 不能跟随时展示给用户的原因；缺省按「不是有效地址」处理 */
   portFollowReason?: string;
   /** 跟随地址浮层标题里要显示的地址 */
-  portAddress?: number;
+  portAddress?: number | bigint;
 }
 
 export const MENU_WIDTH = 232;

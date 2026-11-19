@@ -83,7 +83,7 @@ pushEdge('n_file', 'buffer', idOf(0, 1), 'buffer');
 pushEdge('n_file', 'buffer', idOf(0, 2), 'buffer');
 
 const doc = {
-  format: 'memlink-blueprint/1',
+  format: 'memlink-blueprint/2',
   packs: [{ id: 'p1', name: 'demo-index-list', source, enabled: true }],
   nodes,
   edges,

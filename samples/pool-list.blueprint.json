@@ -1,0 +1,116 @@
+{
+  "format": "memlink-blueprint/2",
+  "packs": [],
+  "layouts": [
+    {
+      "id": "entry",
+      "name": "池记录",
+      "size": "4",
+      "endian": "little",
+      "fields": [
+        {
+          "id": "f1",
+          "name": "next",
+          "offset": "0",
+          "kind": "i16",
+          "role": "index"
+        },
+        {
+          "id": "f2",
+          "name": "value",
+          "offset": "2",
+          "kind": "u16"
+        }
+      ],
+      "nextField": 3
+    }
+  ],
+  "nodes": [
+    {
+      "id": "f",
+      "packId": "",
+      "nodeId": "file",
+      "x": 0,
+      "y": 70,
+      "params": {
+        "name": "pool-list.bin"
+      },
+      "source": {
+        "name": "pool-list.bin",
+        "base": "0x2000",
+        "data": "//8KAAAAFAABAB4A"
+      }
+    },
+    {
+      "id": "head",
+      "packId": "",
+      "nodeId": "address",
+      "x": 330,
+      "y": 70,
+      "params": {
+        "mode": "index",
+        "index": "2",
+        "stride": "4"
+      }
+    },
+    {
+      "id": "list",
+      "packId": "",
+      "nodeId": "listread",
+      "x": 670,
+      "y": 70,
+      "params": {
+        "layoutId": "entry",
+        "nextField": "f1",
+        "mode": "index",
+        "stopValue": "-1",
+        "limit": "8"
+      }
+    },
+    {
+      "id": "last",
+      "packId": "",
+      "nodeId": "item",
+      "x": 1010,
+      "y": 70,
+      "params": {
+        "index": "2"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "from": {
+        "node": "f",
+        "port": "base"
+      },
+      "to": {
+        "node": "head",
+        "port": "base"
+      }
+    },
+    {
+      "id": "e2",
+      "from": {
+        "node": "head",
+        "port": "address"
+      },
+      "to": {
+        "node": "list",
+        "port": "address"
+      }
+    },
+    {
+      "id": "e3",
+      "from": {
+        "node": "list",
+        "port": "list"
+      },
+      "to": {
+        "node": "last",
+        "port": "list"
+      }
+    }
+  ]
+}

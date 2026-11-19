@@ -8,23 +8,30 @@
  * This keeps the evaluator, the palette and the quick-add list in sync.
  */
 
-import { Memory } from '../core/mem';
-import type { BufferValue, PortSpec } from './types';
+import { isInstanceView, type BufferValue, type ByteOrigin, type NodeView, type PortSpec, type PortType } from './types';
+import { addressHex, exactInteger, mappedAddress, MAX_ADDRESS, MIN_INTEGER } from './precision';
+import {
+  addOffset, addressIn, byteSpan, integerInput, isByteSpan, pointerRead, ReadIssue, requireSource, scalarRead, stringRead,
+  type TextEncoding,
+} from './binary-read';
+import { compileLayout, layoutPorts, readLayout, type BinaryLayout } from './layouts';
+import { expandArray, walkList, type WalkResult } from './collections';
+import { assertNumeric, checksum } from './validation';
 
 export const BUILTIN_IDS = [
   'file', 'slice',
   'number', 'string', 'note',
-  'element', 'readint', 'text', 'arrayread',
-  'expr', 'bitfield', 'enum', 'timestamp',
-  'address', 'ptrwalk', 'prp',
-  'checksum', 'compare',
+  'element', 'readint', 'text', 'structread', 'arrayread', 'listread', 'item',
+  'expr',
+  'address', 'ptrwalk',
+  'checksum', 'assert',
 ] as const;
 
 export type BuiltinId = typeof BUILTIN_IDS[number];
 
 /** Palette groups, in display order. */
 export const BUILTIN_GROUPS = [
-  '数据源', '常量', '解析', '数值', '地址', '校验',
+  '数据源', '读取', '定位', '集合', '校验', '辅助',
 ] as const;
 
 export interface BuiltinOption {
@@ -38,12 +45,14 @@ export interface BuiltinOption {
 
 export interface BuiltinCtx {
   buffer?: BufferValue;
-  mem: Memory;
   params: Record<string, string>;
   endian: 'little' | 'big';
-  pointerSize: 4 | 8;
   /** Why the buffer is missing, when the node does have a source instruction. */
   sourceNote?: string;
+  layouts: readonly BinaryLayout[];
+  report?: (issue: ReadIssue, warning?: boolean, origin?: ByteOrigin) => void;
+  inputOrigin?: (port: string) => ByteOrigin | undefined;
+  publishOrigin?: (port: string, origin: ByteOrigin) => void;
 }
 
 export interface BuiltinDef {
@@ -55,9 +64,17 @@ export interface BuiltinDef {
   /** handled by dedicated evaluator branches (file / number / element) */
   inputs: PortSpec[];
   outputs: PortSpec[];
+  /** 当此节点被用作「在此地址解析」时绑定的输入端口。 */
+  followPort?: string;
+  precise?: boolean;
+  acceptMissing?: boolean;
+  /** A selector inherits the context of the selected value, not of its index. */
+  inheritSourceFrom?: string;
+  ports?: (params: Record<string, string>, layouts: readonly BinaryLayout[], view?: NodeView) => { inputs: PortSpec[]; outputs: PortSpec[] };
   defaults?: Record<string, string>;
   options?: BuiltinOption[];
   run?: (v: Record<string, unknown>, ctx: BuiltinCtx) => Record<string, unknown>;
+  view?: (produced: Record<string, unknown>) => NodeView;
   /** multi-line text shown in the inspector's detail pane */
   detail?: (v: Record<string, unknown>, out: Record<string, unknown>, ctx: BuiltinCtx) => string;
 }
@@ -68,12 +85,10 @@ const n = (v: unknown, d = 0): number => {
   const x = typeof v === 'number' ? v : Number(v);
   return Number.isFinite(x) ? x : d;
 };
-const int = (v: unknown, d = 0): number => Math.trunc(n(v, d));
 const hex = (v: unknown): string => {
   const x = n(v, 0);
   return x < 0 ? `-0x${(-x).toString(16)}` : `0x${x.toString(16)}`;
 };
-const hexN = (v: number, width: number): string => `0x${(v >>> 0).toString(16).padStart(width, '0')}`;
 
 const ctxPort = (): PortSpec => ({
   name: 'buffer', type: 'buffer', label: '数据源', context: true,
@@ -81,49 +96,18 @@ const ctxPort = (): PortSpec => ({
 });
 const numPort = (name: string, label: string): PortSpec => ({ name, type: 'number', label });
 const strPort = (name: string, label: string): PortSpec => ({ name, type: 'string', label });
+const typed = (name: string, type: PortType, label: string): PortSpec => ({ name, type, label });
+const addrPort = () => typed('address', 'address', '地址');
+const intPort = (name: string, label: string): PortSpec => typed(name, 'integer', label);
 
 const select = (key: string, label: string, choices: [string, string][], dflt: string): BuiltinOption => ({
   key, label, kind: 'select', default: dflt,
   choices: choices.map(([value, name]) => ({ value, label: name })),
 });
 
-const SIZE_OPTION = select('size', '宽度', [['1', 'u8 / i8'], ['2', 'u16 / i16'], ['4', 'u32 / i32'], ['8', 'u64 / i64']], '4');
-/** 「数值读取」专用：整数宽度 + 浮点宽度共用一个下拉。 */
-const NUM_SIZE_OPTION = select('size', '宽度', [
-  ['1', 'u8 / i8'], ['2', 'u16 / i16'], ['4', 'u32 / i32'], ['8', 'u64 / i64'],
-  ['f4', 'f32'], ['f8', 'f64'],
-], '4');
-const SIGN_OPTION = select('signed', '符号', [['0', '无符号'], ['1', '有符号']], '0');
+const SCALAR_TYPES = ['u8', 'i8', 'u16', 'i16', 'u32', 'i32', 'u64', 'i64', 'f32', 'f64'];
+const SCALAR_OPTION = select('scalar', '类型', SCALAR_TYPES.map((k) => [k, k]), 'u32');
 const ENDIAN_OPTION = select('endian', '字节序', [['little', '小端'], ['big', '大端']], 'little');
-
-function needBuffer(ctx: BuiltinCtx): BufferValue {
-  if (!ctx.buffer) throw new Error(ctx.sourceNote ?? '需要缓冲区：把文件节点接到数据源');
-  return ctx.buffer;
-}
-
-/** Clamp reads to a sane ceiling so a bad length cannot allocate a huge view. */
-const MAX_READ = 1 << 20;
-
-function readBytes(ctx: BuiltinCtx, addr: number, len: number): Uint8Array {
-  needBuffer(ctx);
-  const size = Math.max(0, Math.min(int(len, 0), MAX_READ));
-  if (size === 0) return new Uint8Array(0);
-  if (!ctx.mem.contains(addr, size)) {
-    throw new Error(`读取越界：${hex(addr)} + ${size} B，缓冲区 ${hex(ctx.mem.base)}–${hex(ctx.mem.end)}`);
-  }
-  return ctx.mem.bytesAt(addr, size);
-}
-
-function readInt(ctx: BuiltinCtx, addr: number, size: number, signed: boolean, endian: 'little' | 'big'): number {
-  needBuffer(ctx);
-  const width = [1, 2, 4, 8].includes(size) ? size : 4;
-  if (!ctx.mem.contains(addr, width)) throw new Error(`读取越界：${hex(addr)} + ${width}`);
-  if (width === 8) {
-    const big = ctx.mem.readBig(addr, 8, endian, signed);
-    return Number(big);
-  }
-  return ctx.mem.readUInt(addr, width, endian, signed);
-}
 
 function printable(bytes: Uint8Array): string {
   let s = '';
@@ -135,66 +119,29 @@ function hexCells(bytes: Uint8Array, width: number): string {
   return [...bytes].map((b) => b.toString(16).padStart(2, '0')).join(' ').padEnd(width * 3 - 1, ' ');
 }
 
-function hexDump(bytes: Uint8Array, start: number, width = 16, maxLines = 16): string {
+function hexDump(bytes: Uint8Array, start: bigint, width = 16, maxLines = 16): string {
   const lines: string[] = [];
   const total = Math.min(bytes.length, width * maxLines);
   for (let i = 0; i < total; i += width) {
     const chunk = bytes.subarray(i, Math.min(i + width, bytes.length));
-    lines.push(`${(start + i).toString(16).padStart(8, '0')}  ${hexCells(chunk, width)}  |${printable(chunk)}|`);
+    lines.push(`${(start + BigInt(i)).toString(16).padStart(8, '0')}  ${hexCells(chunk, width)}  |${printable(chunk)}|`);
   }
   if (bytes.length > total) lines.push(`… 还有 ${bytes.length - total} 字节`);
   return lines.join('\n');
-}
-
-function cstr(bytes: Uint8Array): string {
-  let out = '';
-  for (const b of bytes) {
-    if (b === 0) break;
-    out += b >= 0x20 && b <= 0x7e ? String.fromCharCode(b) : '.';
-  }
-  return out;
-}
-
-function crc32(bytes: Uint8Array): number {
-  let c = ~0;
-  for (const b of bytes) {
-    c ^= b;
-    for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1));
-  }
-  return (~c) >>> 0;
-}
-
-function fnv1a(bytes: Uint8Array): number {
-  let h = 0x811c9dc5;
-  for (const b of bytes) {
-    h ^= b;
-    h = Math.imul(h, 0x01000193) >>> 0;
-  }
-  return h >>> 0;
-}
-
-function sum8(bytes: Uint8Array): number {
-  let s = 0;
-  for (const b of bytes) s = (s + b) >>> 0;
-  return s;
 }
 
 /**
  * 解析多级指针的偏移链输入：`+0x10, +0x24` / `0x10 0x24` / `16, -8` 均可。
  * 空串表示单级直接跟随。
  */
-export function parseOffsetChain(text: string): { offsets: number[]; error?: string } {
+export function parseOffsetChain(text: string): { offsets: bigint[]; error?: string } {
   const parts = (text ?? '').split(/[\s,;，；]+/).filter(Boolean);
-  const offsets: number[] = [];
+  if (parts.length > 32) return { offsets: [], error: '偏移链最多支持 32 级' };
+  const offsets: bigint[] = [];
   for (const p of parts) {
-    const hexish = /^([+-]?)0[xX]([0-9a-fA-F]+)$/.exec(p);
-    if (hexish) {
-      const v = Number.parseInt(hexish[2], 16);
-      offsets.push(hexish[1] === '-' ? -v : v);
-      continue;
-    }
-    if (/^[+-]?\d+$/.test(p)) { offsets.push(Number(p)); continue; }
-    return { offsets: [], error: `无法解析偏移「${p}」` };
+    const offset = exactInteger(p);
+    if (offset === undefined || offset < MIN_INTEGER || offset > MAX_ADDRESS) return { offsets: [], error: `无法解析偏移「${p}」` };
+    offsets.push(offset);
   }
   return { offsets };
 }
@@ -282,44 +229,47 @@ function optionDefaults(def: BuiltinDef): Record<string, string> {
   return out;
 }
 
+const collectionOutputs = () => [typed('list', 'list', '集合'), intPort('count', '已读项数')];
+const arrayInputs = () => [ctxPort(), addrPort(), intPort('count', '项数'), intPort('stride', '字节步长（默认类型长度）')];
+const recordOutputs = () => [typed('instance', 'instance', '记录'), addrPort()];
+const layoutOf = (ctx: BuiltinCtx) => ctx.layouts.find(l => l.id === ctx.params.layoutId);
+const walkView = (kind: 'list' | 'array', result: WalkResult): NodeView => ({
+  kind, items: result.items, count: result.items.length, local: true,
+  stop: ({ complete: '自然结束', limit: '达到上限', cycle: '发现环', unreadable: '遇到不可读记录' })[result.stop],
+  truncated: result.stop === 'limit', trunc: result.trunc, error: result.notice?.message,
+});
+
 export const BUILTIN_DEFS: BuiltinDef[] = [
   {
-    id: 'file', label: '文件 / Buffer', group: '数据源', hint: '载入二进制文件作为解析源',
+    id: 'file', label: '载入转储', group: '数据源', hint: '载入二进制文件或粘贴 Hex 作为只读数据源',
     inputs: [],
     outputs: [
       { name: 'buffer', type: 'buffer', label: '缓冲区' },
-      numPort('base', '基址'),
+      { name: 'base', type: 'address', label: '基址' },
       numPort('size', '大小'),
     ],
     defaults: { name: '未载入' },
   },
   {
-    id: 'slice', label: '缓冲区切片', group: '数据源', hint: '按地址与长度截取字节',
-    inputs: [ctxPort(), numPort('address', '地址'), numPort('length', '长度')],
-    outputs: [
-      { name: 'bytes', type: 'bytes', label: '字节' },
-      numPort('size', '大小'),
-      strPort('hex', '十六进制'),
-      strPort('ascii', 'ASCII'),
-    ],
+    id: 'slice', label: '字节范围', group: '数据源', hint: '截取有来源的字节范围，下游不能越过其边界',
+    followPort: 'address',
+    precise: true,
+    inputs: [ctxPort(), addrPort(), intPort('length', '长度 (B)')],
+    outputs: [typed('span', 'span', '字节范围')],
     defaults: { address: '0x0', length: '64' },
     run: (v, ctx) => {
-      const bytes = readBytes(ctx, int(v.address), int(v.length, 64));
-      return {
-        bytes,
-        size: bytes.length,
-        hex: [...bytes].map((b) => b.toString(16).padStart(2, '0')).join(' ').slice(0, 512),
-        ascii: printable(bytes).slice(0, 512),
-      };
+      const src = requireSource(ctx.buffer, ctx.sourceNote);
+      return { span: byteSpan(src, addressIn(v.address, src), integerInput(v.length, '长度', 0n)) };
     },
-    detail: (v, out) => hexDump((out.bytes as Uint8Array) ?? new Uint8Array(0), int(v.address)),
+    detail: (_v, out) => isByteSpan(out.span)
+      ? hexDump(out.span.buffer.bytes, BigInt(out.span.buffer.base)) : '',
   },
   {
-    id: 'number', label: '数值', group: '常量', hint: '十进制或 0x 常量',
+    id: 'number', label: '数值', group: '辅助', hint: '十进制或 0x 常量',
     inputs: [], outputs: [numPort('value', '值')], defaults: { value: '0' },
   },
   {
-    id: 'string', label: '文本常量', group: '常量', hint: '文本或注释字符串',
+    id: 'string', label: '文本常量', group: '辅助', hint: '可复用的文本输入',
     inputs: [], outputs: [strPort('text', '文本'), numPort('length', '长度')],
     options: [{ key: 'value', label: '内容', kind: 'text', default: '' }],
     run: (_v, ctx) => {
@@ -328,7 +278,7 @@ export const BUILTIN_DEFS: BuiltinDef[] = [
     },
   },
   {
-    id: 'note', label: '标注 / Note', group: '常量', hint: '把分析结论、待办钉在图上，随图保存',
+    id: 'note', label: '标注 / Note', group: '辅助', hint: '把分析结论、待办钉在图上，随图保存',
     // 故意不声明任何输入：不携带文件上下文、不参与数据源继承，画布上也没有端口行。
     inputs: [],
     outputs: [],
@@ -341,7 +291,7 @@ export const BUILTIN_DEFS: BuiltinDef[] = [
     detail: (_v, out, ctx) => String(ctx.params.text || '（空标注）'),
   },
   {
-    id: 'element', label: '元素解析', group: '解析',
+    id: 'element', label: '元素解析', group: '集合',
     hint: '按地址 + 类型解析字段，或展开已连接的元素',
     inputs: [
       ctxPort(),
@@ -354,94 +304,140 @@ export const BUILTIN_DEFS: BuiltinDef[] = [
     defaults: { index: '0' },
   },
   {
-    id: 'readint', label: '数值读取', group: '解析', hint: '整数或浮点：宽度、符号与字节序',
-    inputs: [ctxPort(), numPort('address', '地址')],
-    outputs: [numPort('value', '值'), strPort('hex', '十六进制'), strPort('binary', '二进制'), numPort('width', '宽度')],
+    id: 'readint', label: '读数值', group: '读取', hint: '按固定类型和字节序读取一个整数或浮点数',
+    followPort: 'address',
+    precise: true,
+    inputs: [ctxPort(), addrPort()],
+    outputs: [intPort('value', '值')],
+    ports: (params) => ({
+      inputs: [ctxPort(), addrPort()],
+      outputs: [typed('value', params.scalar?.startsWith('f') ? 'number' : 'integer', '值')],
+    }),
     defaults: { address: '0x0' },
-    options: [NUM_SIZE_OPTION, SIGN_OPTION, ENDIAN_OPTION],
+    options: [SCALAR_OPTION, ENDIAN_OPTION],
     run: (v, ctx) => {
-      const size = ctx.params.size ?? '4';
-      const addr = int(v.address);
-      // 浮点分支：f32 / f64 恒有符号，binary 输出 IEEE 754 位模式。
-      if (size === 'f4' || size === 'f8') {
-        const width: 4 | 8 = size === 'f8' ? 8 : 4;
-        if (!ctx.mem.contains(addr, width)) throw new Error(`读取越界：${hex(addr)} + ${width}`);
-        const value = ctx.mem.readFloat(addr, width, ctx.endian);
-        const raw = ctx.mem.readBig(addr, width, ctx.endian);
-        const bitHex = `0x${raw.toString(16).toUpperCase().padStart(width * 2, '0')}`;
-        const binary = raw.toString(2).padStart(width * 8, '0').replace(/(.{8})(?=.)/g, '$1 ');
-        return { value, hex: bitHex, width, binary };
-      }
-      const width = [1, 2, 4, 8].includes(int(size, 4)) ? int(size, 4) : 4;
-      const value = readInt(ctx, addr, width, ctx.params.signed === '1', ctx.endian);
-      const bits = BigInt.asUintN(width * 8, BigInt(value)).toString(2).padStart(width * 8, '0');
-      return {
-        value, hex: hex(value), width,
-        binary: bits.replace(/(.{8})(?=.)/g, '$1 '),
-      };
+      const src = requireSource(ctx.buffer, ctx.sourceNote);
+      const address = addressIn(v.address, src);
+      const result = scalarRead(src, address, ctx.params.scalar ?? 'u32', ctx.endian);
+      ctx.publishOrigin?.('value', { buffer: src, address, length: result.width });
+      return result;
     },
-    detail: (_v, out) => `十进制  ${out.value}\n十六进制  ${out.hex}\n二进制  ${out.binary}`,
+    detail: (_v, out) => {
+      const raw = out.raw as bigint;
+      const width = Number(out.width);
+      return `十进制  ${out.value}\n十六进制  0x${raw.toString(16).toUpperCase().padStart(width * 2, '0')}\n二进制  ${raw.toString(2).padStart(width * 8, '0').replace(/(.{8})(?=.)/g, '$1 ')}`;
+    },
   },
   {
-    id: 'text', label: '字符串读取', group: '解析', hint: '定长字符串或 C 字符串',
-    inputs: [ctxPort(), numPort('address', '地址'), numPort('length', '最大长度')],
-    outputs: [strPort('text', '文本'), numPort('length', '长度'), strPort('hex', '十六进制')],
+    id: 'text', label: '读字符串', group: '读取', hint: '按明确编码和字节限制读取文本',
+    followPort: 'address',
+    precise: true,
+    inputs: [ctxPort(), addrPort(), intPort('length', '长度 / 上限 (B)')],
+    outputs: [strPort('text', '文本'), intPort('length', '实际读取 (B)')],
     defaults: { address: '0x0', length: '64' },
     options: [
-      select('mode', '结束方式', [['cstr', 'C 字符串 (\\0)'], ['fixed', '定长']], 'cstr'),
-      select('encoding', '编码', [['ascii', 'ASCII / UTF-8'], ['utf16le', 'UTF-16LE'], ['utf16be', 'UTF-16BE']], 'ascii'),
+      select('mode', '结束方式', [['nul', '零终止'], ['fixed', '定长']], 'nul'),
+      select('encoding', '编码', [['ascii', 'ASCII'], ['utf-8', 'UTF-8'], ['utf-16le', 'UTF-16LE'], ['utf-16be', 'UTF-16BE']], 'utf-8'),
     ],
     run: (v, ctx) => {
-      // `length` is a maximum: a C string near the end of the file must not
-      // turn into an out-of-bounds error.
-      const addr = int(v.address);
-      const available = Math.max(0, ctx.mem.end - addr);
-      const raw = readBytes(ctx, addr, Math.min(int(v.length, 64), available));
-      const enc = ctx.params.encoding ?? 'ascii';
-      let text: string;
-      if (enc === 'utf16le' || enc === 'utf16be') {
-        const view = new DataView(raw.buffer, raw.byteOffset, Math.floor(raw.length / 2) * 2);
-        const parts: string[] = [];
-        for (let i = 0; i + 1 < view.byteLength; i += 2) {
-          const code = view.getUint16(i, enc === 'utf16le');
-          if (code === 0 && ctx.params.mode !== 'fixed') break;
-          parts.push(String.fromCharCode(code));
-        }
-        text = parts.join('');
-      } else {
-        text = ctx.params.mode === 'fixed' ? printable(raw).replace(/\.+$/, '') : cstr(raw);
-      }
-      return {
-        text, length: text.length,
-        hex: [...raw.subarray(0, Math.min(raw.length, text.length + 1))]
-          .map((b) => b.toString(16).padStart(2, '0')).join(' ').slice(0, 512),
-      };
+      const src = requireSource(ctx.buffer, ctx.sourceNote);
+      const encoding = ctx.params.encoding ?? 'utf-8';
+      if (!['ascii', 'utf-8', 'utf-16le', 'utf-16be'].includes(encoding)) throw new ReadIssue('BAD_INPUT', '未知文本编码');
+      const { text, length } = stringRead(src, addressIn(v.address, src), integerInput(v.length, '字节长度', 0n),
+        ctx.params.mode === 'fixed' ? 'fixed' : 'nul', encoding as TextEncoding);
+      return { text, length: BigInt(length) };
     },
   },
   {
-    id: 'arrayread', label: '数组读取', group: '解析', hint: '按步长连续读取整数数组',
-    inputs: [ctxPort(), numPort('address', '地址'), numPort('count', '数量'), numPort('stride', '步长')],
-    outputs: [numPort('count', '数量'), strPort('values', '值列表'), strPort('hex', '十六进制')],
-    defaults: { address: '0x0', count: '8', stride: '4' },
-    options: [SIZE_OPTION, SIGN_OPTION, ENDIAN_OPTION],
+    id: 'structread', label: '读结构', group: '读取', hint: '引用一份布局，读取一条记录及其字段',
+    followPort: 'address',
+    precise: true,
+    inputs: [ctxPort(), addrPort()], outputs: recordOutputs(),
+    ports: (params, layouts) => ({
+      inputs: [ctxPort(), addrPort()],
+      outputs: [...recordOutputs(), ...layoutPorts(layouts.find(l => l.id === params.layoutId))],
+    }),
+    defaults: { address: '0x0' },
     run: (v, ctx) => {
-      const width = [1, 2, 4, 8].includes(int(ctx.params.size, 4)) ? int(ctx.params.size, 4) : 4;
-      const count = Math.max(0, Math.min(int(v.count, 8), 4096));
-      const stride = int(v.stride, width) || width;
-      const values: number[] = [];
-      for (let i = 0; i < count; i++) {
-        values.push(readInt(ctx, int(v.address) + i * stride, width, ctx.params.signed === '1', ctx.endian));
-      }
-      return {
-        count: values.length,
-        values: values.map((x) => String(x)).join(', ').slice(0, 512),
-        hex: values.map((x) => hex(x)).join(' ').slice(0, 512),
-      };
+      const layout = compileLayout(layoutOf(ctx));
+      const src = requireSource(ctx.buffer, ctx.sourceNote);
+      const instance = readLayout(src, addressIn(v.address, src), layout);
+      return { instance, address: instance.location, ...Object.fromEntries(instance.fields.map(f => [f.name, f.value])) };
     },
-    detail: (_v, out) => String(out.values ?? ''),
+    view: ({ instance }) => ({ kind: 'struct', inst: isInstanceView(instance) ? instance : undefined }),
   },
   {
-    id: 'expr', label: '表达式', group: '数值', hint: '算术与位表达式，变量 a / b / c',
+    id: 'arrayread', label: '展开数组', group: '集合', hint: '按起点、项数和步长读取标量或结构集合',
+    followPort: 'address', precise: true,
+    inputs: arrayInputs(), outputs: collectionOutputs(),
+    defaults: { address: '0x0', count: '1' },
+    options: [select('elementType', '元素类型', [['scalar', '标量'], ['record', '结构布局']], 'scalar'), SCALAR_OPTION, ENDIAN_OPTION],
+    run: (v, ctx) => {
+      const src = requireSource(ctx.buffer, ctx.sourceNote);
+      const layout = ctx.params.elementType === 'record' ? layoutOf(ctx) : undefined;
+      if (ctx.params.elementType === 'record' && !layout) throw new ReadIssue('INVALID_LAYOUT', '请选择有效的元素布局');
+      const walk = expandArray(src, addressIn(v.address, src), integerInput(v.count, '项数', 0n),
+        v.stride === undefined ? undefined : integerInput(v.stride, '步长', 1n), ctx.params.scalar ?? 'u32', ctx.endian, layout);
+      if (walk.notice) ctx.report?.(walk.notice, walk.stop === 'limit');
+      return { list: walk.items, count: BigInt(walk.items.length), walk };
+    },
+    view: ({ walk }) => walkView('array', walk as WalkResult),
+  },
+  {
+    id: 'listread', label: '遍历链表', group: '集合', hint: '按记录的 next 字段读取链表（绝对地址或池下标）',
+    followPort: 'address', precise: true,
+    inputs: [ctxPort(), addrPort(), intPort('limit', '最多项数')],
+    outputs: collectionOutputs(),
+    ports: (params) => ({
+      inputs: [ctxPort(), addrPort(), intPort('limit', '最多项数'),
+        ...(params.mode === 'index' ? [typed('poolBase', 'address', '池基址'), intPort('stride', '字节步长（默认结构长度）')] : [])],
+      outputs: collectionOutputs(),
+    }),
+    defaults: { address: '0x0', limit: '256' },
+    options: [
+      select('mode', 'next 寻址', [['address', '绝对地址'], ['index', '池下标']], 'address'),
+      { key: 'stopValue', label: '结束值', kind: 'text', default: '0' },
+    ],
+    run: (v, ctx) => {
+      const src = requireSource(ctx.buffer, ctx.sourceNote);
+      const layout = layoutOf(ctx);
+      const pool = ctx.params.mode === 'index' ? {
+        base: addressIn(v.poolBase ?? BigInt(src.base), src),
+        stride: v.stride === undefined ? BigInt(compileLayout(layout).size) : integerInput(v.stride, '步长', 1n),
+      } : undefined;
+      const walk = walkList(src, layout, {
+        start: addressIn(v.address, src), nextField: ctx.params.nextField ?? '',
+        stopValue: integerInput(ctx.params.stopValue ?? '0', '结束值'), max: Number(integerInput(v.limit, '最多项数', 1n, 0xffffffffn)),
+        pool,
+      });
+      if (walk.notice) ctx.report?.(walk.notice, walk.stop === 'limit' || walk.stop === 'cycle');
+      return { list: walk.items, count: BigInt(walk.items.length), walk };
+    },
+    view: ({ walk }) => walkView('list', walk as WalkResult),
+  },
+  {
+    id: 'item', label: '按下标取项', group: '集合', hint: '从已读集合取一项，不重新读转储',
+    precise: true,
+    inheritSourceFrom: 'list',
+    inputs: [typed('list', 'list', '集合'), typed('index', 'index', '下标')],
+    outputs: recordOutputs(),
+    ports: (_params, _layouts, view) => ({
+      inputs: [typed('list', 'list', '集合'), typed('index', 'index', '下标')],
+      outputs: [...recordOutputs(), ...(view?.kind === 'element' && view.inst?.fields
+        ? view.inst.fields.map(f => typed(f.name, f.portType ?? 'number', f.label ?? f.name)) : [])],
+    }),
+    defaults: { index: '0' },
+    run: (v) => {
+      const index = integerInput(v.index, '下标', 0n);
+      const items = v.list;
+      const item = Array.isArray(items) && index < BigInt(items.length) ? items[Number(index)] : undefined;
+      if (!isInstanceView(item)) throw new ReadIssue('INDEX_OUT_OF_RANGE', `集合中没有已读的第 ${index} 项`);
+      return { instance: item, address: item.location, ...Object.fromEntries(item.fields.map(f => [f.name, f.value])) };
+    },
+    view: ({ instance }) => ({ kind: 'element', inst: isInstanceView(instance) ? instance : undefined }),
+  },
+  {
+    id: 'expr', label: '表达式', group: '辅助', hint: '算术与位表达式，变量 a / b / c',
     inputs: [numPort('a', 'a'), numPort('b', 'b'), numPort('c', 'c')],
     outputs: [numPort('value', '结果'), strPort('hex', '十六进制')],
     defaults: { a: '0', b: '0', c: '0' },
@@ -455,181 +451,93 @@ export const BUILTIN_DEFS: BuiltinDef[] = [
     detail: (_v, out, ctx) => `${ctx.params.formula ?? 'a'}  =  ${out.value}  (${out.hex})`,
   },
   {
-    id: 'bitfield', label: '位域', group: '数值', hint: '按位展开、置位下标与置位数',
-    inputs: [numPort('value', '值')],
-    outputs: [strPort('binary', '二进制'), strPort('set', '置位下标'), numPort('popcount', '置位数'), numPort('lsb', '最低置位'), numPort('msb', '最高置位')],
-    defaults: { value: '0' },
-    options: [select('width', '位宽', [['8', '8'], ['16', '16'], ['32', '32'], ['64', '64']], '32')],
+    id: 'address', label: '换算地址', group: '定位', hint: '将字节偏移或池下标换算成地址，不读取内存',
+    precise: true,
+    inputs: [ctxPort(), typed('base', 'address', '基准地址'), typed('offset', 'offset', '字节偏移')],
+    outputs: [addrPort()],
+    ports: (params) => ({
+      inputs: [ctxPort(), typed('base', 'address', '基准地址'), ...(params.mode === 'index'
+        ? [typed('index', 'index', '池下标'), intPort('stride', '字节步长')]
+        : [typed('offset', 'offset', '字节偏移')])],
+      outputs: [addrPort()],
+    }),
+    defaults: { offset: '0', index: '0', stride: '1' },
+    options: [select('mode', '换算方式', [['offset', '字节偏移'], ['index', '池下标 × 字节步长']], 'offset')],
     run: (v, ctx) => {
-      const width = [8, 16, 32, 64].includes(int(ctx.params.width, 32)) ? int(ctx.params.width, 32) : 32;
-      const big = BigInt.asUintN(width, BigInt(int(v.value)));
-      const set: number[] = [];
-      let pop = 0;
-      for (let i = 0; i < width; i++) {
-        if ((big >> BigInt(i)) & 1n) { set.push(i); pop += 1; }
-      }
-      const lsb = set.length ? set[0] : -1;
-      const msb = set.length ? set[set.length - 1] : -1;
-      return {
-        binary: big.toString(2).padStart(width, '0').replace(/(.{8})(?=.)/g, '$1 '),
-        set: set.join(', '), popcount: pop, lsb, msb,
-      };
-    },
-    detail: (_v, out) => String(out.binary ?? ''),
-  },
-  {
-    id: 'enum', label: '枚举 / 标志', group: '数值', hint: '数值到名称的映射与置位标志',
-    inputs: [numPort('value', '值')],
-    outputs: [strPort('name', '名称'), strPort('flags', '标志'), { name: 'known', type: 'boolean', label: '已定义' }],
-    defaults: { value: '0' },
-    options: [{ key: 'mapping', label: '映射 (值=名称)', kind: 'text', default: '0=Flush,1=Write,2=Read,6=Identify' }],
-    run: (v, ctx) => {
-      const value = int(v.value);
-      const entries = (ctx.params.mapping ?? '')
-        .split(/[,;\n]/)
-        .map((s) => /^\s*(0[xX][0-9a-fA-F]+|\d+)\s*=\s*(.+?)\s*$/.exec(s))
-        .filter((m): m is RegExpExecArray => !!m)
-        .map((m) => ({ value: Number(m[1]), name: m[2] }));
-      const hit = entries.find((e) => e.value === value);
-      const flags = entries.filter((e) => e.value !== 0 && (value & e.value) === e.value)
-        .map((e) => e.name).join(' | ');
-      return { name: hit?.name ?? `未知 (${hex(value)})`, flags: flags || '—', known: !!hit };
+      const src = requireSource(ctx.buffer, ctx.sourceNote);
+      const base = addressIn(v.base ?? BigInt(src.base), src);
+      const delta = ctx.params.mode === 'index'
+        ? integerInput(v.index, '池下标', 0n) * integerInput(v.stride, '步长', 1n)
+        : integerInput(v.offset, '偏移');
+      return { address: mappedAddress(src, addOffset(base, delta)) };
     },
   },
   {
-    id: 'timestamp', label: '时间戳', group: '数值', hint: 'Unix 时间转 UTC 日历时间',
-    inputs: [numPort('value', '时间戳')],
-    outputs: [strPort('utc', 'UTC'), numPort('unix', '秒'), strPort('hex', '十六进制')],
-    defaults: { value: '0' },
-    options: [select('unit', '单位', [['s', '秒'], ['ms', '毫秒'], ['us', '微秒']], 's')],
-    run: (v, ctx) => {
-      const unit = ctx.params.unit ?? 's';
-      const seconds = n(v.value) / (unit === 'us' ? 1e6 : unit === 'ms' ? 1e3 : 1);
-      const d = new Date(seconds * 1000);
-      const utc = Number.isFinite(d.getTime()) ? d.toISOString().replace('T', ' ').replace('.000Z', ' UTC') : '超出范围';
-      return { utc, unix: Math.trunc(seconds), hex: hex(int(v.value)) };
-    },
-  },
-  {
-    id: 'address', label: '地址计算', group: '地址', hint: 'base + offset × scale',
-    inputs: [numPort('base', '基址'), numPort('offset', '偏移'), numPort('scale', '比例')],
-    outputs: [numPort('address', '地址'), strPort('hex', '十六进制')],
-    defaults: { base: '0x0', offset: '0', scale: '1' },
-    run: (v) => {
-      const address = int(v.base) + int(v.offset) * int(v.scale, 1);
-      return { address, hex: hex(address) };
-    },
-  },
-  {
-    id: 'ptrwalk', label: '指针步进', group: '地址', hint: '在 base+offset 处读出一个指针',
-    inputs: [ctxPort(), numPort('base', '基址'), numPort('offset', '偏移')],
-    outputs: [
-      numPort('address', '读取地址'),
-      numPort('target', '目标'),
-      strPort('hex', '十六进制'),
-      { name: 'valid', type: 'boolean', label: '范围有效' },
+    id: 'ptrwalk', label: '读指针', group: '定位', hint: '读一个指针并检查目标是否映射，不解析目标',
+    followPort: 'address',
+    precise: true,
+    inputs: [ctxPort(), addrPort()],
+    outputs: [typed('target', 'address', '目标')],
+    defaults: { address: '0x0' },
+    options: [
+      select('pointerSize', '指针宽度', [['4', '4 字节'], ['8', '8 字节']], '8'), ENDIAN_OPTION,
+      { key: 'nullValue', label: '空指针值', kind: 'text', default: '0x0' },
     ],
-    defaults: { base: '0x0', offset: '0x0' },
-    options: [select('pointerSize', '指针宽度', [['4', '4 字节'], ['8', '8 字节']], '8'), ENDIAN_OPTION],
     run: (v, ctx) => {
-      needBuffer(ctx);
-      const width: 4 | 8 = int(ctx.params.pointerSize, 8) === 4 ? 4 : 8;
-      const addr = int(v.base) + int(v.offset);
-      // 断链不中断求值：target 置 0 并把 valid 置 false，用户能看出断在哪一级。
-      const ok = ctx.mem.contains(addr, width);
-      const target = ok ? readInt(ctx, addr, width, false, ctx.endian) : 0;
-      return {
-        address: addr, target,
-        hex: hex(target),
-        valid: ok && ctx.mem.contains(target, 1),
-      };
+      const src = requireSource(ctx.buffer, ctx.sourceNote);
+      const width = ctx.params.pointerSize === '4' ? 4 : 8;
+      const at = addressIn(v.address, src);
+      const result = pointerRead(src, at, width, ctx.endian, integerInput(ctx.params.nullValue ?? '0', '空指针值', 0n, (1n << BigInt(width * 8)) - 1n));
+      if (result.state === 'unmapped') throw new ReadIssue('UNMAPPED_POINTER', `目标未映射：${addressHex(result.raw)}`, at);
+      return { ...result, at };
     },
     detail: (_v, out) => {
-      const addr = Number(out.address ?? 0);
-      const target = Number(out.target ?? 0);
-      return `读取地址  ${hex(addr)}\n目标      ${out.valid ? hex(target) : '0x0（断链）'}`;
+      return `读取地址  ${addressHex(out.at as bigint)}\n${out.state === 'null' ? '空指针' : '目标'}  ${addressHex(out.raw as bigint)}`;
     },
   },
   {
-    id: 'prp', label: 'PRP / 分散页', group: '地址', hint: '展开 NVMe PRP 列表及对应数据页',
-    inputs: [ctxPort(), numPort('prp1', 'PRP1'), numPort('prp2', 'PRP2'), numPort('count', '页数')],
-    outputs: [
-      numPort('pages', '页数'), numPort('first', '首页'),
-      numPort('p0', '页 0'), numPort('p1', '页 1'), numPort('p2', '页 2'), numPort('p3', '页 3'),
-      strPort('list', '地址列表'),
-    ],
-    defaults: { prp1: '0x0', prp2: '0x0', count: '1' },
-    options: [
-      select('pageSize', '页大小', [['512', '512 B'], ['4096', '4 KiB']], '512'),
-      select('pointerSize', 'PRP 宽度', [['4', '4 字节'], ['8', '8 字节']], '8'),
-      ENDIAN_OPTION,
-    ],
+    id: 'checksum', label: '算校验和', group: '校验', hint: '对完整的字节范围计算实际校验值，不作通过判断',
+    precise: true,
+    inputs: [typed('span', 'span', '字节范围')],
+    outputs: [intPort('value', '实际校验值')],
+    options: [select('algorithm', '算法', [['crc32', 'CRC-32 / ISO-HDLC'], ['sum32', '32 位字节累加']], 'crc32')],
     run: (v, ctx) => {
-      const wanted = Math.max(0, Math.min(int(v.count, 1), 512));
-      const p1 = int(v.prp1);
-      const p2 = int(v.prp2);
-      const width: 4 | 8 = int(ctx.params.pointerSize, 8) === 4 ? 4 : 8;
-      const list: number[] = [];
-      if (wanted >= 1) list.push(p1);
-      if (wanted === 2) {
-        list.push(p2);
-      } else if (wanted > 2 && p2) {
-        for (let i = 0; i < wanted - 1; i++) {
-          list.push(readInt(ctx, p2 + i * width, width, false, ctx.endian));
-        }
+      const value = checksum(v.span, ctx.params.algorithm ?? 'crc32');
+      if (isByteSpan(v.span)) {
+        const buffer = v.span.buffer;
+        ctx.publishOrigin?.('value', { buffer, address: BigInt(buffer.base), length: buffer.bytes.length });
       }
-      const out: Record<string, unknown> = {
-        pages: list.length,
-        first: list[0] ?? 0,
-        list: list.map((a) => hex(a)).join('  '),
-      };
-      for (let i = 0; i < 4; i++) out[`p${i}`] = list[i] ?? 0;
-      return out;
+      return { value };
     },
-    detail: (_v, out, ctx) => {
-      const list = String(out.list ?? '').split(/\s+/).filter(Boolean);
-      const size = int(ctx.params.pageSize, 512);
-      return list.map((text, i) => {
-        const addr = Number(text);
-        let head = '缓冲区外';
-        let data = '—';
-        try {
-          const bytes = readBytes(ctx, addr, Math.min(16, size));
-          head = `${hexCells(bytes, 16)} |${printable(bytes)}|`;
-          const payload = readBytes(ctx, addr + 16, Math.min(48, size - 16));
-          data = cstr(payload).slice(0, 44) || '—';
-        } catch { /* 地址落在缓冲区外时保留占位标记 */ }
-        return `页 ${i}  ${text.padEnd(12)}  ${head}\n          ↳ ${data}`;
-      }).join('\n');
-    },
+    detail: (_v, out) => `0x${(out.value as bigint).toString(16).padStart(8, '0')}`,
   },
   {
-    id: 'checksum', label: '校验和', group: '校验', hint: 'CRC32 / 累加和 / FNV-1a',
-    inputs: [ctxPort(), numPort('address', '地址'), numPort('length', '长度')],
-    outputs: [numPort('crc32', 'CRC32'), numPort('sum', '累加和'), numPort('fnv1a', 'FNV-1a'), strPort('hex', 'CRC32 十六进制')],
-    defaults: { address: '0x0', length: '64' },
-    run: (v, ctx) => {
-      const bytes = readBytes(ctx, int(v.address), int(v.length, 64));
-      const crc = crc32(bytes);
-      return { crc32: crc, sum: sum8(bytes), fnv1a: fnv1a(bytes), hex: hexN(crc, 8) };
-    },
-    detail: (_v, out) => `CRC32     ${out.hex}\n累加和    ${out.sum}\nFNV-1a    0x${Number(out.fnv1a).toString(16)}`,
-  },
-  {
-    id: 'compare', label: '数值比较', group: '校验', hint: '相等 / 大小 / 差值',
-    inputs: [numPort('a', 'a'), numPort('b', 'b')],
+    id: 'assert', label: '断言', group: '校验', hint: '判断实际值是否等于预期或落在范围内',
+    precise: true, acceptMissing: true,
+    inputs: [typed('actual', 'numeric', '实际值'), typed('expected', 'numeric', '预期值')],
     outputs: [
-      { name: 'equal', type: 'boolean', label: '相等' },
-      { name: 'greater', type: 'boolean', label: 'a > b' },
-      { name: 'less', type: 'boolean', label: 'a < b' },
-      numPort('delta', '差值'),
+      strPort('status', '状态'), typed('ok', 'boolean', '通过'),
     ],
-    defaults: { a: '0', b: '0' },
-    run: (v) => {
-      const a = n(v.a);
-      const b = n(v.b);
-      return { equal: a === b, greater: a > b, less: a < b, delta: a - b };
+    ports: (params) => ({
+      inputs: params.mode === 'range'
+        ? [typed('actual', 'numeric', '实际值'), typed('min', 'numeric', '最小值'), typed('max', 'numeric', '最大值')]
+        : [typed('actual', 'numeric', '实际值'), typed('expected', 'numeric', '预期值')],
+      outputs: [strPort('status', '状态'), typed('ok', 'boolean', '通过')],
+    }),
+    options: [select('mode', '条件', [['eq', '相等'], ['range', '闭区间']], 'eq')],
+    run: (v, ctx) => {
+      const range = ctx.params.mode === 'range';
+      const expected = range ? v.min : v.expected;
+      const status = assertNumeric(v.actual, expected, v.max, range);
+      if (status !== '通过') {
+        const origin = ctx.inputOrigin?.('actual') ?? ctx.inputOrigin?.(range ? 'min' : 'expected');
+        const desc = status === '未能校验' ? '实际值或预期条件缺失、无效或上游求值失败'
+          : `实际 ${v.actual}，预期 ${range ? `${v.min}–${v.max}` : v.expected}`;
+        ctx.report?.(new ReadIssue(status === '不通过' ? 'ASSERT_FAILED' : 'ASSERT_UNAVAILABLE', `${status}：${desc}`, origin?.address), false, origin);
+      }
+      return { status, ok: status === '未能校验' ? undefined : status === '通过' };
     },
+    detail: (v, out, ctx) => `${out.status}\n实际 ${v.actual ?? '—'}\n预期 ${ctx.params.mode === 'range' ? `${v.min ?? '—'}–${v.max ?? '—'}` : v.expected ?? '—'}`,
   },
 ];
 
@@ -694,13 +602,19 @@ export function makeBuiltinCtx(
   buffer: BufferValue | undefined,
   params: Record<string, string> = {},
   sourceNote?: string,
+  layouts: readonly BinaryLayout[] = [],
+  report?: BuiltinCtx['report'],
+  inputOrigin?: BuiltinCtx['inputOrigin'],
+  publishOrigin?: BuiltinCtx['publishOrigin'],
 ): BuiltinCtx {
   return {
     buffer,
-    mem: new Memory(buffer?.bytes ?? new Uint8Array(0), buffer?.base ?? 0),
     params,
     endian: params.endian === 'big' ? 'big' : 'little',
-    pointerSize: params.pointerSize === '4' ? 4 : 8,
     sourceNote,
+    layouts,
+    report,
+    inputOrigin,
+    publishOrigin,
   };
 }

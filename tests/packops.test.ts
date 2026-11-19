@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import demoSource from '../samples/demo.bp.ts?raw';
 import { loadBlueprintPack } from '../src/bp/load';
-import { deserialize, serialize } from '../src/bp/persist';
+import { deserialize, GRAPH_VERSION, serialize } from '../src/bp/persist';
 import { isPackEnabled, type DocState, type LoadedPack } from '../src/bp/docstate';
 import {
-  TEMPLATE_PACK_SOURCE, addPack, cleanupPackNodes, disabledPackIds, enabledPackMap, packImpact,
+  addPack, cleanupPackNodes, disabledPackIds, enabledPackMap, packImpact,
   removePackAtomic, renamePack, setPackEnabled, uniquePackName,
 } from '../src/bp/packops';
 import type { BPNode } from '../src/bp/types';
@@ -178,55 +178,10 @@ describe('addPack', () => {
   });
 });
 
-describe('模板 pack', () => {
-  it('模板源码能通过 loadBlueprintPack 校验且同时含结构体与链表', () => {
-    const r = loadBlueprintPack(TEMPLATE_PACK_SOURCE);
-    expect(r.error).toBeUndefined();
-    expect(r.pack).toBeTruthy();
-    expect(Object.keys(r.pack!.types)).toEqual(expect.arrayContaining(['Head', 'Item']));
-    const head = r.pack!.nodes.head;
-    const items = r.pack!.nodes.items;
-    expect(head.kind).toBe('struct');
-    expect(items.kind).toBe('list');
-    expect(head.kind === 'struct' ? head.type.name : '').toBe('Head');
-    expect(items.kind === 'list' ? items.type.name : '').toBe('Item');
-  });
-
-  it('模板链表能走通一条真实指针链', () => {
-    const r = loadBlueprintPack(TEMPLATE_PACK_SOURCE);
-    expect(r.pack).toBeTruthy();
-    const pack = r.pack!;
-    const items = pack.nodes.items;
-    if (items.kind !== 'list') throw new Error('模板缺少链表节点');
-    // 0x00 → next=0x10，0x10 → next=0x20，0x20 → next=0
-    const bytes = new Uint8Array(0x30);
-    const view = new DataView(bytes.buffer);
-    view.setUint32(0x00, 0x10, true);
-    view.setUint32(0x10, 0x20, true);
-    view.setUint32(0x20, 0x00, true);
-    const walk = (addr: number): number[] => {
-      const out: number[] = [];
-      let cur: number | null = addr;
-      for (let i = 0; cur != null && i < 16; i++) {
-        out.push(cur);
-        const entry: { addr: number; type: unknown; raw: object; value: { next: number } } = {
-          addr: cur,
-          type: pack.types.Item,
-          raw: {},
-          value: { next: view.getUint32(cur, true) },
-        };
-        cur = items.next(entry as never, {} as never) ?? null;
-      }
-      return out;
-    };
-    expect(walk(0x00)).toEqual([0x00, 0x10, 0x20]);
-  });
-});
-
-describe('persist：enabled 向后兼容', () => {
-  it('旧缓存没有 enabled 字段 → 反序列化后视为启用', () => {
+describe('persist：enabled', () => {
+  it('缺省 enabled 字段 → 反序列化后视为启用', () => {
     const raw = JSON.stringify({
-      version: 1,
+      version: GRAPH_VERSION,
       savedAt: 1,
       packs: [{ id: 'p1', name: 'Alpha', source: demoSource }],
       nodes: [],

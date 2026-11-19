@@ -7,6 +7,7 @@
 
 import type { BlueprintPack, BPEdge, BPNode } from './types';
 import { makeDoc } from './doc';
+import type { BinaryLayout } from './layouts';
 
 /** 已编译的 pack：`source` 是原文（可序列化），`pack` 是编译产物（不可序列化） */
 export interface LoadedPack {
@@ -15,8 +16,7 @@ export interface LoadedPack {
   source: string;
   pack: BlueprintPack;
   /**
-   * 启用开关。`undefined` 视为启用——旧缓存与 `memlink-blueprint/1` 的
-   * `packs[]` 都没有这个字段，缺省就是 true。
+   * 启用开关。`undefined` 视为启用。
    * 禁用只影响求值：pack、节点、连线都留在文档里。
    */
   enabled?: boolean;
@@ -32,13 +32,14 @@ export interface DocState {
   packs: LoadedPack[];
   nodes: BPNode[];
   edges: BPEdge[];
+  layouts?: BinaryLayout[];
 }
 
 export const EMPTY_DOC: DocState = { packs: [], nodes: [], edges: [] };
 
 /** 三个数组是否全部按引用相等（判定「没有实质变化」的最快办法） */
 export function sameDoc(a: DocState, b: DocState): boolean {
-  return a === b || (a.packs === b.packs && a.nodes === b.nodes && a.edges === b.edges);
+  return a === b || (a.packs === b.packs && a.nodes === b.nodes && a.edges === b.edges && a.layouts === b.layouts);
 }
 
 /**
@@ -54,14 +55,16 @@ export function maxIdSeq(doc: DocState, floor = 100): number {
   for (const n of doc.nodes) scan(n.id, 'n');
   for (const e of doc.edges) scan(e.id, 'e');
   for (const p of doc.packs) scan(p.id, 'p');
+  for (const l of doc.layouts ?? []) scan(l.id, 'l');
   return max;
 }
 
-/** 文档的深度可序列化视图：保持 `memlink-blueprint/1` 结构，导出与持久化共用 */
+/** 文档的深度可序列化视图。 */
 export function docJson(doc: DocState): string {
   return JSON.stringify(makeDoc(
     doc.packs.map((p) => ({ id: p.id, name: p.name, source: p.source })),
     doc.nodes,
     doc.edges,
+    doc.layouts,
   ));
 }

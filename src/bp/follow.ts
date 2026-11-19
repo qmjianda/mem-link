@@ -3,13 +3,10 @@
  * 写成用户能直接照做的提示；候选节点与类型推断也在这里，便于单元测试。
  */
 
-import { BUILTIN_DEFS, getBuiltin } from './builtins';
-import type { BlueprintPack, BPNode, BufferValue, NodeView } from './types';
+import { BUILTIN_DEFS } from './builtins';
+import type { BlueprintPack, BPNode, BufferValue, NodeView, PortType } from './types';
 import { isInstanceView } from './types';
-
-function hex(n: number): string {
-  return `0x${n.toString(16)}`;
-}
+import { addressHex, addressInteger, isMappedAddress, type AddressInt } from './precision';
 
 function isBufferValue(v: unknown): v is BufferValue {
   return !!v && typeof v === 'object'
@@ -22,18 +19,20 @@ function isBufferValue(v: unknown): v is BufferValue {
  * 元素/实例端口携带的是 InstanceView，取它自己的 addr；
  * 其余（列表、缓冲区、字符串、布尔）没有单一地址，返回 null。
  */
-export function followAddress(value: unknown): number | null {
+export function followAddress(value: unknown): AddressInt | null {
+  if (isMappedAddress(value)) return value.value;
+  if (typeof value === 'bigint') return addressInteger(value) ?? null;
   const n = typeof value === 'number'
     ? value
     : isInstanceView(value)
-      ? value.addr
+      ? value.location?.value ?? value.addr
       : Number.NaN;
-  return Number.isFinite(n) ? Math.trunc(n) : null;
+  return typeof n === 'bigint' || Number.isSafeInteger(n) ? n : null;
 }
 
 /** 为什么这个端口不能跟随（null 表示可以跟随）。 */
 export function followHint(value: unknown): string {
-  if (typeof value === 'number' || isInstanceView(value)) return '地址计算结果无效';
+  if (typeof value === 'number' || typeof value === 'bigint' || isInstanceView(value)) return '地址计算结果无效';
   if (Array.isArray(value)) return '列表端口有多个元素地址——展开后双击单个元素';
   if (isBufferValue(value)) return '缓冲区端口不是单个地址——请双击 base 端口';
   if (typeof value === 'string') return '字符串不是地址';
@@ -41,19 +40,24 @@ export function followHint(value: unknown): string {
   return '端口没有输出地址';
 }
 
+export function followTypeIssue(type?: PortType): string | undefined {
+  if (type === 'offset') return '字节偏移不是地址，请先换算地址';
+  if (type === 'index') return '元素下标不是地址，请先换算地址';
+}
+
 /** 地址不在任何缓冲区时的说明，包含当前可用范围。 */
-export function bufferIssue(addr: number, buffers: BufferValue[]): string {
-  if (!Number.isFinite(addr)) return '地址计算结果无效';
+export function bufferIssue(addr: AddressInt, buffers: BufferValue[]): string {
   if (addr < 0) return `地址为负：${addr}`;
+  if (addressInteger(addr) === undefined) return '地址计算结果无效';
   if (!buffers.length) {
     return '还没有可用的文件缓冲区——先添加 File 节点并载入 .bin/.hex';
   }
   if (buffers.length === 1) {
     const b = buffers[0];
-    const last = b.base + b.bytes.length - 1;
-    return `${hex(addr)} 不在 ${b.name} 的 ${hex(b.base)}–${hex(last)} 内`;
+    const last = BigInt(b.base) + BigInt(b.bytes.length) - 1n;
+    return `${addressHex(addr)} 不在 ${b.name} 的 ${addressHex(b.base)}–${addressHex(last)} 内`;
   }
-  return `${hex(addr)} 不在任何缓冲区（${buffers.length} 个文件）内`;
+  return `${addressHex(addr)} 不在任何缓冲区（${buffers.length} 个文件）内`;
 }
 
 /* ------------------------------------------------- 跟随候选（解析节点清单） */
@@ -64,6 +68,9 @@ export interface FollowItem {
   nodeId: string;
   label: string;
   detail: string;
+  /** 绑定当前地址的输入端口，可能不是 `address`。 */
+  inputPort: string;
+  addressType: PortType;
   /** 列表分组标题（结构体 / 链表 / 数组 / 解析 / 地址 / 校验 / 数据源 / 推荐） */
   group: string;
   /** 「元素解析」条目要按哪个 pack 的类型解码（只由推断写入） */
@@ -80,27 +87,12 @@ export interface FollowTypeHint {
 
 /** 候选分组顺序：结构体在最前，便于扫类型；推荐项单独置顶。 */
 const GROUP_RANK: Record<string, number> = {
-  结构体: 0, 链表: 1, 数组: 2, 解析: 3, 数据源: 4, 地址: 5, 校验: 6,
+  结构体: 0, 链表: 1, 数组: 2, 读取: 3, 集合: 4, 数据源: 5, 定位: 6, 校验: 7,
 };
 
 const PACK_GROUP: Record<string, string> = {
   struct: '结构体', list: '链表', array: '数组',
 };
-
-/**
- * 可以作为「解析入口」的内置节点：解析组的全部节点，加上按地址读取
- * 字节 / 指针 / PRP / 校验和的节点。元素解析由浮层顶部那条
- * 「元素解析」承担（仅在类型可推断时出现），不在列表里重复。
- *
- * 用注册表反推而不是手写 id 列表，新增解析节点时不会再漏。
- */
-export function followBuiltinIds(): string[] {
-  const extra = new Set(['slice', 'ptrwalk', 'prp', 'checksum']);
-  return BUILTIN_DEFS
-    // element 有专门的自适应入口；file/number/string/note/expr 等不是解析入口。
-    .filter((d) => d.id !== 'element' && (d.group === '解析' || extra.has(d.id)))
-    .map((d) => d.id);
-}
 
 export function buildFollowItems(opts: {
   packs: Map<string, BlueprintPack>;
@@ -120,6 +112,8 @@ export function buildFollowItems(opts: {
         nodeId,
         label: def.label ?? nodeId,
         detail: `${packName} · ${def.type.name} ${def.type.size} B`,
+        inputPort: 'address',
+        addressType: 'pack-address',
         group: PACK_GROUP[def.kind] ?? '结构体',
         typeName: def.type.name,
       });
@@ -128,15 +122,16 @@ export function buildFollowItems(opts: {
   // 同一分组内保持 pack 声明顺序；跨 pack 的分组聚到一起，列表更好扫。
   out.sort((a, b) => (GROUP_RANK[a.group] ?? 99) - (GROUP_RANK[b.group] ?? 99));
 
-  for (const id of followBuiltinIds()) {
-    const def = getBuiltin(id);
-    if (!def) continue;
+  for (const def of BUILTIN_DEFS) {
+    if (!def.followPort) continue;
     out.push({
-      key: `/${id}`,
+      key: `/${def.id}`,
       packId: '',
-      nodeId: id,
+      nodeId: def.id,
       label: def.label,
       detail: `内置 · ${def.hint}`,
+      inputPort: def.followPort,
+      addressType: def.inputs.find((p) => p.name === def.followPort)?.type ?? 'address',
       group: def.group,
     });
   }
@@ -158,6 +153,8 @@ export function elementFollowItem(hint?: FollowTypeHint | null): FollowItem | nu
     nodeId: 'element',
     label: '元素解析',
     detail: `自适应 · ${hint.typeName} · ${hint.reason}`,
+    inputPort: 'address',
+    addressType: 'pack-address',
     group: '推荐',
     typePackId: hint.packId,
     typeName: hint.typeName,
@@ -176,21 +173,23 @@ export interface KnownType {
 export function knownTypesAt(
   nodes: BPNode[],
   views: Map<string, NodeView>,
+  includes: (nodeId: string) => boolean = () => true,
 ): Map<number, KnownType> {
   const out = new Map<number, KnownType>();
   const put = (addr: number, packId: string, typeName: string) => {
     const cur = out.get(addr);
     if (!cur) out.set(addr, { packId, typeName });
-    else if (cur.typeName !== typeName) cur.ambiguous = true;
+    else if (cur.typeName !== typeName || cur.packId !== packId) cur.ambiguous = true;
   };
   for (const n of nodes) {
+    if (!includes(n.id)) continue;
     const v = views.get(n.id);
     if (!v) continue;
     const packId = n.packId || n.params.packId || '';
-    if ((v.kind === 'struct' || v.kind === 'element') && v.inst) {
+    if ((v.kind === 'struct' || v.kind === 'element') && v.inst && !v.inst.location) {
       put(v.inst.addr, packId, v.inst.typeName);
     } else if (v.kind === 'list' || v.kind === 'array') {
-      for (const it of v.items) put(it.addr, packId, it.typeName);
+      for (const it of v.items) if (!it.location) put(it.addr, packId, it.typeName);
     }
   }
   return out;
@@ -219,7 +218,7 @@ export function inferFollowType(opts: {
     return null;
   };
 
-  if (isInstanceView(opts.value)) {
+  if (isInstanceView(opts.value) && !opts.value.location) {
     const hit = pick(opts.value.typeName, opts.sourcePackId);
     if (hit) return { ...hit, reason: `沿用来源元素类型 ${opts.value.typeName}` };
   }

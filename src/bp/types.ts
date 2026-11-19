@@ -8,11 +8,20 @@ import type { Endian, Problem } from '../core/types';
 import type { FieldDef, TypeDef } from '../core/pack';
 import type { Memory } from '../core/mem';
 import type { AssetTable } from './assets';
+import type { AddressInt, MappedAddress } from './precision';
+import type { BinaryLayout } from './layouts';
 
 export type PortType =
   | 'number'
+  | 'integer'
+  | 'numeric'
+  | 'address'
+  | 'offset'
+  | 'index'
+  | 'pack-address'
   | 'string'
   | 'bytes'
+  | 'span'
   | 'boolean'
   | 'instance'
   | 'list'
@@ -125,41 +134,6 @@ export interface BPNode {
   source?: StoredMemory;
 }
 
-/**
- * 旧内置节点到合并后节点的迁移（在缓存与打开图两处入口统一调用）：
- * - `pointer`（指针解引用）→ `ptrwalk`（指针步进）：ptrwalk 是它的超集，offset 恒 0；
- * - `bitwise`（位运算）→ `expr`（表达式）：表达式求值器本就支持 `& | ^ << >> ~`；
- * - `float`（浮点读取）→ `readint`（数值读取）：宽度下拉统一承担整数与浮点。
- * 只映射存在差异的 params，其余原样保留。
- */
-export function migrateNode(n: BPNode): BPNode {
-  if (n.packId !== '') return n;
-  if (n.nodeId === 'pointer') {
-    return {
-      ...n,
-      nodeId: 'ptrwalk',
-      params: { base: n.params.address ?? '0x0', offset: '0x0', pointerSize: n.params.pointerSize ?? '8' },
-    };
-  }
-  if (n.nodeId === 'bitwise') {
-    const template: Record<string, string> = {
-      '&': 'a & b', '|': 'a | b', '^': 'a ^ b', '<<': 'a << b', '>>': 'a >> b', '~': '~a',
-    };
-    return {
-      ...n,
-      nodeId: 'expr',
-      params: {
-        a: n.params.a ?? '0', b: n.params.b ?? '0', c: '0',
-        formula: template[n.params.op ?? '&'] ?? 'a & b',
-      },
-    };
-  }
-  if (n.nodeId === 'float') {
-    return { ...n, nodeId: 'readint', params: { ...n.params, size: n.params.size === '8' ? 'f8' : 'f4' } };
-  }
-  return n;
-}
-
 export interface BPEdge {
   id: string;
   from: { node: string; port: string };
@@ -168,17 +142,21 @@ export interface BPEdge {
 
 export interface StoredMemory {
   name: string;
-  base: number;
+  /** Exact literals are saved as text; numeric bases must be safe integers. */
+  base: string | number;
   /** base64 */
   data: string;
 }
 
+export const BLUEPRINT_FORMAT = 'memlink-blueprint/2';
+
 export interface BPDoc {
-  format: 'memlink-blueprint/1';
+  format: typeof BLUEPRINT_FORMAT;
   packs: { id: string; name: string; source: string }[];
   /** file nodes embed their own buffer in `source` */
   nodes: BPNode[];
   edges: BPEdge[];
+  layouts?: BinaryLayout[];
 }
 
 /** Runtime value carried on a `buffer` edge. */
@@ -186,8 +164,17 @@ export interface BufferValue {
   /** 内容哈希（见 assets.ts）；名称与基址都不参与身份 */
   assetId: string;
   name: string;
-  base: number;
+  base: AddressInt;
+  /** For restricted views, the base of the originating file mapping. */
+  mappingBase?: AddressInt;
   bytes: Uint8Array;
+}
+
+export interface ByteOrigin {
+  buffer: BufferValue;
+  address: bigint;
+  length: number;
+  fieldId?: string;
 }
 
 /* --------------------------------------------------------------- runtime */
@@ -196,6 +183,7 @@ export interface FieldView {
   name: string;
   label?: string;
   kind: FieldDef['kind'];
+  portType?: PortType;
   type: string;
   offset: number;
   size: number;
@@ -207,6 +195,9 @@ export interface FieldView {
 
 export interface InstanceView {
   addr: number;
+  /** Built-in records carry exact, absolute position separately from the preview's local byte index. */
+  location?: MappedAddress;
+  layoutId?: string;
   index?: number;
   typeName: string;
   size: number;
@@ -232,6 +223,8 @@ export interface SourceInfo {
   via?: { node: string; port: string };
   /** 数据源由上游的字符串/字节输出提供：字节要等求值该端口时才算（值依赖） */
   pendingValue?: boolean;
+  /** 声明值来源的端点，沿后续上下文继承保留到整条读取链。 */
+  valueSource?: { node: string; port: string };
   /** 继承链自身成环：没有可用的数据源，且与值依赖环是两回事 */
   sourceCycle?: boolean;
   /** incoming edges point at different files */
@@ -272,14 +265,14 @@ export interface InputValue {
  */
 export interface Truncation {
   limit: number;
-  at: number;
+  at: AddressInt;
   unit: 'index' | 'address';
   canContinue: boolean;
 }
 
 export type NodeView =
-  | { kind: 'file'; name: string; size: number; base: number; error?: string }
-  | { kind: 'number'; value: number; error?: string }
+  | { kind: 'file'; name: string; size: number; base: AddressInt; error?: string }
+  | { kind: 'number'; value: number | bigint; error?: string }
   | { kind: 'struct'; inst?: InstanceView; error?: string }
   | {
       kind: 'list';
@@ -288,9 +281,11 @@ export type NodeView =
       truncated?: boolean;
       trunc?: Truncation;
       cycle?: boolean;
+      local?: boolean;
+      stop?: string;
       error?: string;
     }
-  | { kind: 'array'; items: InstanceView[]; count: number; truncated?: boolean; trunc?: Truncation; error?: string }
+  | { kind: 'array'; items: InstanceView[]; count: number; truncated?: boolean; trunc?: Truncation; error?: string; local?: boolean; stop?: string }
   | { kind: 'element'; inst?: InstanceView; error?: string }
   | { kind: 'calc'; outputs: Record<string, unknown>; detail?: string; error?: string };
 
@@ -305,6 +300,9 @@ export interface BPResult {
   sources: Map<string, SourceInfo>;
   /** node id -> input port -> value actually used (mirrors wires into the UI) */
   inputs: Map<string, Record<string, InputValue>>;
+  /** 字段或单值的读位置；只用于显示与诊断，不随图保存。 */
+  origins?: Map<string, Record<string, ByteOrigin>>;
+  problemOrigins?: Map<string, ByteOrigin>;
   /** 本次求值登记的全部资产：内容哈希 → 共享字节 */
   assets: AssetTable;
   problems: Problem[];
@@ -352,7 +350,11 @@ export function looksLikeInstance(v: unknown): boolean {
 export function canConnect(from: PortType, to: PortType): boolean {
   if (from === to) return true;
   if (to === 'buffer') return true;
-  return from === 'instance' && to === 'number';
+  if (to === 'numeric') return from === 'integer' || from === 'number' || from === 'offset' || from === 'index';
+  if (to === 'pack-address') return from === 'address' || from === 'number' || from === 'integer' || from === 'instance';
+  if (to === 'offset' || to === 'index' || to === 'integer') return from === 'integer' || from === 'number';
+  if (to === 'address') return from === 'instance' || from === 'pack-address';
+  return to === 'number' && (from === 'instance' || from === 'integer' || from === 'pack-address');
 }
 
 /** Shared by the canvas renderer and drag-to-add placement. */
@@ -385,6 +387,7 @@ export function fieldPortType(f: FieldDef): PortType {
     case 'string': return 'string';
     case 'bytes': return 'bytes';
     case 'bool': return 'boolean';
+    case 'ptr': return 'pack-address';
     case 'record': return 'instance';
     case 'array': return 'list';
     default: return 'number';
@@ -398,4 +401,3 @@ export function fieldPorts(type: TypeDef): PortSpec[] {
     label: f.label ?? f.name,
   }));
 }
-

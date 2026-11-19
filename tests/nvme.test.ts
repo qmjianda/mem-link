@@ -9,6 +9,7 @@ import { parseDoc } from '../src/bp/doc';
 import { loadBlueprintPack } from '../src/bp/load';
 import { evaluateGraph } from '../src/bp/eval';
 import type { BlueprintPack } from '../src/bp/types';
+import { isByteSpan } from '../src/bp/binary-read';
 
 function loadGraph() {
   const parsed = parseDoc(JSON.stringify(nvmeDemo));
@@ -68,18 +69,17 @@ describe('NVMe Submission Queue demo', () => {
     expect(result.outputs.get('n_opc')?.known).toBe(true);
   });
 
-  it('expands PRP1 + PRP2 list into six data pages with previews', () => {
-    const { result } = loadGraph();
+  it('expands PRP1 + PRP2 into six data pages inside the NVMe pack', () => {
+    const { doc, result } = loadGraph();
+    expect(doc.nodes.find((n) => n.id === 'n_prp')?.packId).toBe('p1');
     const prp = result.outputs.get('n_prp')!;
     expect(prp.pages).toBe(6);
-    expect(prp.first).toBe(0x1200);
     expect(prp.p0).toBe(0x1200);
     expect(prp.p1).toBe(0x1400);
     expect(prp.p2).toBe(0x1600);
     expect(prp.p3).toBe(0x1800);
     const view = result.views.get('n_prp');
     expect(view?.kind).toBe('calc');
-    if (view?.kind === 'calc') expect(view.detail).toContain('NVMe READ DATA');
   });
 
   it('decodes the PRP list page and its first entry', () => {
@@ -103,10 +103,15 @@ describe('NVMe Submission Queue demo', () => {
 
   it('reads a raw slice and a checksum of the first data page', () => {
     const { result } = loadGraph();
-    expect(result.outputs.get('n_dump')?.size).toBe(64);
-    expect(String(result.outputs.get('n_dump')?.hex)).toMatch(/^4e 56 4d 45/);
+    const span = result.outputs.get('n_dump')?.span;
+    expect(isByteSpan(span)).toBe(true);
+    if (isByteSpan(span)) {
+      expect(span.buffer.bytes.length).toBe(64);
+      expect(Array.from(span.buffer.bytes.subarray(0, 4))).toEqual([0x4e, 0x56, 0x4d, 0x45]);
+    }
     const sum = result.outputs.get('n_sum')!;
-    expect(sum.crc32).toBeGreaterThan(0);
+    expect(typeof sum.value).toBe('bigint');
+    expect(sum.value as bigint).toBeGreaterThan(0n);
     expect(result.views.get('n_sum')?.kind).toBe('calc');
   });
 

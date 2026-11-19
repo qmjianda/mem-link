@@ -9,6 +9,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toHex } from '../core/mem';
 import type { TreeFocus, TreeRootSpec, TreeRow } from './tree';
 import { findRowPathByAddr, StructTree as TreeModel } from './tree';
+import { FOCUSABLE } from './ModalFocus';
 
 const ROW_H = 22;
 const OVERSCAN = 8;
@@ -93,7 +94,11 @@ export default function StructTree({
     return () => ro.disconnect();
   }, []);
 
-  useEffect(() => { hostRef.current?.focus(); }, []);
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    hostRef.current?.focus();
+    return () => { if (previous?.isConnected) previous.focus(); };
+  }, []);
 
   // 跟随浮层期间让位：不卸载组件，滚动/展开/搜索状态原样保留；焦点交给浮层。
   useEffect(() => {
@@ -227,6 +232,23 @@ export default function StructTree({
       e.preventDefault();
       e.stopPropagation();
       onClose();
+      return;
+    }
+    if (e.key === 'Tab') {
+      const root = hostRef.current;
+      if (!root) return;
+      const items = [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.offsetParent !== null);
+      if (!items.length) { e.preventDefault(); return; }
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement as HTMLElement | null;
+      if (e.shiftKey && (active === first || active === root || !root.contains(active))) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
       return;
     }
     const inField = !!(e.target as HTMLElement).closest('input, textarea, select');

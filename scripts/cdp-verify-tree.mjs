@@ -105,6 +105,13 @@ async function main() {
   await send('Page.enable');
   for (let i = 0; i < 80; i++) {
     if (await evaluate(`document.querySelectorAll('.bp-node').length > 2`)) break;
+    if (i === 0) {
+      await evaluate(`(() => {
+        const b = [...document.querySelectorAll('.bp-top .btn')].find((e) => e.textContent.trim() === '示例');
+        b?.click();
+        return !!b;
+      })()`);
+    }
     await sleep(150);
   }
   await sleep(400);
@@ -278,20 +285,30 @@ async function main() {
     b.click();
     return true;
   })()`);
-  await sleep(950); // 等待蓝图自动保存，以便核对连线端点
+  await sleep(950); // 等新节点/连线渲染完成（示例是临时副本，不写缓存）
   const resolveNotice = await evaluate(`document.querySelector('.bp-tree-notice')?.textContent ?? ''`);
   check('⊕ 生成解析节点且结构树不关闭',
     resolveClicked && /已在图上生成/.test(resolveNotice)
       && await evaluate(`!!document.querySelector('.bp-tree-overlay:not(.hidden)')`),
     resolveNotice.slice(0, 40));
+  const resolveDbg = await evaluate(`(() => {
+    const paths = [...document.querySelectorAll('path[data-edge-id]')];
+    const last = paths.at(-1);
+    const nodes = [...document.querySelectorAll('.bp-node')];
+    return {
+      domEdges: paths.length,
+      from: last?.dataset.edgeFrom ?? '',
+      to: last?.dataset.edgeTo ?? '',
+      lastNode: nodes.at(-1)?.dataset.nodeId ?? '',
+      lastTitle: nodes.at(-1)?.querySelector('.bp-node-title')?.textContent ?? '',
+    };
+  })()`);
   check('⊕ 从原节点的元素端口连到新节点',
-    await evaluate(`document.querySelectorAll('path[data-edge-id]').length`) === edgesBeforeResolve + 1
-      && await evaluate(`(() => {
-        const doc = JSON.parse(localStorage.getItem('memlink:graph:v1'));
-        const edge = doc?.edges.at(-1);
-        return edge?.from.node === 'n_prpList' && edge.from.port === 'elem:0'
-          && edge.to.node === doc.nodes.at(-1)?.id && edge.to.port === 'address';
-      })()`));
+    resolveDbg.domEdges === edgesBeforeResolve + 1
+      && resolveDbg.from === 'n_prpList:elem:0'
+      && resolveDbg.to === `${resolveDbg.lastNode}:address`
+      && /PrpEntry/.test(resolveDbg.lastTitle),
+    JSON.stringify({ edgesBeforeResolve, resolveDbg }));
   await closeTree();
   await sleep(250);
 

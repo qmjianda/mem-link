@@ -115,7 +115,7 @@ async function main() {
   // 文件名含中文/空格都不涉及；这里只需要 File/DataTransfer，页面已具备。
 
   for (let i = 0; i < 60; i++) {
-    if (await evaluate(`!!document.querySelector('.bp-app .bp-node')`)) break;
+    if (await evaluate(`!!document.querySelector('.bp-app')`)) break;
     await sleep(150);
   }
   await sleep(300);

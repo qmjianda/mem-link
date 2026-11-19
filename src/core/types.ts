@@ -13,7 +13,7 @@ export interface Problem {
   fieldId?: string;
   /** 可选定位：出问题的端口与地址 */
   port?: string;
-  addr?: number;
+  addr?: number | bigint;
   message: string;
   detail?: string;
   /** 可选修复动作，供问题面板直接执行 */
