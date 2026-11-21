@@ -19,8 +19,9 @@
     "verify:tree:trunc": "node scripts/cdp-verify-tree-truncation.mjs",
     "verify:add-defaults": "node scripts/cdp-verify-add-defaults.mjs",
     "verify:default-nodes": "node scripts/cdp-verify-default-nodes.mjs",
-    "packs:index": "node store/scripts/build-index.mjs store",
-    "packs:check": "node store/scripts/build-index.mjs store --check",
+    "packs:references": "node store/scripts/build-references.mjs --root store",
+    "packs:index": "node store/scripts/build-references.mjs --root store && node store/scripts/build-index.mjs store",
+    "packs:check": "node store/scripts/build-references.mjs --root store --check && node store/scripts/build-index.mjs store --check",
     "packs:port:nybble": "node store/scripts/port-nybble.mjs --root store --write",
     "packs:port:imhex": "node store/scripts/port-imhex.mjs --root store --src .cache/imhex-patterns/patterns --write",
     "packs:publish": "node scripts/publish-pack-store.mjs"

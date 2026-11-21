@@ -21,6 +21,8 @@ pack，每个 pack 是一个 `.bp.ts` 文件。应用只在你打开商店和点
 - 输入任意 GitHub 仓库、分支或 `index.json` 地址；
 - 查看版本、来源（Nybble / ImHex / 手工）、许可、SHA-256、是否「部分布局」；
 - 安装、更新、重装。已安装状态按「商店地址 + pack id」识别，不受本地显示名影响。
+- 「参考蓝图」：打开一张已经接好 File → 解析节点的临时示例图，不覆盖当前工作图。
+  参考图带零填充示例 buffer 和一段使用说明；每个节点的帮助里也能打开它。
 
 ### 安装与更新
 
@@ -66,7 +68,12 @@ pack，每个 pack 是一个 `.bp.ts` 文件。应用只在你打开商店和点
       "source": { "provider": "manual", "url": "..." },
       "path": "packs/sqlite/pack.bp.ts",
       "sha256": "…64 位小写 hex…",
-      "size": 5000
+      "size": 5000,
+      "reference": {
+        "path": "packs/sqlite/reference.blueprint.json",
+        "sha256": "…64 位小写 hex…",
+        "size": 9258
+      }
     }
   ]
 }

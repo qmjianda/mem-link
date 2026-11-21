@@ -20,6 +20,8 @@ export const KEY_STORE_CACHE = 'memlink:store:cache:v1';
 /** 索引和单个 pack 的抓取上限，避免误把大文件当商店内容 */
 export const MAX_INDEX_BYTES = 4 * 1024 * 1024;
 export const MAX_PACK_BYTES = 2 * 1024 * 1024;
+/** 参考蓝图最多带一个几 KB 的示例缓冲区，超过这个上限就视为商店内容异常 */
+export const MAX_REFERENCE_BYTES = 4 * 1024 * 1024;
 
 export interface StoreSource {
   provider?: string;
@@ -28,6 +30,13 @@ export interface StoreSource {
   path?: string;
   url?: string;
   license?: string;
+}
+
+/** pack 目录附带的参考蓝图；下载后可直接作为临时示例打开 */
+export interface StoreReference {
+  path: string;
+  sha256?: string;
+  size?: number;
 }
 
 export interface StorePackEntry {
@@ -50,6 +59,8 @@ export interface StorePackEntry {
   path: string;
   sha256?: string;
   size?: number;
+  /** 参考蓝图（pack 目录下的 reference.blueprint.json） */
+  reference?: StoreReference;
 }
 
 export interface StoreIndex {
@@ -221,6 +232,27 @@ function validateEntry(raw: unknown, i: number, warnings: string[]): StorePackEn
   const coverage = raw.coverage === 'partial' ? 'partial' : raw.coverage === 'complete' ? 'complete' : undefined;
   const helpers = typeof raw.helpers === 'number' && Number.isFinite(raw.helpers) && raw.helpers > 0 ? raw.helpers : undefined;
   const source = isRecord(raw.source) ? (raw.source as StoreSource) : undefined;
+  let reference: StoreReference | undefined;
+  if (isRecord(raw.reference)) {
+    const refPath = typeof raw.reference.path === 'string' ? raw.reference.path.trim() : '';
+    if (!/\.blueprint\.json$/i.test(refPath)) {
+      warnings.push(`packs[${i}] (${id}) 的 reference.path 不是 .blueprint.json`);
+    } else {
+      const refSha = typeof raw.reference.sha256 === 'string' ? raw.reference.sha256.trim().toLowerCase() : undefined;
+      if (refSha && !/^[0-9a-f]{64}$/.test(refSha)) {
+        warnings.push(`packs[${i}] (${id}) 的 reference.sha256 非法`);
+      } else {
+        reference = {
+          path: refPath,
+          ...(refSha ? { sha256: refSha } : {}),
+          ...(typeof raw.reference.size === 'number' && Number.isFinite(raw.reference.size) && raw.reference.size >= 0
+            ? { size: raw.reference.size } : {}),
+        };
+      }
+    }
+  } else if (raw.reference !== undefined) {
+    warnings.push(`packs[${i}] (${id}) 的 reference 不是对象`);
+  }
   if (typeof raw.order === 'number' && !Number.isFinite(raw.order)) {
     warnings.push(`packs[${i}] (${id}) 的 order 不是有限数字，已忽略`);
   }
@@ -243,6 +275,7 @@ function validateEntry(raw: unknown, i: number, warnings: string[]): StorePackEn
     path,
     ...(sha256 ? { sha256 } : {}),
     ...(typeof raw.size === 'number' && Number.isFinite(raw.size) && raw.size >= 0 ? { size: raw.size } : {}),
+    ...(reference ? { reference } : {}),
   };
 }
 
@@ -433,6 +466,30 @@ export async function fetchStorePack(
   }
   if (!fetched.text.includes('definePack')) throw new Error('下载内容不像一个 .bp.ts pack');
   return { url: fetched.url, source: fetched.text };
+}
+
+export async function fetchStoreReference(
+  indexUrl: string,
+  reference: StoreReference,
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal,
+): Promise<{ url: string; text: string }> {
+  const url = resolveStorePackUrl(indexUrl, reference.path);
+  let fetched: { url: string; text: string; bytes: number };
+  try {
+    fetched = await fetchTextWithMirror(
+      fetchImpl, url, { cache: 'no-store', headers: { Accept: 'application/json' } },
+      PACK_TIMEOUT_MS, MAX_REFERENCE_BYTES, signal,
+    );
+  } catch (e) {
+    throw new Error(`无法下载参考蓝图：${e instanceof Error ? e.message : String(e)}`);
+  }
+  if (!fetched.text.includes('memlink-blueprint/3')) throw new Error('下载内容不像 mem-link 蓝图');
+  if (reference.sha256) {
+    const verified = await verifyPackSource(fetched.text, reference.sha256);
+    if (!verified.ok) throw new Error(`参考蓝图校验失败：${verified.error ?? '哈希不匹配'}`);
+  }
+  return { url: fetched.url, text: fetched.text };
 }
 
 export async function sha256Hex(text: string): Promise<string> {

@@ -162,6 +162,8 @@ export interface PackStoreRef {
   provider?: string;
   coverage?: 'complete' | 'partial';
   helpers?: number;
+  /** 商店里的参考蓝图；装包后仍可一键打开 */
+  reference?: { path: string; sha256?: string; size?: number };
 }
 
 export interface BPDoc {

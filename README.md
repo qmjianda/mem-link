@@ -97,14 +97,20 @@ https://cdn.jsdelivr.net/gh/qmjianda/mem-link-packs@main/index.json
   其中 192 个完整、185 个部分布局；59 个部分布局带有 321 个动态辅助节点
   （calc/list/array/变体），由 `meta.json` 的 `coverage` 与 `helpers` 标记。
 - 安装时用索引里的 SHA-256 校验；安装后的源码随蓝图和缓存保存，离线可用。
+- 每个 pack 都带 `reference.blueprint.json`：从商店卡片点「参考蓝图」会以临时
+  示例打开一张已经接好 File → 解析节点的图；不会覆盖当前工作图。
+- 每个节点都有帮助说明：节点库条目的 `?`、快速添加底部、检查器「帮助」都能
+  查看端口、类型字段和接线步骤。详见
+  [`docs/pack-help-and-reference.md`](docs/pack-help-and-reference.md)。
 - 支持搜索、分类、版本、更新/重装、自定义商店地址。商店地址也可以是任意
   GitHub 仓库、分支或 `index.json`。
 
 应用只在打开商店和安装/更新时联网；其它解析与求值仍然是本地行为。维护命令：
 
 ```bash
-pnpm packs:index       # 重新生成 store/index.json
-pnpm packs:check       # 校验索引与 377 个 pack 一致
+pnpm packs:references  # 重新生成每个 pack 的参考蓝图
+pnpm packs:index       # 参考蓝图 + store/index.json
+pnpm packs:check       # 校验参考蓝图、索引与 377 个 pack 一致
 pnpm packs:publish     # 同步到独立商店仓库（需先 gh auth）
 ```
 

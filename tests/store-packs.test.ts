@@ -17,6 +17,12 @@ const packMeta = import.meta.glob('../store/packs/*/meta.json', {
   eager: true,
 }) as Record<string, string>;
 
+const packReferences = import.meta.glob('../store/packs/*/reference.blueprint.json', {
+  query: '?raw',
+  import: 'default',
+  eager: true,
+}) as Record<string, string>;
+
 function dirOf(path: string): string {
   return path.split('/').slice(-2, -1)[0] ?? '';
 }
@@ -68,6 +74,32 @@ describe('store packs', () => {
       expect(r.pack, dir).toBeTruthy();
       expect(Object.keys(r.pack!.nodes).length, `${dir} 至少一个节点`).toBeGreaterThan(0);
       expect(Object.keys(r.pack!.types).length, `${dir} 至少一个类型`).toBeGreaterThan(0);
+      for (const [nodeId, def] of Object.entries(r.pack!.nodes)) {
+        expect(def.description?.trim().length, `${dir}/${nodeId} 必须有帮助说明`).toBeGreaterThan(0);
+      }
+    });
+
+    it(`${dir} 有可打开的参考蓝图`, () => {
+      const raw = packReferences[`../store/packs/${dir}/reference.blueprint.json`];
+      expect(raw, `${dir}/reference.blueprint.json`).toBeTruthy();
+      const doc = JSON.parse(raw) as {
+        format?: string;
+        packs?: { id?: string; source?: string }[];
+        nodes?: { packId?: string; nodeId?: string; source?: { data?: string } }[];
+        edges?: unknown[];
+      };
+      expect(doc.format).toBe('memlink-blueprint/3');
+      expect(doc.packs?.[0]?.id).toBe('p1');
+      expect(doc.nodes?.some((n) => n.packId === 'p1'), `${dir} 参考蓝图要有 pack 节点`).toBe(true);
+      expect(doc.nodes?.some((n) => n.nodeId === 'note'), `${dir} 参考蓝图要有使用说明`).toBe(true);
+      expect(doc.nodes?.some((n) => n.nodeId === 'file' && (n.source?.data?.length ?? 0) > 0), `${dir} 参考蓝图要有示例 buffer`).toBe(true);
+      expect(doc.edges?.length, `${dir} 参考蓝图要有数据源连线`).toBeGreaterThan(0);
+      // 参考图里的节点 id 必须仍存在于当前 pack；pack 改 node id 后参考图要重新生成。
+      const refPack = loadBlueprintPack(doc.packs![0].source!);
+      expect(refPack.error, `${dir} 参考图 pack 可加载`).toBeUndefined();
+      for (const n of doc.nodes ?? []) {
+        if (n.packId) expect(refPack.pack!.nodes[n.nodeId!], `${dir} 参考图节点 ${n.nodeId}`).toBeTruthy();
+      }
     });
 
     it(`${dir} 的 meta 与目录一致`, () => {

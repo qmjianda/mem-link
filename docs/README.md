@@ -6,6 +6,7 @@
 | --- | --- | --- | --- |
 | [`description-format.md`](description-format.md) | pack 作者 | `.bp.ts` 的完整参考：加载机制、`definePack`、类型与字段构造器、节点构造器、图求值、错误码、图文件格式、自检清单 | 写或改 pack 时；它是构造器的**唯一**事实来源 |
 | [`pack-store.md`](pack-store.md) | 使用者 / pack 作者 | Pack 商店：索引格式、GitHub 地址、安装/更新、离线行为、移植覆盖度与发布流程 | 安装 pack、发布商店、排查联网/哈希问题时 |
+| [`pack-help-and-reference.md`](pack-help-and-reference.md) | 使用者 / pack 作者 | 节点帮助的入口与内容、每个 pack 的参考蓝图格式、生成/校验流程与作者检查清单 | 不知道 pack 节点怎么用、添加或发布 pack 时 |
 | [`data-model-review.md`](data-model-review.md) | 维护者 | 数据模型审阅：对象清单、访问路径、16 条问题（D1–D16，带 `file:line`）、目标五层模型、迁移步骤与验收指标 | 改求值器、持久化或选择模型之前 |
 | [`value-branding.md`](value-branding.md) | 维护者 / pack 作者 | 元素值为什么用 WeakSet 品牌、未登记对象如何降级、升级后哪些 pack 会开始告警 | 写 `calcNode` 或排查"字段全错"之前 |
 | [`assets.md`](assets.md) | 维护者 | 资产 id 如何由内容决定、基址为什么不算身份、运行时资产表与文档内联的关系 | 改载入、去重、跟随地址之前 |

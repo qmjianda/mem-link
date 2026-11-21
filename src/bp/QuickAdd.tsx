@@ -11,10 +11,11 @@ import { useModalFocus } from './ModalFocus';
 interface Props {
   packs: LoadedPack[];
   onPick: (packId: string, nodeId: string) => void;
+  onHelp: (packId: string, nodeId: string) => void;
   onClose: () => void;
 }
 
-export default function QuickAdd({ packs, onPick, onClose }: Props) {
+export default function QuickAdd({ packs, onPick, onHelp, onClose }: Props) {
   const [q, setQ] = useState('');
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -74,6 +75,8 @@ export default function QuickAdd({ packs, onPick, onClose }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items, active]);
 
+  const activeItem = items[active];
+
   return (
     <div className="bp-overlay" role="presentation" onPointerDown={onClose}>
       <div className="bp-quick" role="dialog" aria-modal="true" aria-label="快速添加节点" ref={dialogRef} onPointerDown={(e) => e.stopPropagation()}>
@@ -106,7 +109,18 @@ export default function QuickAdd({ packs, onPick, onClose }: Props) {
           ))}
           {!items.length && <div className="bp-empty">无匹配节点</div>}
         </div>
-        <div className="bp-quick-foot mono">↑↓ 选择 · Enter 添加 · Esc 关闭</div>
+        <div className="bp-quick-foot">
+          <span className="bp-quick-desc">{activeItem?.hint ?? '选中节点后可查看帮助'}</span>
+          <span className="grow" />
+          {activeItem?.packId && (
+            <button
+              type="button"
+              className="bp-quick-help"
+              onClick={() => onHelp(activeItem.packId, activeItem.nodeId)}
+            >节点帮助</button>
+          )}
+          <span className="mono">↑↓ 选择 · Enter 添加 · Esc 关闭</span>
+        </div>
       </div>
     </div>
   );

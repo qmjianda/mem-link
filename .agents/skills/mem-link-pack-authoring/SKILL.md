@@ -161,11 +161,16 @@ node store/scripts/port-imhex.mjs --root store --src .cache/ImHex-Patterns-maste
 
 ```bash
 node node_modules/typescript/bin/tsc --noEmit
+node store/scripts/build-references.mjs --root store --check
 node store/scripts/build-index.mjs store --check
 node node_modules/vitest/vitest.mjs run tests/store-packs.test.ts tests/pack-store.test.ts
 node node_modules/vitest/vitest.mjs run
 node node_modules/vite/bin/vite.js build
 ```
+
+每个 pack 必须有 `reference.blueprint.json`，每个节点必须有 `description`。
+`tests/store-packs.test.ts` 会逐一断言；改 pack 后先运行 `build-references.mjs`
+再重建索引。
 
 `tests/store-packs.test.ts` 必须加载**所有** `store/packs/*/pack.bp.ts`；任何编译失败都不能发布。
 
@@ -211,7 +216,9 @@ tests/pack-store.test.ts        URL/索引/哈希/镜像
 - [ ] 大端 pack 的字段 endian 正确。
 - [ ] computed / 指针 / repeat / 动态数组 / match 已生成辅助节点，或明确记录无法覆盖。
 - [ ] `meta.json` 有 `coverage`、`source`、许可、作者；有辅助节点时写 `helpers`。
-- [ ] `index.json` 与 pack 一致，SHA-256/大小已更新。
+- [ ] 每个节点有 `description`（加载器会给旧 pack 补默认说明，但作者应写清输入/输出/用途）。
+- [ ] pack 目录有 `reference.blueprint.json`，能打开并至少解析一个 pack 节点。
+- [ ] `index.json` 与 pack 一致，SHA-256/大小/参考蓝图哈希已更新。
 - [ ] 商店 UI 显示辅助节点数量，而不是只显示“部分布局”。
 - [ ] 来源/许可未被改写；ImHex 派生仍是 GPL-2.0-only。
 - [ ] 发布后 jsDelivr 返回的 pack 数正确。

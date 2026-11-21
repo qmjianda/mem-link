@@ -73,6 +73,11 @@ async function main() {
   const source = join(repoRoot, 'store');
   if (!existsSync(source)) throw new Error('找不到 store/ 目录');
 
+  console.log('→ 生成参考蓝图');
+  execFileSync(process.execPath, [join(source, 'scripts', 'build-references.mjs'), '--root', source], {
+    stdio: 'inherit',
+    cwd: repoRoot,
+  });
   console.log('→ 生成 index.json');
   execFileSync(process.execPath, [join(source, 'scripts', 'build-index.mjs'), source], {
     stdio: 'inherit',

@@ -30,6 +30,8 @@ interface Props {
   onToggleGroup: (key: string) => void;
   /** 折叠整个节点库为 36px 竖排条 */
   onCollapse: () => void;
+  /** 打开 pack 节点的帮助说明 */
+  onHelp: (packId: string, nodeId: string) => void;
 }
 
 export interface PalItem { packId: string; nodeId: string; label: string; kind: string; hint?: string }
@@ -55,7 +57,10 @@ export function nodeItemsOf(packs: LoadedPack[]): PalItem[] {
   for (const p of packs) {
     if (!isPackEnabled(p)) continue;   // 禁用的 pack 不出现在快速添加里
     for (const [key, def] of Object.entries(p.pack.nodes)) {
-      out.push({ packId: p.id, nodeId: key, label: def.label ?? key, kind: kindName(def) });
+      out.push({
+        packId: p.id, nodeId: key, label: def.label ?? key, kind: kindName(def),
+        hint: def.description,
+      });
     }
   }
   return out;
@@ -65,7 +70,7 @@ export default function Palette({
   packs, onAdd, onDragStart, shouldIgnoreAdd,
   onLoadPack, onOpenStore,
   impactOf, onTogglePack, onRenamePack, onDeletePack, onCleanupPack,
-  collapsedGroups, onToggleGroup, onCollapse,
+  collapsedGroups, onToggleGroup, onCollapse, onHelp,
 }: Props) {
   const [q, setQ] = useState('');
   const searching = q.trim().length > 0;
@@ -92,6 +97,7 @@ export default function Palette({
         nodeId: key,
         label: def.label ?? key,
         kind: kindName(def),
+        hint: def.description,
       }));
       out.push({
         key: p.id,
@@ -253,22 +259,32 @@ export default function Palette({
               {open && (
                 <div className="bp-group-items">
                   {g.items.map((i) => (
-                    <button
-                      key={`${i.packId}/${i.nodeId}`}
-                      className="bp-pal-item"
-                      draggable={false}
-                      disabled={!g.enabled}
-                      title={g.enabled ? `${i.hint ?? i.label} · 拖到画布放置 · 单击添加到视图中心` : 'pack 已禁用'}
-                      onPointerDown={(e) => {
-                        if (e.button !== 0) return;
-                        onDragStart(i.packId, i.nodeId, i.label, e.clientX, e.clientY);
-                      }}
-                      onClick={() => { if (!shouldIgnoreAdd()) onAdd(i.packId, i.nodeId); }}
-                    >
-                      <span className="bp-pal-dot" data-kind={i.kind} />
-                      <span className="bp-pal-label">{i.label}</span>
-                      <span className="bp-pal-kind">{i.kind}</span>
-                    </button>
+                    <div className="bp-pal-row" key={`${i.packId}/${i.nodeId}`}>
+                      <button
+                        className="bp-pal-item"
+                        draggable={false}
+                        disabled={!g.enabled}
+                        title={g.enabled ? `${i.hint ?? i.label} · 拖到画布放置 · 单击添加到视图中心` : 'pack 已禁用'}
+                        onPointerDown={(e) => {
+                          if (e.button !== 0) return;
+                          onDragStart(i.packId, i.nodeId, i.label, e.clientX, e.clientY);
+                        }}
+                        onClick={() => { if (!shouldIgnoreAdd()) onAdd(i.packId, i.nodeId); }}
+                      >
+                        <span className="bp-pal-dot" data-kind={i.kind} />
+                        <span className="bp-pal-label">{i.label}</span>
+                        <span className="bp-pal-kind">{i.kind}</span>
+                      </button>
+                      {i.packId && (
+                        <button
+                          type="button"
+                          className="bp-pal-help"
+                          title={`节点帮助：${i.label}`}
+                          aria-label={`节点帮助：${i.label}`}
+                          onClick={(e) => { e.stopPropagation(); onHelp(i.packId, i.nodeId); }}
+                        >?</button>
+                      )}
+                    </div>
                   ))}
                   {!g.items.length && <div className="bp-empty">无匹配节点</div>}
                 </div>

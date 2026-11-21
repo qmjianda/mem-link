@@ -4,6 +4,7 @@ import {
   compareVersions,
   DEFAULT_STORE_URL,
   fetchStoreIndex,
+  fetchStoreReference,
   installState,
   installedPackOf,
   normalizeStoreUrl,
@@ -30,6 +31,11 @@ const INDEX = {
       size: 1200,
       coverage: 'partial',
       source: { provider: 'nybble', id: 'nes' },
+      reference: {
+        path: 'packs/nes/reference.blueprint.json',
+        sha256: 'b'.repeat(64),
+        size: 2400,
+      },
     },
     {
       id: 'sqlite',
@@ -82,7 +88,25 @@ describe('parseStoreIndex', () => {
       coverage: 'partial',
       size: 1200,
       source: { provider: 'nybble' },
+      reference: {
+        path: 'packs/nes/reference.blueprint.json',
+        sha256: 'b'.repeat(64),
+        size: 2400,
+      },
     });
+  });
+
+  it('非法 reference 只记警告，不影响 pack 安装', () => {
+    const r = parseStoreIndex(JSON.stringify({
+      format: 'memlink-pack-store/1',
+      packs: [{
+        ...INDEX.packs[0],
+        reference: { path: 'packs/nes/pack.bp.ts' },
+      }],
+    }));
+    expect(r.index?.packs).toHaveLength(1);
+    expect(r.index?.packs[0].reference).toBeUndefined();
+    expect(r.warnings.join(' ')).toMatch(/reference/);
   });
 
   it('拒绝错误格式与坏条目，重复 id 只保留第一个', () => {
@@ -202,6 +226,37 @@ describe('fetchStoreIndex', () => {
     const r2 = await fetchStoreIndex('https://cdn.jsdelivr.net/gh/o/r@main/index.json', cdnFails);
     expect(r2.url).toBe('https://raw.githubusercontent.com/o/r/main/index.json');
     expect(calls).toHaveLength(2);
+  });
+});
+
+describe('fetchStoreReference', () => {
+  it('按相对路径读取并校验参考蓝图', async () => {
+    const text = JSON.stringify({ format: 'memlink-blueprint/3', packs: [], nodes: [], edges: [] });
+    const fake = (async () => new Response(text, { status: 200 })) as typeof fetch;
+    const r = await fetchStoreReference(
+      'https://example.com/index.json',
+      { path: 'packs/nes/reference.blueprint.json' },
+      fake,
+    );
+    expect(r.url).toBe('https://example.com/packs/nes/reference.blueprint.json');
+    expect(r.text).toBe(text);
+  });
+
+  it('内容不像蓝图或哈希不匹配时拒绝', async () => {
+    const noFormat = (async () => new Response('{"packs":[]}', { status: 200 })) as typeof fetch;
+    await expect(fetchStoreReference(
+      'https://example.com/index.json',
+      { path: 'packs/nes/reference.blueprint.json' },
+      noFormat,
+    )).rejects.toThrow(/不像/);
+
+    const text = JSON.stringify({ format: 'memlink-blueprint/3', packs: [], nodes: [], edges: [] });
+    const badHash = (async () => new Response(text, { status: 200 })) as typeof fetch;
+    await expect(fetchStoreReference(
+      'https://example.com/index.json',
+      { path: 'packs/nes/reference.blueprint.json', sha256: '0'.repeat(64) },
+      badHash,
+    )).rejects.toThrow(/校验失败/);
   });
 });
 

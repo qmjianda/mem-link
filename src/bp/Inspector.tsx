@@ -59,6 +59,8 @@ interface Props {
   bufferFocus?: { nodeId: string; addr: bigint } | null;
   /** 全屏结构树：struct / list / array 节点可用 */
   onOpenNode?: (nodeId: string) => void;
+  /** 打开 pack 节点的帮助说明 */
+  onHelp?: (packId: string, nodeId: string) => void;
 }
 
 /** 只在 Enter / 失焦时提交一次，避免逐字符写入历史 */
@@ -601,6 +603,7 @@ export default function Inspector({
   onDisconnect, onDeleteEdge, onFile, onHex, onBase, onCollapse, multi,
   renameId, onRenameDone, onCopy, onFollow, onAddRead, tab, onTab, onFocusProblem, onOpenNode,
   layouts = [], structures, usage, onCreateLayout, onSelectLayout, onOpenDesigner, onOpenBuffer, bufferFocus,
+  onHelp,
 }: Props) {
   const problemListRef = useRef<HTMLDivElement>(null);
   const tools: FieldTools | undefined = onCopy && onFollow
@@ -727,6 +730,13 @@ export default function Inspector({
                   <span>{nodeName(node, packs, elementTypeOf(result, node.id))}</span>
                 )}
                 <span className="mono">{node.packId ? (packNames.get(node.packId) ?? node.packId) : '内置'}</span>
+                {node.packId && onHelp && (
+                  <button
+                    className="bp-ft-btn"
+                    title="查看这个节点的说明、端口与类型字段"
+                    onClick={() => onHelp(node.packId, node.nodeId)}
+                  >帮助</button>
+                )}
                 {canOpenTree && (
                   <button
                     className="bp-ft-btn"
@@ -735,6 +745,10 @@ export default function Inspector({
                   >打开</button>
                 )}
               </div>
+              {node.packId && (() => {
+                const desc = packs.get(node.packId)?.nodes[node.nodeId]?.description;
+                return desc ? <div className="bp-node-help-line" title={desc}>{desc}</div> : null;
+              })()}
 
               {/* 任何带「数据源」端口的节点都能查看/指定来源：过去只对 pack
                   节点开放，内置的字符串读取、数组读取等反而看不到自己在用哪个文件。 */}

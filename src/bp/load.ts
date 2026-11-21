@@ -87,9 +87,11 @@ function validateType(name: string, type: TypeDef, pack: BlueprintPack): Problem
   }
   if (!type.union && !type.hasLayoutRef) {
     const ordered = [...spans].filter((s) => !s.bits).sort((a, b) => a.start - b.start || a.end - b.end);
-    for (let i = 1; i < ordered.length; i += 1) {
-      if (ordered[i].start < ordered[i - 1].end) {
-        out.push({ severity: 'error', message: `字段重叠 ${ordered[i - 1].name} / ${ordered[i].name}` });
+    for (let i = 0; i < ordered.length; i += 1) {
+      for (let j = 0; j < i; j += 1) {
+        if (ordered[i].start < ordered[j].end) {
+          out.push({ severity: 'error', message: `字段重叠 ${ordered[j].name} / ${ordered[i].name}` });
+        }
       }
     }
   }
@@ -203,12 +205,47 @@ export function evaluateBlueprintPack(js: string): {
   }
 }
 
+/**
+ * 旧 pack 大多只写了 label。这里按节点类型和字段自动补一条可执行的说明，
+ * 保证节点库、检查器和帮助弹层不会出现“只有名字、不知道怎么用”的节点。
+ * pack 作者显式写的 description 优先，不会被覆盖。
+ */
+function defaultNodeDescription(key: string, def: NodeDef): string {
+  if (def.kind === 'calc') {
+    const inputs = Object.keys(def.inputs).join('、') || '无';
+    const outputs = Object.keys(def.outputs).join('、') || '无';
+    return `计算节点：输入 ${inputs}，输出 ${outputs}。把需要的值接到输入端口，结果从输出端口取。`;
+  }
+  const type = def.type;
+  const typeName = type?.name ?? '?';
+  const size = type?.size ?? 0;
+  const fields = (type?.fields ?? []).slice(0, 8).map((f) => f.label ?? f.name);
+  const fieldText = fields.length
+    ? `字段：${fields.join('、')}${(type?.fields.length ?? 0) > fields.length ? ` 等 ${type!.fields.length} 个` : ''}。`
+    : '';
+  if (def.kind === 'struct') {
+    return `解析 ${typeName}（${size} B）。数据源接 File 或沿上游继承；地址填结构起始偏移。${fieldText}输出端口就是这些字段。`;
+  }
+  if (def.kind === 'array') {
+    const count = def.count == null ? '由 count 输入决定' : `默认 ${def.count} 项`;
+    const stride = def.stride ?? type?.size ?? 0;
+    return `按 ${count} 连续展开 ${typeName}（每项 ${stride} B）。数据源接 File；地址填第一项偏移。输出 list、count 和 elem:N。`;
+  }
+  const nulls = def.nulls?.length ? `遇到 ${def.nulls.join(' / ')} 结束。` : '';
+  return `从 address 开始遍历 ${typeName}（每项 ${size} B，最多 ${def.max ?? 4096} 项）。数据源接 File；地址填第一项偏移。${nulls}输出 list、count 和 elem:N。`;
+}
+
 export function loadBlueprintPack(source: string): BPLoadResult {
   const c = compilePackSource(source);
   if (c.error) return { error: c.error, issues: [] };
   const ev = evaluateBlueprintPack(c.js!);
   if (ev.error || !ev.pack) return { error: ev.error ?? '无法加载 pack', issues: [] };
   const issues = validateBlueprintPack(ev.pack);
+  for (const [key, def] of Object.entries(ev.pack.nodes ?? {})) {
+    if (def && (typeof def.description !== 'string' || !def.description.trim())) {
+      def.description = defaultNodeDescription(key, def);
+    }
+  }
   const fatal = issues.find((p) => p.severity === 'error');
   return { pack: ev.pack, js: c.js, compile: ev.compile, issues, error: fatal?.message };
 }

@@ -196,6 +196,8 @@ export default definePack({
 
 节点定义放在 `definePack({ nodes: { ... } })` 里。工具会根据定义生成左栏条目和端口。
 
+每个节点都应写 `description`：说明解析什么、输入怎么接、输出是什么。它显示在节点库 `?`、快速添加底部和检查器「帮助」里；旧 pack 没写时加载器会按类型字段补一条默认说明，但商店 pack 应显式写清楚。每个 pack 还必须在目录里提供 `reference.blueprint.json`，由 `store/scripts/build-references.mjs` 生成。
+
 ### 5.1 `structNode(type)`
 
 ```ts
@@ -348,6 +350,8 @@ calcNode({
 - [ ] 链表 `next` 返回**地址**；负数/空值返回 `null`。
 - [ ] `listNode.max` 足够大，但不要超过 4096。
 - [ ] 节点端口类型和下游一致（`list` 接 `list`，`number` 接 `number`）。
+- [ ] 每个节点有 `description`，说明用途/输入/输出。
+- [ ] 目录中有可打开的 `reference.blueprint.json`。
 - [ ] 加载后看左栏「检查」：错误会阻止节点运行。
 
 ## 12. 结构设计器（无脚本布局）

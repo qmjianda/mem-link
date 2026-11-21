@@ -14,6 +14,7 @@ import {
   categoryLabel,
   fetchStoreIndex,
   fetchStorePack,
+  fetchStoreReference,
   installedPackOf,
   installState,
   readStoreCache,
@@ -30,6 +31,8 @@ interface Props {
     source: string;
     storeUrl: string;
   }) => Promise<{ ok: boolean; error?: string; updated?: boolean }>;
+  /** 打开 pack 的参考蓝图（调用方负责进入临时示例模式）；false = 未打开 */
+  onOpenReference: (entry: StorePackEntry, text: string) => Promise<boolean> | boolean;
   onClose: () => void;
 }
 
@@ -40,7 +43,7 @@ interface EntryError {
   message: string;
 }
 
-export default function PackStore({ storeUrl, packs, onStoreUrl, onInstall, onClose }: Props) {
+export default function PackStore({ storeUrl, packs, onStoreUrl, onInstall, onOpenReference, onClose }: Props) {
   const dialogRef = useModalFocus<HTMLDivElement>(onClose);
   const [urlDraft, setUrlDraft] = useState(storeUrl);
   const [currentUrl, setCurrentUrl] = useState(storeUrl);
@@ -51,6 +54,7 @@ export default function PackStore({ storeUrl, packs, onStoreUrl, onInstall, onCl
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('all');
   const [busy, setBusy] = useState<string | null>(null);
+  const [refBusy, setRefBusy] = useState<string | null>(null);
   const [entryError, setEntryError] = useState<EntryError | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [cachedAt, setCachedAt] = useState<number | null>(() => readStoreCache(storeUrl)?.at ?? null);
@@ -128,6 +132,22 @@ export default function PackStore({ storeUrl, packs, onStoreUrl, onInstall, onCl
       setEntryError({ id: entry.id, message: e instanceof Error ? e.message : String(e) });
     } finally {
       setBusy(null);
+    }
+  };
+
+  const runReference = async (entry: StorePackEntry) => {
+    if (!entry.reference || refBusy) return;
+    setRefBusy(entry.id);
+    setEntryError(null);
+    setNotice(null);
+    try {
+      const r = await fetchStoreReference(currentUrl, entry.reference);
+      if ((await onOpenReference(entry, r.text)) === false) throw new Error('参考蓝图无法打开');
+      onClose();
+    } catch (e) {
+      setEntryError({ id: entry.id, message: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setRefBusy(null);
     }
   };
 
@@ -277,6 +297,17 @@ export default function PackStore({ storeUrl, packs, onStoreUrl, onInstall, onCl
                 </div>
                 {err && <div className="bp-store-entry-error" role="alert">{err}</div>}
                 <div className="bp-store-actions">
+                  {entry.reference ? (
+                    <button
+                      type="button"
+                      className="bp-mini"
+                      disabled={!!busy || !!refBusy}
+                      title="打开已经接好线的示例图（临时副本，不影响当前蓝图）"
+                      onClick={() => void runReference(entry)}
+                    >
+                      {refBusy === entry.id ? '读取中…' : '参考蓝图'}
+                    </button>
+                  ) : null}
                   {entry.homepage ? (
                     <a className="bp-mini" href={entry.homepage} target="_blank" rel="noreferrer" title="打开格式说明">
                       <IconExternal size={10} /> 说明

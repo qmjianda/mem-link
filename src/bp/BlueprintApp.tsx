@@ -34,8 +34,11 @@ import {
   addPack, cleanupPackNodes, disabledPackIds, enabledPackMap, packImpact, removePackAtomic,
   renamePack, setPackEnabled, updatePackSource,
 } from './packops';
-import { installedPackOf, readStorePrefs, verifyPackSource, writeStorePrefs, type StorePackEntry } from './store';
+import {
+  fetchStoreReference, installedPackOf, readStorePrefs, verifyPackSource, writeStorePrefs, type StorePackEntry,
+} from './store';
 import PackStore from './PackStore';
+import NodeHelp from './NodeHelp';
 import { initialParseParams } from './add-defaults';
 import { addressHex, addressInteger, isMappedAddress, offsetIn, packMemory, safeNumber, sameMapping } from './precision';
 import { addOffset, pointerRead } from './binary-read';
@@ -165,6 +168,8 @@ export default function BlueprintApp() {
   /** pack 商店浮层与上次使用的商店地址 */
   const [storeOpen, setStoreOpen] = useState(false);
   const [storeUrl, setStoreUrl] = useState(() => readStorePrefs().url);
+  /** 节点帮助：pack 节点 + 可选参考蓝图 */
+  const [nodeHelp, setNodeHelp] = useState<{ packId: string; nodeId: string } | null>(null);
   /** 右键菜单：目标 + 屏幕坐标 */
   const [menu, setMenu] = useState<{ target: MenuTarget; x: number; y: number } | null>(null);
   /** 内存剪贴板里有多少节点（菜单禁用态要据此刷新） */
@@ -1403,6 +1408,7 @@ export default function BlueprintApp() {
       ...(entry.source?.provider ? { provider: entry.source.provider } : {}),
       ...(entry.coverage ? { coverage: entry.coverage } : {}),
       ...(entry.helpers ? { helpers: entry.helpers } : {}),
+      ...(entry.reference ? { reference: entry.reference } : {}),
     };
     const existing = installedPackOf(docRef.current.packs, url, entry.id);
     if (existing) {
@@ -1779,6 +1785,78 @@ export default function BlueprintApp() {
     setNav(s.nav);
     setPersist(s.persist);
     say('已返回我的蓝图');
+  };
+
+  /** 把一份图作为临时示例打开；已经处于示例模式时只替换临时副本。 */
+  const activateSampleDoc = (
+    next: DocState,
+    issues: Problem[],
+    label: string,
+    focusNodeId?: string,
+  ) => {
+    if (!sampleModeRef.current) {
+      workSession.current = {
+        doc: docRef.current,
+        history: historyRef.current,
+        selection: selectionRef.current,
+        nav: navRef.current,
+        persist,
+      };
+      sampleModeRef.current = true;
+      setSampleMode(true);
+    }
+    resetDoc(next, false);
+    setPackIssues(issues);
+    setPersist(null);
+    if (focusNodeId) {
+      setSelection(selectOnlyNode(focusNodeId));
+      setRightTab('inspect');
+    }
+    openReadableSoon();
+    say(label);
+  };
+
+  /** 打开 pack 的参考蓝图：不经过「替换当前图」确认，始终进入临时副本。 */
+  const openReferenceDoc = async (name: string, text: string): Promise<boolean> => {
+    const sid = sessionSeq.current;
+    const r = parseDoc(text);
+    if (!r.doc) {
+      say(`参考蓝图无效：${r.error ?? 'JSON 解析失败'}`);
+      return false;
+    }
+    const loaded: LoadedPack[] = [];
+    const issues: Problem[] = [];
+    for (const p of r.doc.packs) {
+      const l = loadBlueprintPack(p.source);
+      if (!l.pack) {
+        say(`参考蓝图的 pack ${p.name} 加载失败：${l.error}`);
+        return false;
+      }
+      const enabled = (p as { enabled?: boolean }).enabled !== false;
+      loaded.push({ id: p.id, name: p.name, source: p.source, pack: l.pack, enabled, ...(p.store ? { store: p.store } : {}) });
+      issues.push(...l.issues);
+    }
+    if (sid !== sessionSeq.current) return false;
+    const primary = r.doc.nodes.find((n) => n.packId !== '');
+    activateSampleDoc(
+      { packs: loaded, nodes: r.doc.nodes, edges: r.doc.edges, layouts: r.doc.layouts },
+      issues,
+      `参考蓝图：${name}`,
+      primary?.id,
+    );
+    return true;
+  };
+
+  /** 已安装 pack 的参考蓝图：优先用商店登记路径，旧数据按 pack 路径推导。 */
+  const openPackReference = async (pack: LoadedPack) => {
+    const store = pack.store;
+    if (!store) throw new Error('本地导入的 pack 没有商店参考蓝图；请从 Pack Store 打开。');
+    const reference = store.reference ?? {
+      path: (store.path ?? `packs/${store.packId}/pack.bp.ts`).replace(/pack\.bp\.ts$/i, 'reference.blueprint.json'),
+    };
+    const r = await fetchStoreReference(store.url, reference);
+    if (!(await openReferenceDoc(pack.name, r.text))) throw new Error('参考蓝图内容无效');
+    setNodeHelp(null);
   };
 
   const newBlueprint = async () => {
@@ -2440,6 +2518,7 @@ export default function BlueprintApp() {
             collapsedGroups={groups}
             onToggleGroup={toggleGroup}
             onCollapse={() => toggleCollapsed('left')}
+            onHelp={(packId, nodeId) => setNodeHelp({ packId, nodeId })}
           />
         )}
 
@@ -2556,6 +2635,7 @@ export default function BlueprintApp() {
             tab={rightTab}
             onTab={setRightTab}
             onFocusProblem={focusProblem}
+            onHelp={(packId, nodeId) => setNodeHelp({ packId, nodeId })}
           />
         )}
       </div>
@@ -2601,7 +2681,12 @@ export default function BlueprintApp() {
       )}
       {helpOpen && <KeyHelp commands={commands} onClose={() => setHelpOpen(false)} />}
       {quickAddOpen && (
-        <QuickAdd packs={packs} onPick={onQuickPick} onClose={() => setQuickAddOpen(false)} />
+        <QuickAdd
+          packs={packs}
+          onPick={onQuickPick}
+          onHelp={(packId, nodeId) => setNodeHelp({ packId, nodeId })}
+          onClose={() => setQuickAddOpen(false)}
+        />
       )}
       {storeOpen && (
         <PackStore
@@ -2609,9 +2694,22 @@ export default function BlueprintApp() {
           packs={packs}
           onStoreUrl={onStoreUrl}
           onInstall={onInstallStorePack}
+          onOpenReference={(entry, text) => openReferenceDoc(`${entry.name} v${entry.version}`, text)}
           onClose={() => setStoreOpen(false)}
         />
       )}
+      {nodeHelp && (() => {
+        const pack = packs.find((p) => p.id === nodeHelp.packId);
+        if (!pack) return null;
+        return (
+          <NodeHelp
+            pack={pack}
+            nodeId={nodeHelp.nodeId}
+            onClose={() => setNodeHelp(null)}
+            onOpenReference={pack.store ? () => openPackReference(pack) : undefined}
+          />
+        );
+      })()}
       {follow && (
         <FollowPicker
           request={follow}
