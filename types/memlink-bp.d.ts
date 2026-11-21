@@ -28,6 +28,8 @@ interface BPFieldOpts {
   label?: string;
   /** numeric value → display label; display only */
   values?: Record<string, string>;
+  /** numeric semantics used for ports and downstream UI */
+  role?: 'address' | 'offset' | 'index';
   signed?: boolean;
   transform?: (v: unknown, ctx: BPTransformCtx) => unknown;
 }
@@ -109,7 +111,7 @@ interface BPEntryView {
 }
 
 interface BPEvalCtx {
-  mem: any;
+  mem: BPMemApi;
   pack: unknown;
   nodeId: string;
   endian: BPEndian;
@@ -153,6 +155,8 @@ declare function listNode(type: BPTypeDef, opts: {
 declare function arrayNode(type: BPTypeDef, opts?: {
   count?: number;
   stride?: number;
+  /** 输入原始文件偏移（相对数据源基址）而不是映射地址 */
+  offset?: boolean;
   label?: string;
   description?: string;
 }): unknown;

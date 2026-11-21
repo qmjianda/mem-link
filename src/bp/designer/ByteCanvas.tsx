@@ -99,6 +99,14 @@ export default function ByteCanvas() {
   const [panning, setPanning] = useState(false);
   const [palettePreview, setPalettePreview] = useState<{ spec: FieldInput; offset: number; size: number } | null>(null);
   const suppressClickRef = useRef(false);
+  // Pointer capture retargets the compatibility click to the canvas, so the
+  // click itself can no longer tell which field was pressed. Remember the
+  // gesture's entity and consume the synthetic click instead of clearing the
+  // selection that pointerdown just made.
+  const gestureEntityRef = useRef<Entity | null>(null);
+  // Space/middle-button panning also retargets its click to the canvas; do not
+  // treat that click as "clicked empty space".
+  const panGestureRef = useRef(false);
 
   const fullGeo = useMemo(() => canvasGeometry(build?.size ?? 0, rowBytes), [build?.size, rowBytes]);
   // Keep very long layouts responsive: the document can be up to 1 MB, but we
@@ -205,7 +213,10 @@ export default function ByteCanvas() {
     const el = scrollRef.current;
     if (!el) return;
     const entity = entities.find(e =>
-      selection.kind === 'fields' ? (e.type === 'field' && selectedIds.has(e.id!))
+      selection.kind === 'fields'
+        ? (e.type === 'field'
+            ? selectedIds.has(e.id!)
+            : e.group!.members.some(m => selectedIds.has(m.id)))
         : selection.kind === 'bitsGroup' ? (e.type === 'bits' && e.group?.key === selection.key)
           : false);
     if (!entity) return;
@@ -260,7 +271,10 @@ export default function ByteCanvas() {
   };
 
   const startDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    gestureEntityRef.current = null;
+    panGestureRef.current = false;
     if (e.button === 1 || (e.button === 0 && spaceRef.current)) {
+      panGestureRef.current = true;
       e.preventDefault();
       canvasRef.current?.setPointerCapture?.(e.pointerId);
       dragRef.current = {
@@ -275,6 +289,7 @@ export default function ByteCanvas() {
     const target = e.target as HTMLElement;
     const entity = entityAtTarget(target);
     if (!entity) return;
+    gestureEntityRef.current = entity;
     e.preventDefault();
     const at = offsetAtClient(e.clientX, e.clientY);
     const grab = at == null ? 0 : Math.max(0, Math.min(entity.size - 1, at - entity.offset));
@@ -394,7 +409,23 @@ export default function ByteCanvas() {
   };
 
   const onCanvasClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const gesture = gestureEntityRef.current;
+    const panned = panGestureRef.current;
+    gestureEntityRef.current = null;
+    panGestureRef.current = false;
     if (suppressClickRef.current) { suppressClickRef.current = false; return; }
+    if (panned) return;
+    if (gesture) {
+      // The gesture target was retargeted by pointer capture; pointerdown
+      // already applied Ctrl/Shift selection semantics.
+      if (e.detail >= 2 && gesture.type === 'field' && gesture.field) {
+        const f = gesture.field;
+        if ((f.kind === 'record' || f.kind === 'array') && f.of?.startsWith('layout/')) {
+          actions.enterLayout(f.of.slice('layout/'.length));
+        }
+      }
+      return;
+    }
     if (dragRef.current) return;
     const target = e.target as HTMLElement;
     if (target.closest('[data-field-id], [data-group-key]')) return;
@@ -405,16 +436,6 @@ export default function ByteCanvas() {
       actions.createField(armed, offset);
     } else {
       actions.clearSelection();
-    }
-  };
-
-  const onCanvasDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    const entity = entityAtTarget(e.target);
-    if (entity?.type === 'field' && entity.field) {
-      const f = entity.field;
-      if ((f.kind === 'record' || f.kind === 'array') && f.of?.startsWith('layout/')) {
-        actions.enterLayout(f.of.slice('layout/'.length));
-      }
     }
   };
 
@@ -568,9 +589,8 @@ export default function ByteCanvas() {
           onPointerDown={startDrag}
           onPointerMove={(e) => { const d = dragRef.current; if (d) updatePreview(d, e); }}
           onPointerUp={finishDrag}
-          onPointerCancel={(e) => { dragRef.current = null; setPreview(null); setPanning(false); canvasRef.current?.releasePointerCapture?.(e.pointerId); }}
+          onPointerCancel={(e) => { gestureEntityRef.current = null; dragRef.current = null; setPreview(null); setPanning(false); canvasRef.current?.releasePointerCapture?.(e.pointerId); }}
           onClick={onCanvasClick}
-          onDoubleClick={onCanvasDoubleClick}
           onContextMenu={onCanvasContextMenu}
           onKeyDown={(e) => {
             if (e.key !== 'Enter') return;

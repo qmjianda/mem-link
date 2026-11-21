@@ -322,7 +322,7 @@ export default function DesignerApp({
     enterLayout(id: string) { setSelection({ kind: 'layout' }); setArmedState(null); onNavigate([...stack, id]); },
     back() { if (stack.length > 1) { setSelection({ kind: 'layout' }); onNavigate(stack.slice(0, -1)); } },
     close() { onClose(); },
-    setView(next: 'byte' | 'bit') { setView(next); },
+    setView(next: 'byte' | 'bit') { if (next === 'bit') setArmedState(null); setView(next); },
     setRowBytes(next: RowBytes) { setRowBytes(next); },
     setBitOrder(next: BitOrder) { setBitOrder(next); },
     setZoom(next: number) { setZoom(next); },
@@ -331,11 +331,15 @@ export default function DesignerApp({
     setPan(next: { x: number; y: number }) { setPan(next); },
     toggleTable() { setTableOpen(v => !v); },
     setProblemsPane(next: 'inspect' | 'problems') { setProblemsPane(next); },
-    setArmed(spec: FieldInput | null) { setArmedState(spec); },
+    setArmed(spec: FieldInput | null) {
+      if (spec) setView('byte');
+      setArmedState(spec);
+    },
     createField(spec: FieldInput, offset: number) {
       const ok = applyResult(createFieldOp(model, spec, offset), '插入字段');
       if (ok) {
         setArmedState(null);
+        if (spec.kind !== 'bits') setView('byte');
         notify(`已插入 ${KIND_LABEL[spec.kind] ?? spec.kind} @ ${hex(offset)}`, 'ok');
       }
       return ok;
@@ -523,7 +527,7 @@ export default function DesignerApp({
       if (mod && e.key.toLowerCase() === 'a') {
         if (!current) return;
         e.preventDefault();
-        setSelection({ kind: 'fields', primary: current.fields[0]?.id ?? '', ids: current.fields.map(f => f.id) });
+        actions.selectFields(current.fields.map(f => f.id), current.fields[0]?.id);
         return;
       }
       if (mod && e.key.toLowerCase() === 'c') {
@@ -645,7 +649,7 @@ export default function DesignerApp({
         <div className="bp-dz-workspace">
           <aside className="bp-dz-left" aria-label="布局与类型">
             <div className="bp-dz-panel-head"><span>结构</span><span>{layouts.length}</span><span className="grow" /><button className="bp-dz-mini" type="button" onClick={actions.createLayout}>+ 新建</button></div>
-            {layouts.length > 8 && (
+            {(layouts.length > 8 || layoutFilter.trim() !== '') && (
               <label className="bp-dz-filter">
                 <input className="in" value={layoutFilter} onChange={(e) => setLayoutFilter(e.target.value)} placeholder="过滤布局" aria-label="过滤布局" />
               </label>
@@ -673,12 +677,12 @@ export default function DesignerApp({
                   type="button"
                   className={`bp-dz-palette-card ${spec.kind}`}
                   draggable
-                  onDragStart={(e) => { e.dataTransfer.setData('application/x-memlink-field', JSON.stringify(spec)); e.dataTransfer.effectAllowed = 'copy'; }}
+                  onDragStart={(e) => { actions.setView('byte'); e.dataTransfer.setData('application/x-memlink-field', JSON.stringify(spec)); e.dataTransfer.effectAllowed = 'copy'; }}
                   onClick={() => actions.setArmed(spec)}
                 >
                   <span className="bp-dz-palette-swatch" />
                   <span>{KIND_LABEL[spec.kind] ?? spec.kind}</span>
-                  <em>{spec.kind === 'bits' ? '1 bit' : spec.kind === 'string' || spec.kind === 'bytes' ? '4 B' : spec.kind === 'u64' || spec.kind === 'i64' || spec.kind === 'f64' ? '8 B' : spec.kind === 'u32' || spec.kind === 'i32' || spec.kind === 'f32' ? '4 B' : '2 B'}</em>
+                  <em>{spec.kind === 'bits' ? '1 bit' : spec.kind === 'string' || spec.kind === 'bytes' ? '4 B' : spec.kind === 'u64' || spec.kind === 'i64' || spec.kind === 'f64' ? '8 B' : spec.kind === 'u32' || spec.kind === 'i32' || spec.kind === 'f32' ? '4 B' : spec.kind === 'u8' || spec.kind === 'i8' ? '1 B' : '2 B'}</em>
                 </button>
               ))}
             </div>
@@ -689,7 +693,7 @@ export default function DesignerApp({
                 <div key={l.id} className="bp-dz-layout-palette-row">
                   <button
                     type="button" draggable
-                    onDragStart={(e) => { e.dataTransfer.setData('application/x-memlink-field', JSON.stringify({ kind: 'record', of: `layout/${l.id}` })); }}
+                    onDragStart={(e) => { actions.setView('byte'); e.dataTransfer.setData('application/x-memlink-field', JSON.stringify({ kind: 'record', of: `layout/${l.id}` })); }}
                     onClick={() => actions.setArmed({ kind: 'record', of: `layout/${l.id}` })}
                   >{l.name}</button>
                   <button type="button" className="bp-dz-mini" onClick={() => actions.setArmed({ kind: 'array', of: `layout/${l.id}`, count: 2 })}>数组</button>

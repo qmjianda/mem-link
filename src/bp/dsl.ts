@@ -74,6 +74,8 @@ export function listNode(type: TypeDef, opts: ListNodeOptions): ListNodeDef {
 export interface ArrayNodeOptions {
   count?: number;
   stride?: number;
+  /** take a file offset relative to the data source base */
+  offset?: boolean;
   label?: string;
   description?: string;
 }
@@ -84,6 +86,7 @@ export function arrayNode(type: TypeDef, opts: ArrayNodeOptions = {}): ArrayNode
     type,
     count: opts.count,
     stride: opts.stride,
+    offset: opts.offset,
     label: opts.label ?? `${type.name} 数组`,
     description: opts.description,
   };

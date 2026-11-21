@@ -83,6 +83,60 @@ describe('blueprint evaluator', () => {
     expect(view.count).toBe(4);
   });
 
+  it('reads an array from a file offset without a mapped address', () => {
+    const arr = node('a', '', 'arrayread', {
+      addressMode: 'offset', offset: '0x130', count: '2', elementType: 'scalar', scalar: 'u32',
+    });
+    const ports = portsFor(arr, packs);
+    expect(ports.inputs.map((p) => p.name)).toEqual(['buffer', 'offset', 'count', 'stride']);
+    const r = evaluateGraph([fileNode(), arr], [edge('e0', ['f', 'buffer'], ['a', 'buffer'])], packs);
+    const view = r.views.get('a');
+    expect(view?.kind).toBe('array');
+    if (view?.kind === 'array') {
+      expect(view.items).toHaveLength(2);
+      expect(view.items[0].fields.find((f) => f.name === 'value')?.value).toBe(5n);
+    }
+    expect(r.problems.filter((p) => p.severity === 'error')).toEqual([]);
+  });
+
+  it('lets a pack array node take a raw file offset', () => {
+    const source = `
+      const Entry = struct('Entry', [u16('value')]);
+      export default definePack({
+        name: 'offset-array', types: { Entry },
+        nodes: { entries: arrayNode(Entry, { offset: true, label: 'Entries' }) },
+      });`;
+    const loaded = loadBlueprintPack(source);
+    expect(loaded.error).toBeUndefined();
+    const packs = new Map([['p', loaded.pack!]]);
+    const arr = node('a', 'p', 'entries', { offset: '0x2', count: '2' });
+    expect(portsFor(arr, packs).inputs.map((p) => p.name)).toEqual(['buffer', 'offset', 'count']);
+    const bytes = new Uint8Array([0, 0, 0x34, 0x12, 0x78, 0x56]);
+    const r = evaluateGraph(
+      [fileNode('f', bytes, 0x1000, 'arr.bin'), arr],
+      [edge('e0', ['f', 'buffer'], ['a', 'buffer'])],
+      packs,
+    );
+    const view = r.views.get('a');
+    expect(view?.kind).toBe('array');
+    if (view?.kind === 'array') {
+      expect(view.items).toHaveLength(2);
+      expect(view.items.map((x) => x.fields.find((f) => f.name === 'value')?.value)).toEqual([0x1234, 0x5678]);
+    }
+    expect(r.problems.filter((p) => p.severity === 'error')).toEqual([]);
+  });
+
+  it('reads a struct from a file offset without a mapped address', () => {
+    const s = node('s', '', 'structread', {
+      addressMode: 'offset', offset: '0x130', structureId: 'pack/p/Entry',
+    });
+    const r = evaluateGraph([fileNode(), s], [edge('e0', ['f', 'buffer'], ['s', 'buffer'])], packs);
+    const view = r.views.get('s');
+    expect(view?.kind).toBe('struct');
+    if (view?.kind === 'struct') expect(view.inst?.typeName).toBe('Entry');
+    expect(r.problems.filter((p) => p.severity === 'error')).toEqual([]);
+  });
+
   it('wires a field into a list address', () => {
     const r = evaluateGraph(
       [f, header, list],
@@ -135,6 +189,29 @@ describe('blueprint evaluator', () => {
     const view = r.views.get('e');
     expect(view?.kind).toBe('element');
     if (view?.kind === 'element') expect(view.inst?.addr).toBe(0x118);
+  });
+
+  it('gives pack calc nodes the byte-oriented memory API', () => {
+    const source = `
+      export default definePack({
+        name: 'calc-mem',
+        types: { T: struct('T', [u8('x')]) },
+        nodes: {
+          read: calcNode({
+            inputs: { address: 'number' },
+            outputs: { value: 'number' },
+            run: ({ address }, ctx) => ({ value: ctx.mem.u8(Number(address)) }),
+          }),
+        },
+      });`;
+    const loaded = loadBlueprintPack(source);
+    expect(loaded.error).toBeUndefined();
+    const packs = new Map([['p', loaded.pack!]]);
+    const f = fileNode('f', new Uint8Array([0x2a]), 0, 'one.bin');
+    const c = node('c', 'p', 'read', { address: '0x0' });
+    const r = evaluateGraph([f, c], [edge('e0', ['f', 'buffer'], ['c', 'buffer'])], packs);
+    expect(r.outputs.get('c')?.value).toBe(0x2a);
+    expect(r.problems.filter((p) => p.severity === 'error')).toEqual([]);
   });
 
   it('runs a calc node and resolves its output port type', () => {
@@ -426,6 +503,37 @@ describe('element output ports', () => {
     expect(canConnect('instance', 'instance')).toBe(true);
     expect(canConnect('instance', 'list')).toBe(false);
     expect(canConnect('number', 'instance')).toBe(false);
+  });
+
+  it('publishes nested record fields as connectable instances', () => {
+    const source = `
+      const Inner = struct('Inner', [u16('x')]);
+      const Outer = struct('Outer', [record('sub', Inner, { at: 0 })]);
+      export default definePack({
+        name: 'nested-instance', types: { Inner, Outer },
+        nodes: { outer: structNode(Outer) },
+      });`;
+    const loaded = loadBlueprintPack(source);
+    expect(loaded.error).toBeUndefined();
+    const nested = new Map([['q', loaded.pack!]]);
+    const f = fileNode('f', new Uint8Array([0x34, 0x12]), 0, 'nested.bin');
+    const o = node('o', 'q', 'outer', { address: '0x0' });
+    const e = node('e', '', 'element', { typeId: 'Inner' });
+    const r = evaluateGraph(
+      [f, o, e],
+      [
+        edge('e1', ['f', 'buffer'], ['o', 'buffer']),
+        edge('e2', ['o', 'sub'], ['e', 'instance']),
+      ],
+      nested,
+    );
+    expect(r.outputs.get('o')?.sub).toMatchObject({ typeName: 'Inner' });
+    const view = r.views.get('e');
+    expect(view?.kind).toBe('element');
+    if (view?.kind === 'element') {
+      expect(view.inst?.fields.find((x) => x.name === 'x')?.value).toBe(0x1234);
+    }
+    expect(r.problems.filter((p) => p.severity === 'error')).toEqual([]);
   });
 
   it('exposes every nested array/record member of a struct as its own port', () => {

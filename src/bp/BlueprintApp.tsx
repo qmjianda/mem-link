@@ -954,7 +954,11 @@ export default function BlueprintApp() {
       }
     } else if (view.kind === 'array' && pack && def?.kind === 'array') {
       const mem = view.items[0]?.mem ?? fallbackMem;
-      const base = numInput('address') ?? view.items[0]?.addr;
+      const offset = def.offset ? numInput('offset') : undefined;
+      const first = view.items[0];
+      const base = numInput('address')
+        ?? (offset !== undefined && mem ? mem.base + offset : undefined)
+        ?? (first?.location ? safeNumber(first.location.value) : first?.addr);
       const count = def.count ?? numInput('count') ?? view.count;
       if (mem && base != null && count > 0) {
         root = {
@@ -1579,7 +1583,10 @@ export default function BlueprintApp() {
       setDesignerBase(cloneLayouts(docRef.current.layouts));
       designerReturnHash.current = window.location.hash.startsWith('#design') ? '' : window.location.hash;
     }
-    window.history.pushState(null, '', designerHash(next));
+    const hash = designerHash(next);
+    // Re-selecting the current layout must not add a duplicate history entry;
+    // otherwise closing the designer and pressing Back reopens it.
+    if (window.location.hash !== hash) window.history.pushState(null, '', hash);
     setDesignerStack(next);
   };
 

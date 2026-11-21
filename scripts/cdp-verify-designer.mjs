@@ -64,7 +64,23 @@ const box = selector => evaluate(`(() => {
   const r = el.getBoundingClientRect();
   return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
 })()`);
-const mouse = (type, x, y) => send('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 });
+const mouse = (type, x, y, clickCount = 1) => send('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount });
+const click = async selector => {
+  const b = await box(selector);
+  await mouse('mouseMoved', b.x, b.y);
+  await mouse('mousePressed', b.x, b.y);
+  await mouse('mouseReleased', b.x, b.y);
+  await sleep(250);
+};
+const doubleClick = async selector => {
+  const b = await box(selector);
+  await mouse('mouseMoved', b.x, b.y);
+  await mouse('mousePressed', b.x, b.y, 1);
+  await mouse('mouseReleased', b.x, b.y, 1);
+  await mouse('mousePressed', b.x, b.y, 2);
+  await mouse('mouseReleased', b.x, b.y, 2);
+  await sleep(400);
+};
 const drag = async (from, to) => {
   const a = await box(from);
   const b = await box(to);
@@ -147,6 +163,16 @@ try {
   assert.equal(await evaluate(`document.querySelectorAll('.bp-dz-table tbody tr').length`), 4);
   console.log('PASS  从检查器打开设计器：全屏、hash、焦点进入、背景 inert');
 
+  await click('[data-field-id="f2"]');
+  await ready(`document.querySelector('.bp-dz-field.on')?.getAttribute('data-field-id') === 'f2'`, '单击字节字段选中');
+  await ready(`document.querySelector('.bp-dz-status')?.textContent.includes('count')`, '状态栏同步字段');
+  assert.equal(await evaluate(`document.querySelector('tr[data-row-index="1"]')?.getAttribute('aria-selected')`), 'true');
+  console.log('PASS  单击画布字段选中，字段表与状态栏同步');
+  const historyBeforeReset = await evaluate(`history.length`);
+  await evaluate(`[...document.querySelectorAll('.bp-dz-layout-card')].find(e => e.textContent.includes('Header'))?.click()`);
+  await ready(`document.querySelector('.bp-dz-right')?.textContent.includes('布局属性')`, '回到布局属性');
+  assert.equal(await evaluate(`history.length`), historyBeforeReset);
+
   await button('删除布局');
   await ready(`document.querySelector('.bp-dz-modal')?.textContent.includes('仍被')`, '删除被引用布局被拒绝');
   assert.ok(await evaluate(`document.querySelector('.bp-dz-modal')?.textContent.includes('读结构')`));
@@ -155,6 +181,14 @@ try {
   assert.ok(await evaluate(`[...document.querySelectorAll('.bp-dz-layout-card')].some(e => e.textContent.includes('Header'))`));
   console.log('PASS  被引用布局拒绝删除并列出节点来源');
 
+  await action('tr[data-row-index="1"]');
+  await setValue('input[aria-label="字段名称"]', 'draft-escape', false);
+  await sleep(120);
+  await evaluate(`document.querySelector('input[aria-label="字段名称"]')?.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}))`);
+  await sleep(200);
+  assert.ok(await evaluate(`document.querySelectorAll('.bp-dz-table tbody tr')[1]?.textContent.includes('count')`));
+  assert.equal(await evaluate(`document.querySelector('input[aria-label="字段名称"]')?.value`), 'count');
+  console.log('PASS  Esc 丢弃字段名草稿，不写入文档');
   await action('tr[data-row-index="1"]');
   await setValue('input[aria-label="字段名称"]', 'total', true);
   await ready(`document.querySelectorAll('.bp-dz-table tbody tr')[1]?.textContent.includes('total')`, '表内改名');
@@ -193,7 +227,12 @@ try {
   await evaluate(`history.back()`);
   await ready(`location.hash.split('/').filter(Boolean).length === 2 && document.querySelector('.bp-dz-canvas-title')?.textContent.includes('Table')`, '浏览器后退到父布局');
   await ready(`document.querySelector('.bp-dz-canvas-title')?.textContent.includes('26 B')`, '父布局长度联动');
-  console.log('PASS  嵌套布局、父长度联动、浏览器后退');
+  await action('tr[data-row-index="1"]');
+  await doubleClick('[data-field-id="f2"]');
+  await ready(`location.hash.split('/').filter(Boolean).length === 3 && document.querySelector('.bp-dz-canvas-title')?.textContent.includes('Entry')`, '双击字段进入子布局');
+  await evaluate(`history.back()`);
+  await ready(`location.hash.split('/').filter(Boolean).length === 2 && document.querySelector('.bp-dz-canvas-title')?.textContent.includes('Table')`, '双击进入后返回');
+  console.log('PASS  嵌套布局、父长度联动、浏览器后退、双击进入子布局');
 
   await evaluate(`[...document.querySelectorAll('.bp-dz-layout-card')].find(e => e.textContent.includes('Mix'))?.click()`);
   await ready(`document.querySelector('.bp-dz-canvas-title')?.textContent.includes('Mix')`, '打开混合布局');
@@ -207,6 +246,10 @@ try {
 
   await evaluate(`[...document.querySelectorAll('.bp-dz-layout-card')].find(e => e.textContent.includes('Flags'))?.click()`);
   await ready(`document.querySelector('.bp-dz-canvas-title')?.textContent.includes('Flags')`, '打开位域布局');
+  await click('[data-group-key="0:8"]');
+  await ready(`document.querySelector('.bp-dz-status')?.textContent.includes('位域组')`, '单击位域组选中');
+  assert.equal(await evaluate(`document.querySelectorAll('.bp-dz-table tbody tr.on').length`), 3);
+  console.log('PASS  单击位域组选中整组，字段表同步');
   await action('.bp-dz-seg button:nth-child(2)');
   await ready(`document.querySelectorAll('.bp-dz-bit-group').length === 1`, '切到位视图');
   {

@@ -57,7 +57,7 @@ function usageText(def: NodeDef): string[] {
   }
   if (def.kind === 'array') {
     return [
-      '数据源接 File 节点；address 填第一项偏移。',
+      `数据源接 File 节点；${def.offset ? '文件偏移' : 'address'} 填第一项位置。`,
       'count 没有默认值时必须接一个数量输入；固定数量已在节点里写好。',
       '输出 list、count 和 elem:N；elem:N 可继续接元素解析或字段跟随。',
     ];

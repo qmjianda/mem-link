@@ -26,20 +26,20 @@ export function createTemplate(id: DesignerTemplate, layouts: BinaryLayout[]): B
       { id: 'f1', name: 'magic', kind: 'u16' },
       { id: 'f2', name: 'version', kind: 'u16' },
       { id: 'f3', name: 'count', kind: 'u32' },
-      { id: 'f4', name: 'kind', kind: 'bits', bit: '0', width: '2', unit: '2' },
-      { id: 'f5', name: 'active', kind: 'bits', bit: '2', width: '1', unit: '2' },
-      { id: 'f6', name: 'mode', kind: 'bits', bit: '3', width: '3', unit: '2' },
+      { id: 'f4', name: 'kind', kind: 'bits', at: '8', bit: '0', width: '2', unit: '2' },
+      { id: 'f5', name: 'active', kind: 'bits', at: '8', bit: '2', width: '1', unit: '2' },
+      { id: 'f6', name: 'mode', kind: 'bits', at: '8', bit: '3', width: '3', unit: '2' },
     ];
     return [l];
   }
   if (id === 'bitfield') {
     const l = baseLayout(layouts, 'Flags');
     l.fields = [
-      { id: 'f1', name: 'kind', kind: 'bits', bit: '0', width: '2', unit: '2' },
-      { id: 'f2', name: 'active', kind: 'bits', bit: '2', width: '1', unit: '2' },
-      { id: 'f3', name: 'mode', kind: 'bits', bit: '3', width: '3', unit: '2' },
-      { id: 'f4', name: 'ready', kind: 'bits', bit: '6', width: '1', unit: '2' },
-      { id: 'f5', name: 'error', kind: 'bits', bit: '7', width: '1', unit: '2' },
+      { id: 'f1', name: 'kind', kind: 'bits', at: '0', bit: '0', width: '2', unit: '2' },
+      { id: 'f2', name: 'active', kind: 'bits', at: '0', bit: '2', width: '1', unit: '2' },
+      { id: 'f3', name: 'mode', kind: 'bits', at: '0', bit: '3', width: '3', unit: '2' },
+      { id: 'f4', name: 'ready', kind: 'bits', at: '0', bit: '6', width: '1', unit: '2' },
+      { id: 'f5', name: 'error', kind: 'bits', at: '0', bit: '7', width: '1', unit: '2' },
     ];
     return [l];
   }

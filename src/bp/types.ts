@@ -5,7 +5,7 @@
  */
 
 import type { Endian, Problem } from '../core/types';
-import type { FieldDef, TypeDef } from '../core/pack';
+import type { FieldDef, MemApi, TypeDef } from '../core/pack';
 import type { Memory } from '../core/mem';
 import type { AssetTable } from './assets';
 import type { AddressInt, MappedAddress } from './precision';
@@ -74,6 +74,8 @@ export interface ArrayNodeDef extends NodeBase {
   count?: number;
   /** default type.size */
   stride?: number;
+  /** expose a raw file offset instead of a mapped address input */
+  offset?: boolean;
 }
 
 export interface CalcNodeDef extends NodeBase {
@@ -104,7 +106,8 @@ export interface EntryView {
 }
 
 export interface EvalCtx {
-  mem: Memory;
+  /** Pack-facing memory API (u8/u16/...), matching BPMemApi in the pack DSL. */
+  mem: MemApi;
   pack: BlueprintPack;
   nodeId: string;
   endian: Endian;

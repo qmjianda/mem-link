@@ -41,7 +41,7 @@ import { base64ToBytes, sessionBytesOf } from './doc';
 import {
   addressHex, addressInteger, exactInteger, isExactPort, isMappedAddress, mappedAddress, MAX_ADDRESS, packMemory, safeNumber, sameMapping,
 } from './precision';
-import { isByteSpan, ReadIssue } from './binary-read';
+import { addOffset, integerInput, isByteSpan, ReadIssue } from './binary-read';
 import { layoutFieldType, type BinaryLayout } from './layouts';
 import { buildStructureRegistry, type StructureRegistry } from './structure';
 
@@ -291,7 +291,9 @@ export function portsFor(
 
   const inputs: PortSpec[] = [
     { ...SOURCE_INPUT },
-    { name: 'address', type: 'pack-address', label: '地址' },
+    def.kind === 'array' && def.offset
+      ? { name: 'offset', type: 'offset', label: '文件偏移', hint: '相对当前数据源基址' }
+      : { name: 'address', type: 'pack-address', label: '地址' },
   ];
   if (def.kind === 'array' && def.count == null) {
     inputs.push({ name: 'count', type: 'number', label: '数量' });
@@ -424,7 +426,7 @@ export function createEntryReader(mem: Memory, pack: BlueprintPack, nodeId = '')
   const read = (typeName: string, addr: number, index?: number): EntryView =>
     makeEntry(mem, pack, compat, memApi, typeName, addr, index);
   const ctx: EvalCtx = {
-    mem, pack, nodeId, endian: pack.endian, pointerSize: pack.pointerSize,
+    mem: memApi, pack, nodeId, endian: pack.endian, pointerSize: pack.pointerSize,
     consts: pack.constants,
     read: (type: TypeDef, addr: number) => read(type.name, addr),
   };
@@ -1096,7 +1098,7 @@ export function evaluateGraph(
       if (!mem) throw new Error('该 pack 只支持安全整数地址');
       const memApi = packMemApi(mem);
       const ctxBase = {
-        mem, pack, nodeId: node.id, endian: pack.endian, pointerSize: pack.pointerSize,
+        mem: memApi, pack, nodeId: node.id, endian: pack.endian, pointerSize: pack.pointerSize,
         consts: pack.constants,
         read: (type: { name: string }, addr: number) => makeEntry(mem, pack, compat, memApi, type.name, addr),
       } as EvalCtx;
@@ -1120,12 +1122,37 @@ export function evaluateGraph(
         const entry = makeEntry(mem, pack, compat, memApi, def.type.name, address);
         const view = makeView(entry, compat, mem);
         setView({ kind: 'struct', inst: view });
-        for (const f of entry.type.fields) out[f.name] = entry.value[f.name];
+        for (const f of entry.type.fields) {
+          // Nested records/arrays are real instances with their own location and
+          // memory, not plain JSON. The element parser accepts an instance port,
+          // so publishing the decoded object alone would leave it undecodable.
+          const nestedType = f.ofType;
+          if (f.kind === 'record' && nestedType) {
+            try {
+              const nested = makeEntry(mem, pack, compat, memApi, nestedType.name, address + (f.offset ?? 0));
+              out[f.name] = makeView(nested, compat, mem);
+              continue;
+            } catch { /* fall back to the decoded plain value */ }
+          }
+          if (f.kind === 'array' && nestedType && f.count != null) {
+            try {
+              const stride = nestedType.size;
+              const items: InstanceView[] = [];
+              for (let i = 0; i < Math.min(f.count, MAX_DYNAMIC_PORTS); i += 1) {
+                const nested = makeEntry(mem, pack, compat, memApi, nestedType.name,
+                  address + (f.offset ?? 0) + i * stride, i);
+                items.push(makeView(nested, compat, mem));
+              }
+              out[f.name] = items;
+              continue;
+            } catch { /* fall back to the decoded array */ }
+          }
+          out[f.name] = entry.value[f.name];
+        }
         return out;
       }
 
       if (def.kind === 'list' || def.kind === 'array') {
-        const address = requireNumber('address');
         if (!buffer) {
           add(node, 'error', sourceInfo.wireMissing
             ? '数据源：连线来源没有文件内容'
@@ -1136,6 +1163,21 @@ export function evaluateGraph(
           setView({ kind: def.kind, items: [], count: 0, error: '需要输入文件' });
           return out;
         }
+        const address = def.kind === 'array' && def.offset
+          ? (() => {
+            const offset = inputOf('offset');
+            if (offset == null) return undefined;
+            try {
+              const at = addOffset(BigInt(buffer.base), integerInput(offset, '文件偏移', 0n));
+              const n = safeNumber(at);
+              if (n === undefined) throw new ReadIssue('BAD_INPUT', '文件偏移超出安全整数地址范围');
+              return n;
+            } catch (e) {
+              add(node, 'error', e instanceof Error ? e.message : String(e), 'BAD_INPUT');
+              return undefined;
+            }
+          })()
+          : requireNumber('address');
         if (address == null) {
           setView({ kind: def.kind, items: [], count: 0, error: '需要地址' });
           return out;

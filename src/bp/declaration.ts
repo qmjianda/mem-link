@@ -474,23 +474,70 @@ export function layoutToPackSource(layout: BinaryLayout, all: readonly BinaryLay
   const byId = new Map(all.map(l => [l.id, l]));
   const emitted = new Set<string>();
   const lines: string[] = [];
-  const varName = (l: BinaryLayout) => l.name.replace(/[^A-Za-z0-9_]/g, '_').replace(/^[0-9]/, '_') || `Layout_${l.id}`;
-  const fieldExpr = (f: LayoutField): string => {
-    const name = JSON.stringify(f.name);
+  const RESERVED = new Set([
+    'arguments', 'await', 'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete',
+    'do', 'else', 'enum', 'eval', 'export', 'extends', 'false', 'finally', 'for', 'function', 'if', 'implements',
+    'import', 'in', 'instanceof', 'interface', 'let', 'new', 'null', 'package', 'private', 'protected',
+    'public', 'return', 'static', 'super', 'switch', 'this', 'throw', 'true', 'try', 'typeof', 'undefined',
+    'var', 'void', 'while', 'with', 'yield',
+  ]);
+  const varNames = new Map<string, string>();
+  const usedVarNames = new Set<string>();
+  const typeNames = new Map<string, string>();
+  const usedTypeNames = new Set<string>();
+  const uniqueName = (used: Set<string>, base: string): string => {
+    let name = base;
+    let n = 2;
+    while (used.has(name)) { name = `${base}_${n}`; n += 1; }
+    used.add(name);
+    return name;
+  };
+  const varName = (l: BinaryLayout): string => {
+    const known = varNames.get(l.id);
+    if (known) return known;
+    let base = l.name.replace(/[^A-Za-z0-9_]/g, '_').replace(/^([0-9])/, '_$1') || `Layout_${l.id.replace(/[^A-Za-z0-9_]/g, '_')}`;
+    if (RESERVED.has(base)) base = `_${base}`;
+    const name = uniqueName(usedVarNames, base);
+    varNames.set(l.id, name);
+    return name;
+  };
+  const typeName = (l: BinaryLayout): string => {
+    const known = typeNames.get(l.id);
+    if (known) return known;
+    const base = l.name.trim() || `Layout_${l.id}`;
+    const name = uniqueName(usedTypeNames, base);
+    typeNames.set(l.id, name);
+    return name;
+  };
+  const metaOpts = (f: LayoutField, endian?: 'little' | 'big'): string[] => {
     const opts: string[] = [];
-    if (f.at) opts.push(`at: ${f.at}`);
-    if (f.size && f.kind !== 'bits') opts.push(`size: ${f.size}`);
-    if (f.endian) opts.push(`endian: ${JSON.stringify(f.endian)}`);
+    if (endian) opts.push(`endian: ${JSON.stringify(endian)}`);
     if (f.role) opts.push(`role: ${JSON.stringify(f.role)}`);
     if (f.values) opts.push(`values: ${JSON.stringify(f.values)}`);
-    const opt = opts.length ? `, { ${opts.join(', ')} }` : '';
+    return opts;
+  };
+  const fieldExpr = (f: LayoutField, layoutEndian: 'little' | 'big'): string => {
+    const name = JSON.stringify(f.name);
+    const endian = f.endian ?? layoutEndian;
     if (f.kind === 'bits') {
       const bitOpts: string[] = [];
+      if (f.at) bitOpts.push(`at: ${f.at}`);
       if (f.unit) bitOpts.push(`unit: ${f.unit}`);
       if (f.bit) bitOpts.push(`bit: ${f.bit}`);
-      if (f.at) bitOpts.push(`at: ${f.at}`);
+      bitOpts.push(...metaOpts(f, endian));
       return `bits(${name}, ${f.width ?? '1'}, { ${bitOpts.join(', ')} })`;
     }
+    if (f.kind === 'string' || f.kind === 'bytes') {
+      const opts = [`size: ${f.size ?? '1'}`];
+      if (f.at) opts.push(`at: ${f.at}`);
+      opts.push(...metaOpts(f));
+      return `${f.kind === 'string' ? 'str' : 'bytes'}(${name}, { ${opts.join(', ')} })`;
+    }
+    const opts: string[] = [];
+    if (f.at) opts.push(`at: ${f.at}`);
+    if (f.size) opts.push(`size: ${f.size}`);
+    opts.push(...metaOpts(f, f.kind === 'record' ? undefined : endian));
+    const opt = opts.length ? `, { ${opts.join(', ')} }` : '';
     if (f.kind === 'record' || f.kind === 'array') {
       const target = f.of?.replace(/^layout\//, '') ?? '';
       const targetLayout = byId.get(target);
@@ -501,7 +548,6 @@ export function layoutToPackSource(layout: BinaryLayout, all: readonly BinaryLay
       }
       return `record(${name}, ${targetExpr}${opt})`;
     }
-    if (f.kind === 'string' || f.kind === 'bytes') return `${f.kind}(${name}, { size: ${f.size ?? '1'}${opts.length ? `, ${opts.join(', ')}` : ''} })`;
     return `${f.kind}(${name}${opt})`;
   };
   const emit = (l: BinaryLayout): void => {
@@ -513,9 +559,9 @@ export function layoutToPackSource(layout: BinaryLayout, all: readonly BinaryLay
         if (dep) emit(dep);
       }
     }
-    const fs = l.fields.map(fieldExpr).join(', ');
+    const fs = l.fields.map(f => fieldExpr(f, l.endian)).join(', ');
     const opts = [l.size ? `size: ${l.size}` : '', l.union ? 'union: true' : ''].filter(Boolean).join(', ');
-    lines.push(`const ${varName(l)} = ${l.union ? 'union' : 'struct'}(${JSON.stringify(l.name)}, [${fs}]${opts ? `, { ${opts} }` : ''});`);
+    lines.push(`const ${varName(l)} = ${l.union ? 'union' : 'struct'}(${JSON.stringify(typeName(l))}, [${fs}]${opts ? `, { ${opts} }` : ''});`);
   };
   emit(layout);
   return lines.join('\n');

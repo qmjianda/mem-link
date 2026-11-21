@@ -1545,7 +1545,7 @@ export default function Canvas({
                       if (p.index != null) onSelect(setEntry(selection, node.id, p.index));
                     }}
                   >
-                    <span className="bp-element-i mono">{p.label}</span>
+                    <span className="bp-element-i mono" title={p.label}>{p.label}</span>
                     <span className="bp-element-hint mono">{p.hint}</span>
                     <span
                       className={`bp-port out sm${portHint(p, 'out', node.id)}`}

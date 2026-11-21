@@ -31,6 +31,7 @@ export default function DraftInput({
   const [text, setText] = useState(value);
   const [error, setError] = useState<string | undefined>();
   const focused = useRef(false);
+  const cancelBlur = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const errorId = useId();
 
@@ -71,6 +72,7 @@ export default function DraftInput({
         spellCheck={false}
         onFocus={(e) => {
           focused.current = true;
+          cancelBlur.current = false;
           e.currentTarget.select();
         }}
         onChange={(e) => {
@@ -79,6 +81,12 @@ export default function DraftInput({
         }}
         onBlur={() => {
           focused.current = false;
+          if (cancelBlur.current) {
+            cancelBlur.current = false;
+            setText(value);
+            setError(undefined);
+            return;
+          }
           commit(true);
         }}
         onKeyDown={(e) => {
@@ -90,6 +98,9 @@ export default function DraftInput({
           } else if (e.key === 'Escape') {
             e.preventDefault();
             e.stopPropagation();
+            // Blur fires synchronously: mark it so onBlur does not commit the
+            // draft that Escape is supposed to discard.
+            cancelBlur.current = true;
             setText(value);
             setError(undefined);
             inputRef.current?.blur();

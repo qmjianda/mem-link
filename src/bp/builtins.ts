@@ -233,6 +233,20 @@ function optionDefaults(def: BuiltinDef): Record<string, string> {
 const collectionOutputs = () => [typed('list', 'list', '集合'), intPort('count', '已读项数')];
 const arrayInputs = () => [ctxPort(), addrPort(), intPort('count', '项数'), intPort('stride', '字节步长（默认类型长度）')];
 const recordOutputs = () => [typed('instance', 'instance', '记录'), addrPort()];
+const ADDRESS_MODE = select('addressMode', '位置来源', [['address', '映射地址'], ['offset', '文件偏移']], 'address');
+const positionInputs = (params: Record<string, string>): PortSpec[] => [
+  ctxPort(),
+  params.addressMode === 'offset'
+    ? { ...typed('offset', 'offset', '文件偏移'), hint: '相对当前数据源基址的字节偏移' }
+    : addrPort(),
+];
+const positionOf = (
+  v: Record<string, unknown>,
+  params: Record<string, string>,
+  src: BufferValue,
+): bigint => params.addressMode === 'offset'
+  ? addOffset(BigInt(src.base), integerInput(v.offset, '文件偏移', 0n))
+  : addressIn(v.address, src);
 const structureOf = (ctx: BuiltinCtx): StructureEntry | undefined => ctx.structures.get(ctx.params.structureId);
 const walkView = (kind: 'list' | 'array', result: WalkResult): NodeView => ({
   kind, items: result.items, count: result.items.length, local: true,
@@ -357,17 +371,18 @@ export const BUILTIN_DEFS: BuiltinDef[] = [
     ports: (params, structures) => {
       const entry = structures.get(params.structureId);
       return {
-        inputs: [ctxPort(), addrPort()],
+        inputs: positionInputs(params),
         outputs: [...recordOutputs(), ...(entry ? structurePorts(entry) : [])],
       };
     },
     defaults: { address: '0x0' },
+    options: [ADDRESS_MODE],
     run: (v, ctx) => {
       const entry = structureOf(ctx);
       if (!entry) throw new ReadIssue('INVALID_LAYOUT', '请选择有效的结构');
       if (entry.error) throw new ReadIssue('INVALID_LAYOUT', entry.error);
       const src = requireSource(ctx.buffer, ctx.sourceNote);
-      const instance = readStructureEntry(entry, ctx.structures, src, addressIn(v.address, src));
+      const instance = readStructureEntry(entry, ctx.structures, src, positionOf(v, ctx.params, src));
       return { instance, address: instance.location, ...Object.fromEntries(instance.fields.map(f => [f.name, f.value])) };
     },
     view: ({ instance }) => ({ kind: 'struct', inst: isInstanceView(instance) ? instance : undefined }),
@@ -377,15 +392,20 @@ export const BUILTIN_DEFS: BuiltinDef[] = [
     followPort: 'address', precise: true,
     inputs: arrayInputs(), outputs: collectionOutputs(),
     defaults: { address: '0x0', count: '1' },
-    options: [select('elementType', '元素类型', [['scalar', '标量'], ['record', '结构布局']], 'scalar'), SCALAR_OPTION, ENDIAN_OPTION],
+    ports: (params) => ({
+      inputs: [...positionInputs(params), intPort('count', '项数'), intPort('stride', '字节步长（默认类型长度）')],
+      outputs: collectionOutputs(),
+    }),
+    options: [ADDRESS_MODE, select('elementType', '元素类型', [['scalar', '标量'], ['record', '结构布局']], 'scalar'), SCALAR_OPTION, ENDIAN_OPTION],
     run: (v, ctx) => {
       const src = requireSource(ctx.buffer, ctx.sourceNote);
       const entry = ctx.params.elementType === 'record' ? structureOf(ctx) : undefined;
       if (ctx.params.elementType === 'record' && !entry) throw new ReadIssue('INVALID_LAYOUT', '请选择有效的元素结构');
+      const at = positionOf(v, ctx.params, src);
       const walk = entry
-        ? expandEntryArray(src, addressIn(v.address, src), integerInput(v.count, '项数', 0n),
+        ? expandEntryArray(src, at, integerInput(v.count, '项数', 0n),
           v.stride === undefined ? undefined : integerInput(v.stride, '步长', 1n), entry, ctx.structures)
-        : expandArray(src, addressIn(v.address, src), integerInput(v.count, '项数', 0n),
+        : expandArray(src, at, integerInput(v.count, '项数', 0n),
           v.stride === undefined ? undefined : integerInput(v.stride, '步长', 1n), ctx.params.scalar ?? 'u32', ctx.endian);
       if (walk.notice) ctx.report?.(walk.notice, walk.stop === 'limit');
       return { list: walk.items, count: BigInt(walk.items.length), walk };

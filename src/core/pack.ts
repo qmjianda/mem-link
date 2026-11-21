@@ -59,6 +59,8 @@ export interface FieldOpts {
   label?: string;
   /** numeric value → display label; display only, never changes the value */
   values?: Record<string, string>;
+  /** numeric semantics used for ports and downstream UI */
+  role?: 'address' | 'offset' | 'index';
   signed?: boolean;
   transform?: TransformFn;
 }
@@ -288,12 +290,21 @@ function buildType(name: string, fields: Array<FieldDef | LayoutOp>, union: bool
     const f = raw;
     if (f.kind === 'bits') {
       const group: FieldDef[] = [f];
+      const groupStart = f.anchored ? (f.offset ?? 0) : (union ? 0 : cursor);
+      let groupUnit = f.bits?.unitExplicit ? f.bits.unit : undefined;
       let j = i + 1;
-      // A bit field with an explicit unit or at-anchor starts a new group only
-      // when it is the first field; consecutive plain bit fields join it.
+      // Consecutive bit fields that share the same anchored offset and storage
+      // unit belong to one group. This also keeps auto groups whose members each
+      // repeat an explicit unit (the designer's export shape) in one slot.
       while (j < fields.length) {
         const next = fields[j];
-        if ('__op' in next || next.kind !== 'bits' || next.anchored || next.bits?.unitExplicit) break;
+        if ('__op' in next || next.kind !== 'bits' || !next.bits) break;
+        if (next.anchored && (next.offset ?? 0) !== groupStart) break;
+        const nextUnit = next.bits.unitExplicit ? next.bits.unit : undefined;
+        if (nextUnit !== undefined) {
+          if (groupUnit !== undefined && nextUnit !== groupUnit) break;
+          groupUnit = nextUnit;
+        }
         group.push(next);
         j += 1;
       }
@@ -346,8 +357,12 @@ function buildType(name: string, fields: Array<FieldDef | LayoutOp>, union: bool
     const spans = type.fields.filter(f => f.kind !== 'bits')
       .map(f => ({ name: f.name, start: f.offset ?? 0, end: (f.offset ?? 0) + (f.size ?? 0) }))
       .sort((a, b) => a.start - b.start || a.end - b.end);
-    for (let i = 1; i < spans.length; i += 1) {
-      if (spans[i].start < spans[i - 1].end) throw new Error(`${name} 字段重叠：${spans[i - 1].name} / ${spans[i].name}`);
+    for (let i = 0; i < spans.length; i += 1) {
+      for (let j = 0; j < i; j += 1) {
+        if (spans[i].start < spans[j].end) {
+          throw new Error(`${name} 字段重叠：${spans[j].name} / ${spans[i].name}`);
+        }
+      }
     }
   }
   if (opts.size != null) {

@@ -625,7 +625,7 @@ button.bp-fold:hover { color: var(--text); border-color: var(--line-2); backgrou
 .bp-element-row { height: 21px; gap: 7px; cursor: pointer; }
 .bp-element-row:hover { background: rgba(78,216,192,.07); }
 .bp-element-row.on { background: rgba(78,216,192,.14); }
-.bp-element-i { width: 30px; flex: none; color: var(--accent); font-size: 9px; }
+.bp-element-i { min-width: 0; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent); font-size: 9px; }
 .bp-element-hint { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); font-size: 9px; }
 .bp-port.out.sm { width: 8px; height: 8px; margin-top: -4px; }
 .bp-expand {

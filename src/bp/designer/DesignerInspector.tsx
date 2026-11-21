@@ -219,6 +219,7 @@ function FieldPanel({ id }: { id: string }) {
   const edgeCount = usage.fieldEdgeCounts.get(`${current.id}:${id}`) ?? 0;
   const layoutRefs = usage.byLayout.get(current.id)?.length ?? 0;
   const auto = field.at === undefined || field.at === '';
+  const groupAuto = bitsGroup ? bitsGroup.members.every(m => m.at === undefined || m.at === '') : auto;
   const otherLayouts = state.layouts.filter(l => l.id !== current.id);
   const targetValue = field.of ?? '';
   const targetLayoutValue = field.of?.startsWith('layout/') ? field.of : '';
@@ -340,9 +341,9 @@ function FieldPanel({ id }: { id: string }) {
             {!auto && <button type="button" className="mini-btn" onClick={() => actions.restoreAuto([id])}>恢复自动</button>}
           </div>
         </label>
-        <label className="bp-dz-check"><input type="checkbox" checked={auto} onChange={(e) => {
-          if (e.target.checked) actions.patchField(id, { at: null });
-          else actions.patchField(id, { at: String(positioned.offset) });
+        <label className="bp-dz-check"><input type="checkbox" checked={groupAuto} onChange={(e) => {
+          if (e.target.checked) actions.restoreAuto([id]);
+          else actions.anchorFields([id]);
         }} /> 自动排布（不写 at）</label>
       </section>
 
@@ -368,7 +369,7 @@ function FieldPanel({ id }: { id: string }) {
       </section>
 
       <div className="bp-dz-actions">
-        {(field.kind === 'record' || field.kind === 'array') && targetValue && (
+        {(field.kind === 'record' || field.kind === 'array') && targetValue.startsWith('layout/') && (
           <button className="mini-btn" onClick={() => actions.enterLayout(targetValue.slice('layout/'.length))}>进入子布局</button>
         )}
         <button className="mini-btn" onClick={() => actions.copyFields([id])}>复制</button>
@@ -393,6 +394,8 @@ function MultiFieldsPanel() {
   const commonKind = common(fields.map(f => f.kind));
   const commonEndian = common(fields.map(f => f.endian ?? ''));
   const commonRole = common(fields.map(f => f.role ?? ''));
+  const endianValue = commonEndian === undefined ? '__mixed' : commonEndian === '' ? '__follow' : commonEndian;
+  const roleValue = commonRole === undefined ? '__mixed' : commonRole === '' ? '__none' : commonRole;
   const edgeCount = selection.ids.reduce((n, id) => n + (state.usage.fieldEdgeCounts.get(`${current.id}:${id}`) ?? 0), 0);
   return (
     <>
@@ -405,22 +408,22 @@ function MultiFieldsPanel() {
         <h3>共同属性</h3>
         <div className="bp-dz-prop"><span>类型</span><div className="bp-dz-value">{commonKind ? (KIND_LABEL[commonKind] ?? commonKind) : '混合'}</div></div>
         <label className="bp-dz-prop"><span>字节序</span>
-          <select className="select" value={commonEndian ?? '__mixed'} onChange={(e) => {
+          <select className="select" value={endianValue} onChange={(e) => {
             const value = e.target.value;
             if (value === '__mixed') return;
             actions.patchFields(selection.ids, { endian: value === '__follow' ? null : value as 'little' | 'big' });
           }}>
-            {!commonEndian && <option value="__mixed" disabled>混合</option>}
+            {commonEndian === undefined && <option value="__mixed" disabled>混合</option>}
             <option value="__follow">跟随布局</option><option value="little">小端</option><option value="big">大端</option>
           </select>
         </label>
         <label className="bp-dz-prop"><span>数值语义</span>
-          <select className="select" value={commonRole ?? '__mixed'} onChange={(e) => {
+          <select className="select" value={roleValue} onChange={(e) => {
             const value = e.target.value;
             if (value === '__mixed') return;
             actions.patchFields(selection.ids, { role: value === '__none' ? null : value as LayoutField['role'] });
           }}>
-            {!commonRole && <option value="__mixed" disabled>混合</option>}
+            {commonRole === undefined && <option value="__mixed" disabled>混合</option>}
             <option value="__none">普通整数</option><option value="address">绝对地址</option><option value="offset">字节偏移</option><option value="index">池下标</option>
           </select>
         </label>

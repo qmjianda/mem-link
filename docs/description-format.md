@@ -260,10 +260,10 @@ calcNode({
 | 数据源 | `slice` 字节范围 | 输出保留原始地址和资产身份的 `span` |
 | 读取 | `readint` 读数值 | 按 `scalar` 类型和字节序读取一个值 |
 | 读取 | `text` 读字符串 | 定长或零终止，支持 ASCII、UTF-8、UTF-16LE/BE |
-| 读取 | `structread` 读结构 | 引用 `structureId`，输出记录与具名字段 |
+| 读取 | `structread` 读结构 | 引用 `structureId`，位置来源可选映射地址或文件偏移，输出记录与具名字段 |
 | 定位 | `address` 换算地址 | 基址加偏移，或基址加池下标乘步长；不读取 |
 | 定位 | `ptrwalk` 读指针 | 读取一个指针，区分空指针、读取失败和目标未映射 |
-| 集合 | `arrayread` 展开数组、`listread` 遍历链表 | 输出可取项的集合 |
+| 集合 | `arrayread` 展开数组、`listread` 遍历链表 | 数组位置来源可选映射地址或文件偏移；输出可取项的集合 |
 | 集合 | `item` 按下标取项、`element` 元素解析 | 从集合取项、展开结构字段 |
 | 校验 | `checksum`、`assert` | 计算校验和、判断相等或闭区间 |
 | 辅助 | `number`、`string`、`note`、`expr` | 常量、便签与数值表达式 |

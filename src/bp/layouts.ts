@@ -137,6 +137,8 @@ export interface PositionedField {
   offset: number;
   size: number;
   auto: boolean;
+  /** 原始锚定文本；undefined/'' 表示自动排布 */
+  at?: string;
   field: LayoutField;
   bits?: { offset: number; width: number; unit: number };
   count?: number;
@@ -229,6 +231,15 @@ function parseOptionalInt(
     return undefined;
   }
   return n;
+}
+
+/** Silent numeric read used only to decide bit-group membership; problems are reported later. */
+function intOrUndefined(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const text = String(raw).trim();
+  if (text === '') return undefined;
+  const n = Number(text);
+  return Number.isSafeInteger(n) ? n : undefined;
 }
 
 function parseIntOr(
@@ -332,10 +343,22 @@ export function buildLayout(
 
     if (raw.kind === 'bits') {
       const group: LayoutField[] = [raw];
+      const groupStart = intOrUndefined(raw.at);
+      let groupUnit = intOrUndefined(raw.unit);
       let j = i + 1;
+      // Join consecutive bit fields that share the same storage slot. Explicit
+      // units are allowed on every member: designer-authored groups keep them
+      // on all fields, while imported declarations only set the first one.
       while (j < layout.fields.length) {
         const next = layout.fields[j];
-        if (next.kind !== 'bits' || next.at !== undefined || next.unit !== undefined) break;
+        if (next.kind !== 'bits') break;
+        const nextAt = intOrUndefined(next.at);
+        if (nextAt !== undefined && nextAt !== (groupStart ?? (layout.union ? 0 : cursor))) break;
+        const nextUnit = intOrUndefined(next.unit);
+        if (nextUnit !== undefined) {
+          if (groupUnit !== undefined && nextUnit !== groupUnit) break;
+          groupUnit = nextUnit;
+        }
         group.push(next);
         j += 1;
       }
@@ -348,10 +371,11 @@ export function buildLayout(
         const bit = parseIntOr(b.bit, `${b.name} 的位偏移`, 0, 63, 0, problems, layout, b);
         used = Math.max(used, bit + width);
       }
-      const explicitRaw = group.find(b => b.unit !== undefined)?.unit;
-      let unit = parseOptionalInt(explicitRaw, `${display} 的存储宽度`, 1, 8, problems, layout, group.find(b => b.unit !== undefined));
+      const explicitField = group.find(b => b.unit !== undefined && String(b.unit).trim() !== '');
+      const explicitRaw = explicitField?.unit;
+      let unit = parseOptionalInt(explicitRaw, `${display} 的存储宽度`, 1, 8, problems, layout, explicitField);
       if (unit !== undefined && !BIT_UNITS.includes(unit as 1 | 2 | 4 | 8)) {
-        pushProblem(problems, layout, 'BIT_UNIT', `${display} 的存储宽度应为 1、2、4 或 8 字节`, group.find(b => b.unit !== undefined));
+        pushProblem(problems, layout, 'BIT_UNIT', `${display} 的存储宽度应为 1、2、4 或 8 字节`, explicitField);
         unit = undefined;
       }
       if (!unit) {
@@ -369,7 +393,7 @@ export function buildLayout(
         const bit = parseIntOr(b.bit, `${b.name} 的位偏移`, 0, 63, 0, problems, layout, b);
         fields.push({
           id: b.id, name: b.name.trim() || b.id, kind: 'bits', offset: start, size: unit,
-          auto: b.at === undefined || b.at === '', field: b,
+          auto: b.at === undefined || b.at === '', at: b.at, field: b,
           bits: { offset: bit, width, unit }, endian: b.endian ?? layout.endian,
           values: b.values, role: b.role,
         });
@@ -426,7 +450,7 @@ export function buildLayout(
     }
     fields.push({
       id: raw.id, name: raw.name.trim() || raw.id, kind, offset: start, size,
-      auto: raw.at === undefined || raw.at === '', field: raw,
+      auto: raw.at === undefined || raw.at === '', at: raw.at, field: raw,
       ...(count !== undefined ? { count } : {}),
       ...(of ? { of } : {}),
       ...(ofType ? { ofType } : {}),
@@ -501,11 +525,15 @@ export function buildLayout(
   const byteOverlaps: Array<[LayoutSpan, LayoutSpan]> = [];
   if (!layout.union) {
     const ordered = [...spans].sort((a, b) => a.start - b.start || a.end - b.end);
-    for (let i = 1; i < ordered.length; i += 1) {
-      if (ordered[i].start < ordered[i - 1].end) {
-        byteOverlaps.push([ordered[i - 1], ordered[i]]);
-        pushProblem(problems, layout, 'OVERLAP',
-          `字段重叠：${ordered[i - 1].name} / ${ordered[i].name}`);
+    // Compare against every earlier span, not only the immediate neighbour:
+    // a long field that contains a short one can still overlap later fields.
+    for (let i = 0; i < ordered.length; i += 1) {
+      for (let j = 0; j < i; j += 1) {
+        if (ordered[i].start < ordered[j].end) {
+          byteOverlaps.push([ordered[j], ordered[i]]);
+          pushProblem(problems, layout, 'OVERLAP',
+            `字段重叠：${ordered[j].name} / ${ordered[i].name}`);
+        }
       }
     }
   }
@@ -601,14 +629,20 @@ function displayValue(f: FieldDef, value: unknown): string {
   return formatPackValue(f, value);
 }
 
-function readScalarField(src: BufferValue, at: bigint, f: FieldDef, endian: Endian): unknown {
+function readScalarField(src: BufferValue, at: bigint, f: FieldDef, defaultEndian: Endian): unknown {
   const kind = f.kind;
-  if (/^(?:[ui](?:8|16|32|64)|f(?:32|64))$/.test(kind)) return scalarRead(src, at, kind, f.endian ?? endian).value;
+  const endian = f.endian ?? defaultEndian;
+  if (/^(?:[ui](?:8|16|32|64)|f(?:32|64))$/.test(kind)) return scalarRead(src, at, kind, endian).value;
   if (kind === 'bits') {
     const unit = f.bits?.unit ?? f.size ?? 1;
-    const raw = scalarRead(src, at, `u${unit * 8}`, f.endian ?? endian).raw;
-    let v = (raw >> BigInt(f.bits?.offset ?? 0)) & ((1n << BigInt(f.bits?.width ?? 1)) - 1n);
-    if (f.bits?.signed && v >= (1n << BigInt((f.bits?.width ?? 1) - 1))) v -= 1n << BigInt(f.bits?.width ?? 1);
+    const raw = scalarRead(src, at, `u${unit * 8}`, endian).raw;
+    const width = f.bits?.width ?? 1;
+    const offset = f.bits?.offset ?? 0;
+    // Big-endian bit offsets count from the most significant bit, matching
+    // decodeFieldRaw in packgraph; little-endian counts from the LSB.
+    const shift = endian === 'little' ? offset : unit * 8 - offset - width;
+    let v = (raw >> BigInt(shift)) & ((1n << BigInt(width)) - 1n);
+    if (f.bits?.signed && v >= (1n << BigInt(width - 1))) v -= 1n << BigInt(width);
     return v;
   }
   if (kind === 'bool') return checkedBytes(src, at, 1)[0] !== 0;
@@ -644,9 +678,10 @@ function decodeStruct(
     roots: [],
   };
   const rawValues: Record<string, unknown> = {};
+  const defaultEndian = opts.pack?.endian ?? 'little';
   for (const f of type.fields) {
     const fieldAddr = at + BigInt(f.offset ?? 0);
-    const direct = readScalarField(src, fieldAddr, f, type.fields.find(x => x === f)?.endian ?? 'little');
+    const direct = readScalarField(src, fieldAddr, f, defaultEndian);
     rawValues[f.name] = direct !== undefined
       ? direct
       : decodeFieldRaw(mem, compatible, type, { ...f, offset: 0 }, Number(fieldAddr - localBase));
@@ -672,11 +707,13 @@ function decodeStruct(
       } else {
         const items: unknown[] = [];
         const elemKind = f.of ?? 'u8';
-        const elemSize = Number(elemKind.slice(1)) / 8 || 1;
+        const elemSize = elemKind === 'ptr'
+          ? (opts.pack?.pointerSize ?? 4)
+          : Number(elemKind.slice(1)) / 8 || 1;
         for (let i = 0; i < n; i += 1) {
           const item = readScalarField(src, fieldAddr + BigInt(i * elemSize), {
             ...f, kind: elemKind as FieldDef['kind'], offset: 0, ofType: undefined, of: elemKind,
-          }, f.endian ?? 'little') ?? decodeFieldRaw(mem, compatible, type, {
+          }, defaultEndian) ?? decodeFieldRaw(mem, compatible, type, {
             ...f, kind: elemKind as FieldDef['kind'], offset: 0, ofType: undefined, of: elemKind,
           }, Number(fieldAddr + BigInt(i * elemSize) - localBase));
           items.push(item);

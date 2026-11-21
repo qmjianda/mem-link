@@ -90,8 +90,15 @@ export default function BitLanes() {
     const edge = target.closest('[data-bedge]')?.getAttribute('data-bedge');
     const bit = member.bits?.offset ?? 0;
     const width = member.bits?.width ?? 1;
+    // In MSB-first lanes the visual left edge is the high bit (end), so the
+    // resize modes must swap relative to the LSB-first layout.
+    const kind = edge === 'left'
+      ? (bitOrder === 'msb' ? 'resize-right' : 'resize-left')
+      : edge === 'right'
+        ? (bitOrder === 'msb' ? 'resize-left' : 'resize-right')
+        : 'move';
     dragRef.current = {
-      kind: edge === 'left' ? 'resize-left' : edge === 'right' ? 'resize-right' : 'move',
+      kind,
       id, group, startBit: bit, startWidth: width,
       grab: Math.max(0, Math.min(width - 1, at - bit)),
       lane: track, moved: false,

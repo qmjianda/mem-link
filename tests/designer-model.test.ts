@@ -4,8 +4,8 @@ import {
   type BinaryLayout, type LayoutField,
 } from '../src/bp/layouts';
 import {
-  addBit, anchorFields, copyFields, createField, createLayout, deleteFields, deleteLayout,
-  duplicateFields, moveFields, pasteFields, reorderFields, resizeField, setBitGroupUnit,
+  addBit, anchorFields, copyFields, createField, createLayout, deleteLayout,
+  duplicateFields, moveFields, pasteFields, reorderFields, resizeField, restoreAuto, setBitGroupUnit,
   setFieldProp, type DesignerModel,
 } from '../src/bp/designer/operations';
 import {
@@ -46,6 +46,17 @@ describe('layout build and diagnostics', () => {
     ]));
     expect(b.fields[1].offset).toBe(1);
     expect(b.problems.some(p => p.code === 'OVERLAP')).toBe(true);
+  });
+
+  it('reports every overlapping span, including a long field that contains others', () => {
+    const b = buildLayout(layout('l', 'Nested overlap', [
+      field('f1', 'outer', { kind: 'bytes', size: '10', at: '0' }),
+      field('f2', 'small', { kind: 'u8', at: '1' }),
+      field('f3', 'late', { kind: 'u8', at: '3' }),
+    ]));
+    expect(b.byteOverlaps).toHaveLength(2);
+    expect(b.problems.filter(p => p.code === 'OVERLAP')).toHaveLength(2);
+    expect(b.problems.some(p => p.message.includes('outer / late'))).toBe(true);
   });
 
   it('rejects bit range overlap and keeps adjacent bits legal', () => {
@@ -176,6 +187,35 @@ describe('designer operations', () => {
     expect(unit.layout!.fields.every(f => f.unit === '1')).toBe(true);
   });
 
+  it('keeps bit members in one storage slot after unit changes and restore-auto', () => {
+    const l = layout('b', 'Bits', [
+      field('f1', 'a', { kind: 'bits', at: '0', bit: '0', width: '2', unit: '2' }),
+      field('f2', 'b', { kind: 'bits', at: '0', bit: '2', width: '1', unit: '2' }),
+    ]);
+    const m = model([l]);
+    const changed = setBitGroupUnit(m, '0:2', 4);
+    expect(changed.ok).toBe(true);
+    const auto = restoreAuto({ ...m, layouts: changed.layouts! }, ['f1', 'f2']);
+    expect(auto.ok).toBe(true);
+    expect(auto.layout!.fields.every(f => f.at === undefined)).toBe(true);
+    const built = buildLayout(auto.layout!);
+    expect(built.bitGroups).toHaveLength(1);
+    expect(built.bitGroups[0]).toMatchObject({ offset: 0, unit: 4 });
+    expect(built.size).toBe(4);
+
+    // Imported declarations only carry the unit on the first member.
+    const imported = layout('i', 'Imported', [
+      field('f1', 'a', { kind: 'bits', bit: '0', width: '2', unit: '2' }),
+      field('f2', 'b', { kind: 'bits', bit: '2', width: '1' }),
+    ]);
+    const resized = setBitGroupUnit(model([imported]), '0:2', 4);
+    expect(resized.ok).toBe(true);
+    const importedBuilt = buildLayout(resized.layout!);
+    expect(importedBuilt.bitGroups).toHaveLength(1);
+    expect(importedBuilt.bitGroups[0]).toMatchObject({ offset: 0, unit: 4 });
+    expect(importedBuilt.size).toBe(4);
+  });
+
   it('moves multiple byte fields together and rejects mixed kinds', () => {
     const l = layout('l', 'T', [
       field('f1', 'a', { kind: 'u16' }),
@@ -245,6 +285,19 @@ describe('designer operations', () => {
     const entry = added.find(l => l.name.startsWith('Entry'))!;
     expect(table.fields.find(f => f.kind === 'array')?.of).toBe(`layout/${entry.id}`);
     expect(analyzeLayouts([existing, ...added]).problems.filter(p => p.severity === 'error')).toEqual([]);
+  });
+
+  it('keeps template bitfields inside one shared storage unit', () => {
+    for (const template of ['header', 'bitfield'] as const) {
+      const l = createTemplate(template, [])[0];
+      const b = buildLayout(l);
+      const expectedOffset = template === 'header' ? 8 : 0;
+      expect(b.size).toBe(template === 'header' ? 10 : 2);
+      expect(b.bitGroups).toHaveLength(1);
+      expect(b.bitGroups[0].offset).toBe(expectedOffset);
+      expect(b.bitGroups[0].members).toHaveLength(template === 'header' ? 3 : 5);
+      expect(b.problems.filter(p => p.severity === 'error')).toEqual([]);
+    }
   });
 });
 

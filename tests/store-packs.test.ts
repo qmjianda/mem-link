@@ -39,6 +39,15 @@ describe('store packs', () => {
     expect(dirs.length).toBeGreaterThanOrEqual(20);
   });
 
+  it('ELF pack exposes offset-based program/section table nodes', () => {
+    const elf = loadBlueprintPack(packSources['../store/packs/elf/pack.bp.ts']).pack!;
+    for (const id of ['programHeaders64', 'programHeaders32', 'sectionHeaders64', 'sectionHeaders32']) {
+      expect(elf.nodes[id], id).toBeTruthy();
+      expect(elf.nodes[id].kind).toBe('array');
+      expect((elf.nodes[id] as { offset?: boolean }).offset).toBe(true);
+    }
+  });
+
   it('动态部分生成 calc / list / array / 变体辅助节点', () => {
     const sevenZip = loadBlueprintPack(packSources['../store/packs/7z/pack.bp.ts']).pack!;
     expect(Object.keys(sevenZip.nodes)).toEqual(expect.arrayContaining([

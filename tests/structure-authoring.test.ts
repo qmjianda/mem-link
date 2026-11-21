@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { loadBlueprintPack } from '../src/bp/load';
 import { formatPackValue } from '../src/core/packgraph';
 import type { FieldDef } from '../src/core/pack';
-import { compileLayout, readLayout, type BinaryLayout } from '../src/bp/layouts';
+import { compileLayout, readLayout, readTypeStructure, type BinaryLayout } from '../src/bp/layouts';
 import { buildStructureRegistry } from '../src/bp/structure';
 import { parseDeclarations, layoutToPackSource } from '../src/bp/declaration';
 import type { BPEdge, BPNode, BufferValue } from '../src/bp/types';
@@ -86,6 +86,15 @@ describe('pack auto layout', () => {
       types: { V: struct('V', [u32('a', { at: 0 }), u32('b', { at: 0 })], { size: 8 }) }, nodes: {},
     });`);
     expect(s.error).toContain('重叠');
+    const nested = loadBlueprintPack(`export default definePack({
+      name: 'n', endian: 'little', pointerSize: 4,
+      types: { V: struct('V', [
+        bytes('outer', { at: 0, size: 10 }),
+        u8('small', { at: 1 }),
+        u8('late', { at: 3 }),
+      ], { size: 10 }) }, nodes: {},
+    });`);
+    expect(nested.error).toContain('重叠');
   });
 
   it('maps enum values for display without changing the value', () => {
@@ -118,6 +127,20 @@ describe('layout model', () => {
     const list = inst.fields[1].value as unknown[];
     expect(list).toHaveLength(2);
     expect((list[0] as { fields: Array<{ value: unknown }> }).fields[0].value).toBe(10n);
+  });
+
+  it('reads big-endian layout scalars and bit fields', () => {
+    const layout: BinaryLayout = {
+      id: 'be', name: 'BE', endian: 'big',
+      fields: [
+        { id: 'f1', name: 'x', kind: 'u16' },
+        { id: 'f2', name: 'hi', kind: 'bits', at: '2', unit: '2', bit: '0', width: '4' },
+      ],
+    };
+    const compiled = compileLayout(layout);
+    const inst = readLayout(buffer([0x01, 0x02, 0xab, 0xcd]), 0x1000n, compiled);
+    expect(inst.fields[0].value).toBe(0x0102n);
+    expect(inst.fields[1].value).toBe(0xan);
   });
 
   it('handles union layouts and rejects non-union overlap', () => {
@@ -182,6 +205,102 @@ describe('declaration import', () => {
     const loaded = loadBlueprintPack(`${source}\nexport default definePack({ name: 'exported', endian: 'little', pointerSize: 4, types: { Header }, nodes: {} });`);
     expect(loaded.error).toBeUndefined();
     expect(loaded.pack!.types.Header.size).toBe(3);
+  });
+
+  it('exports strings as str(), keeps one size option and preserves display metadata', () => {
+    const source = layoutToPackSource({
+      id: 'text', name: 'Text', endian: 'little',
+      fields: [
+        { id: 'f1', name: 'title', kind: 'string', size: '8' },
+        { id: 'f2', name: 'body', kind: 'bytes', size: '4' },
+        { id: 'f3', name: 'kind', kind: 'u16', role: 'offset', values: { '1': 'One' } },
+      ],
+    }, []);
+    expect(source).toContain('str("title"');
+    expect(source).not.toContain('string(');
+    expect((source.match(/size: 8/g) ?? [])).toHaveLength(1);
+    const loaded = loadBlueprintPack(`${source}\nexport default definePack({ name: 'exported-text', endian: 'little', pointerSize: 4, types: { Text }, nodes: {} });`);
+    expect(loaded.error).toBeUndefined();
+    expect(loaded.pack!.types.Text.size).toBe(14);
+    expect(loaded.pack!.types.Text.fields[2].values).toEqual({ '1': 'One' });
+    expect(loaded.pack!.types.Text.fields[2].role).toBe('offset');
+  });
+
+  it('exports the layout endian so generated source is self-contained', () => {
+    const source = layoutToPackSource({
+      id: 'be', name: 'Be', endian: 'big',
+      fields: [
+        { id: 'f1', name: 'value', kind: 'u16' },
+        { id: 'f2', name: 'lo', kind: 'u8' },
+      ],
+    }, []);
+    expect(source).toContain('endian: "big"');
+    const loaded = loadBlueprintPack(`${source}\nexport default definePack({ name: 'exported-be', endian: 'little', pointerSize: 4, types: { Be }, nodes: {} });`);
+    expect(loaded.error).toBeUndefined();
+    const pack = loaded.pack!;
+    const view = readTypeStructure(buffer([0x01, 0x02, 0x03]), 0x1000n, pack.types.Be, 'pack/exported-be/Be', pack);
+    expect(view.fields[0].value).toBe(0x0102n);
+    expect(view.fields[1].value).toBe(0x03n);
+  });
+
+  it('disambiguates duplicate layout names when exporting', () => {
+    const child: BinaryLayout = {
+      id: 'child', name: 'Dup', endian: 'little',
+      fields: [{ id: 'f1', name: 'value', kind: 'u16' }],
+    };
+    const root: BinaryLayout = {
+      id: 'root', name: 'Dup', endian: 'little',
+      fields: [{ id: 'f1', name: 'child', kind: 'record', of: 'layout/child' }],
+    };
+    const source = layoutToPackSource(root, [root, child]);
+    expect(source).toContain('const Dup = ');
+    expect(source).toContain('const Dup_2 = ');
+    const loaded = loadBlueprintPack(`${source}\nexport default definePack({ name: 'exported-dup', endian: 'little', pointerSize: 4, types: { Dup, Dup_2 }, nodes: {} });`);
+    expect(loaded.error).toBeUndefined();
+    expect(Object.keys(loaded.pack!.types).sort()).toEqual(['Dup', 'Dup_2']);
+  });
+
+  it('keeps auto bit groups in one storage slot when exported', () => {
+    const source = layoutToPackSource({
+      id: 'flags', name: 'Flags', endian: 'little',
+      fields: [
+        { id: 'f1', name: 'kind', kind: 'bits', bit: '0', width: '2', unit: '2' },
+        { id: 'f2', name: 'active', kind: 'bits', bit: '2', width: '1', unit: '2' },
+      ],
+    }, []);
+    const loaded = loadBlueprintPack(`${source}\nexport default definePack({ name: 'exported-flags', endian: 'little', pointerSize: 4, types: { Flags }, nodes: {} });`);
+    expect(loaded.error).toBeUndefined();
+    const type = loaded.pack!.types.Flags;
+    expect(type.size).toBe(2);
+    expect(type.fields.map(f => f.offset)).toEqual([0, 0]);
+    expect(type.fields.map(f => f.bits?.unit)).toEqual([2, 2]);
+  });
+
+  it('reads pack fields with the pack endian unless the field overrides it', () => {
+    const loaded = loadBlueprintPack(`export default definePack({
+      name: 'be', endian: 'big', pointerSize: 4,
+      types: { T: struct('T', [
+        u16('x'),
+        u16('y', { endian: 'little' }),
+      ]) }, nodes: {},
+    });`);
+    expect(loaded.error).toBeUndefined();
+    const pack = loaded.pack!;
+    const view = readTypeStructure(buffer([0x01, 0x02, 0x03, 0x04]), 0x1000n, pack.types.T, 'pack/be/T', pack);
+    expect(view.fields[0].value).toBe(0x0102n);
+    expect(view.fields[1].value).toBe(0x0403n);
+
+    const bitsPack = loadBlueprintPack(`export default definePack({
+      name: 'be-bits', endian: 'big', pointerSize: 4,
+      types: { B: struct('B', [
+        bits('hi', 4, { unit: 2, bit: 0 }),
+        bits('lo', 4, { unit: 2, bit: 4 }),
+      ]) }, nodes: {},
+    });`);
+    expect(bitsPack.error).toBeUndefined();
+    const bitsView = readTypeStructure(buffer([0xab, 0xcd]), 0x1000n, bitsPack.pack!.types.B, 'pack/be-bits/B', bitsPack.pack!);
+    expect(bitsView.fields[0].value).toBe(0xan);
+    expect(bitsView.fields[1].value).toBe(0xbn);
   });
 });
 

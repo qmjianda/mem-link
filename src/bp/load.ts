@@ -141,6 +141,9 @@ function validateNode(key: string, def: NodeDef, pack: BlueprintPack): Problem[]
     if (def.stride != null && (!Number.isFinite(def.stride) || def.stride <= 0)) {
       out.push({ severity: 'error', message: `数组节点 ${key} 的 stride 非法` });
     }
+    if (def.offset !== undefined && typeof def.offset !== 'boolean') {
+      out.push({ severity: 'error', message: `数组节点 ${key} 的 offset 必须是布尔值` });
+    }
   }
   return out;
 }
@@ -229,7 +232,7 @@ function defaultNodeDescription(key: string, def: NodeDef): string {
   if (def.kind === 'array') {
     const count = def.count == null ? '由 count 输入决定' : `默认 ${def.count} 项`;
     const stride = def.stride ?? type?.size ?? 0;
-    return `按 ${count} 连续展开 ${typeName}（每项 ${stride} B）。数据源接 File；地址填第一项偏移。输出 list、count 和 elem:N。`;
+    return `按 ${count} 连续展开 ${typeName}（每项 ${stride} B）。数据源接 File；${def.offset ? '文件偏移' : '地址'}填第一项位置。输出 list、count 和 elem:N。`;
   }
   const nulls = def.nulls?.length ? `遇到 ${def.nulls.join(' / ')} 结束。` : '';
   return `从 address 开始遍历 ${typeName}（每项 ${size} B，最多 ${def.max ?? 4096} 项）。数据源接 File；地址填第一项偏移。${nulls}输出 list、count 和 elem:N。`;
