@@ -20,7 +20,7 @@ function fixture() {
   const sample = JSON.parse(readFileSync(resolve(root, 'samples/demo.blueprint.json'), 'utf8'));
   const bytes = Buffer.alloc(0x400);
   return {
-    version: 2,
+    version: 3,
     savedAt: Date.now(),
     packs: sample.packs.map((p) => ({ ...p, enabled: true })),
     nodes: [{
@@ -92,7 +92,7 @@ async function main() {
   await send('Page.enable');
 
   const doc = fixture();
-  await evaluate(`localStorage.setItem('memlink:graph:v2', ${JSON.stringify(JSON.stringify(doc))})`);
+  await evaluate(`localStorage.setItem('memlink:graph:v3', ${JSON.stringify(JSON.stringify(doc))})`);
   await send('Page.reload', { ignoreCache: true });
   for (let i = 0; i < 100; i++) {
     if (await evaluate(`document.querySelectorAll('.bp-node').length === 1`)) break;

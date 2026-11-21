@@ -6,10 +6,10 @@ const file = (name, base, bytes) => ({
   ...node('f', 'file', 0, 70, { name }), source: { name, base, data: Buffer.from(bytes).toString('base64') },
 });
 const edge = (id, node, port, to, input) => ({ id, from: { node, port }, to: { node: to, port: input } });
-const field = (id, name, byteOffset, kind, role) => ({ id, name, offset: String(byteOffset), kind, ...(role ? { role } : {}) });
-const layout = (id, name, bytes, fields) => ({ id, name, size: String(bytes), endian: 'little', fields, nextField: fields.length + 1 });
+const field = (id, name, byteOffset, kind, role) => ({ id, name, at: String(byteOffset), kind, ...(role ? { role } : {}) });
+const layout = (id, name, bytes, fields) => ({ id, name, size: String(bytes), endian: 'little', fields });
 const save = (name, nodes, edges, layouts) => {
-  const doc = { format: 'memlink-blueprint/2', packs: [], layouts, nodes, edges };
+  const doc = { format: 'memlink-blueprint/3', packs: [], layouts, nodes, edges };
   writeFileSync(new URL(`../samples/${name}.blueprint.json`, import.meta.url), `${JSON.stringify(doc, null, 2)}\n`);
 };
 
@@ -24,9 +24,9 @@ new DataView(bytes.buffer).setUint32(4, (~crc) >>> 0, true);
 
 save('header-array', [
   file('header-array.bin', '0x1000', bytes),
-  node('header', 'structread', 330, 0, { address: '0x1000', layoutId: 'header' }),
+  node('header', 'structread', 330, 0, { address: '0x1000', structureId: 'layout/header' }),
   node('offset', 'address', 670, 0),
-  node('array', 'arrayread', 1020, 0, { elementType: 'record', layoutId: 'entry' }),
+  node('array', 'arrayread', 1020, 0, { elementType: 'record', structureId: 'layout/entry' }),
   node('item', 'item', 1370, 0, { index: '1' }),
   node('range', 'slice', 1020, 300, { length: '8' }),
   node('checksum', 'checksum', 1370, 300, { algorithm: 'crc32' }),
@@ -34,15 +34,15 @@ save('header-array', [
   node('magicOk', 'assert', 670, 260, { expected: '0xa7' }),
 ], [
   edge('e1', 'f', 'base', 'header', 'address'),
-  edge('e2', 'header', 'field:header:f1', 'offset', 'offset'),
+  edge('e2', 'header', 'field:layout/header:f1', 'offset', 'offset'),
   edge('e3', 'offset', 'address', 'array', 'address'),
-  edge('e4', 'header', 'field:header:f2', 'array', 'count'),
+  edge('e4', 'header', 'field:layout/header:f2', 'array', 'count'),
   edge('e5', 'array', 'list', 'item', 'list'),
   edge('e6', 'offset', 'address', 'range', 'address'),
   edge('e7', 'range', 'span', 'checksum', 'span'),
   edge('e8', 'checksum', 'value', 'checksumOk', 'actual'),
-  edge('e9', 'header', 'field:header:f4', 'checksumOk', 'expected'),
-  edge('e10', 'header', 'field:header:f3', 'magicOk', 'actual'),
+  edge('e9', 'header', 'field:layout/header:f4', 'checksumOk', 'expected'),
+  edge('e10', 'header', 'field:layout/header:f3', 'magicOk', 'actual'),
 ], [
   layout('header', '表头', 8, [
     field('f1', 'tableOffset', 0, 'u16', 'offset'), field('f2', 'count', 2, 'u8'),
@@ -54,7 +54,7 @@ save('header-array', [
 save('pool-list', [
   file('pool-list.bin', '0x2000', [0xff, 0xff, 10, 0, 0, 0, 20, 0, 1, 0, 30, 0]),
   node('head', 'address', 330, 70, { mode: 'index', index: '2', stride: '4' }),
-  node('list', 'listread', 670, 70, { layoutId: 'entry', nextField: 'f1', mode: 'index', stopValue: '-1', limit: '8' }),
+  node('list', 'listread', 670, 70, { structureId: 'layout/entry', nextField: 'f1', mode: 'index', stopValue: '-1', limit: '8' }),
   node('last', 'item', 1010, 70, { index: '2' }),
 ], [
   edge('e1', 'f', 'base', 'head', 'base'),

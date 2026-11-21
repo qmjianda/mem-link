@@ -1,0 +1,26 @@
+{
+  "id": "webp",
+  "name": "WebP image",
+  "version": "1.0.0",
+  "category": "image",
+  "order": 278,
+  "summary": "WebP image (RIFF container)",
+  "description": "WebP RIFF container header and first chunk (VP8 / VP8L / VP8X).",
+  "tags": [
+    "image",
+    "riff",
+    "web"
+  ],
+  "author": "Nybble",
+  "license": "Free use / redistribution (Nybble registry)",
+  "homepage": "https://developers.google.com/speed/webp/docs/riff_container",
+  "coverage": "complete",
+  "source": {
+    "provider": "nybble",
+    "id": "webp",
+    "format": "WebP",
+    "version": "1.0.0",
+    "url": "https://github.com/itsmajdbuilds/binary-explorer-registry/tree/main/formats/webp",
+    "license": "Nybble format registry"
+  }
+}

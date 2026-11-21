@@ -9,7 +9,7 @@ import { loadBlueprintPack } from '../src/bp/load';
 import type { BPEdge, BPNode, BlueprintPack } from '../src/bp/types';
 
 const CHAIN_PACK = `
-const ChainNode = struct('Node', 4, [i32('next', 0)]);
+const ChainNode = struct('Node', [i32('next')]);
 
 export default definePack({
   name: 'chain-test',

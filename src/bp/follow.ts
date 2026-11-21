@@ -4,6 +4,7 @@
  */
 
 import { BUILTIN_DEFS } from './builtins';
+import { packStructureId } from './structure';
 import type { BlueprintPack, BPNode, BufferValue, NodeView, PortType } from './types';
 import { isInstanceView } from './types';
 import { addressHex, addressInteger, isMappedAddress, type AddressInt } from './precision';
@@ -76,6 +77,8 @@ export interface FollowItem {
   /** 「元素解析」条目要按哪个 pack 的类型解码（只由推断写入） */
   typePackId?: string;
   typeName?: string;
+  /** 内置「读结构」直接绑定的稳定结构 id */
+  structureId?: string;
   recommended?: boolean;
 }
 
@@ -116,6 +119,24 @@ export function buildFollowItems(opts: {
         addressType: 'pack-address',
         group: PACK_GROUP[def.kind] ?? '结构体',
         typeName: def.type.name,
+      });
+    }
+  }
+  // pack 类型也可以直接作为无脚本「读结构」目标。
+  for (const [packId, pack] of opts.packs) {
+    if (!enabled(packId)) continue;
+    const packName = opts.packNames.get(packId) ?? pack.name ?? packId;
+    for (const [typeName, type] of Object.entries(pack.types)) {
+      out.push({
+        key: `structure:${packId}/${typeName}`,
+        packId: '',
+        nodeId: 'structread',
+        label: `读结构 · ${typeName}`,
+        detail: `${packName} · ${type.size} B`,
+        inputPort: 'address',
+        addressType: 'pack-address',
+        group: '读取',
+        structureId: packStructureId(packId, typeName),
       });
     }
   }

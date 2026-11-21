@@ -2,7 +2,7 @@
 
 把内存 dump 变成**可执行的解析蓝图**：从左侧添加通用节点，在画布上连出解析步骤，在右侧检查字段和字节。固定结构可直接在图中定义，专用协议可通过 `.bp.ts` 扩展。
 
-一个 `.bp.ts` 文件同时描述结构体布局、链表/数组怎么展开、以及自定义计算节点；画布上的图就是解析器。为内网环境设计：**纯前端、零网络请求、无后端**，构建产物是一个可以双击打开的 HTML 文件。
+一个 `.bp.ts` 文件同时描述结构体布局、链表/数组怎么展开、以及自定义计算节点；画布上的图就是解析器。为内网环境设计：**纯前端、零后端，构建产物是一个可以双击打开的 HTML 文件**；除显式打开「Pack 商店」和安装/更新 pack 外，不发起网络请求。
 
 ![mem-link](docs/screenshot.png)
 
@@ -39,9 +39,11 @@ pnpm build      # dist/index.html（单文件，约 600 KB）
 - `samples/demo.bp.ts` / `demo.bin` / `demo.blueprint.json` — 索引链表的最小示例：结构体 + 链表节点
 - [表头 → 数组 → 校验](samples/header-array.blueprint.json) — 不用 pack；表头提供偏移、项数和预期校验值
 - [池下标链表](samples/pool-list.blueprint.json) — 不用 pack；`-1` 表示结束，`0` 是合法下标
+- [同一结构两种入口](samples/structure-reuse.blueprint.json) — 同一个 `Entry` 同时通过布局和 pack 类型读取
+- `samples/templates/` — 自动布局、位域、嵌套数组、池下标链表、布局引用的可编译模板
 - `docs/description-format.md` — pack 与节点参考
 
-重新生成 NVMe 示例资产：`node scripts/gen-nvme.mjs`；真实浏览器回归：`node scripts/cdp-verify.mjs`、`node scripts/cdp-verify-follow.mjs`（跟随地址 / 元素解析 / 就地重命名 / 标注缩放）、`node scripts/cdp-verify-core.mjs`（从空画布拖入 `samples/demo.bin` 与 `demo.bp.ts`，走完 bin → 结构体 → 链表 → 跟随字段，22 项）、`node scripts/cdp-verify-tree.mjs`（结构树：三个入口、展开、搜索、下标跳转、树内定位、跟随返回、footer 入口、生成解析节点、退出，24 项）、`node scripts/cdp-verify-tree-truncation.mjs`（5000 项数组从截断 footer 跳到第 4096 项）、`node scripts/cdp-verify-add-defaults.mjs`（非零文件基址下新增链表节点继承地址）。
+重新生成 NVMe 示例资产：`node scripts/gen-nvme.mjs`；真实浏览器回归：`node scripts/cdp-verify.mjs`、`node scripts/cdp-verify-follow.mjs`（跟随地址 / 元素解析 / 就地重命名 / 标注缩放）、`node scripts/cdp-verify-core.mjs`（从空画布拖入 `samples/demo.bin` 与 `demo.bp.ts`，走完 bin → 结构体 → 链表 → 跟随字段，22 项）、`node scripts/cdp-verify-tree.mjs`（结构树：三个入口、展开、搜索、下标跳转、树内定位、跟随返回、footer 入口、生成解析节点、退出，24 项）、`node scripts/cdp-verify-tree-truncation.mjs`（5000 项数组从截断 footer 跳到第 4096 项）、`node scripts/cdp-verify-add-defaults.mjs`（非零文件基址下新增链表节点继承地址）、`node scripts/cdp-verify-default-nodes.mjs`（无 pack 布局、粘贴声明、pack 类型选择、自动重排与位域）。
 
 ### 默认示例：NVMe Submission Queue
 
@@ -80,13 +82,45 @@ nvme-sq.bin ──> 提交队列 SQ (4 × 64 B SQE)
 
 「换算地址」只计算，不读取；「读指针」只读指定位置的一个指针，不解析目标。不确定地址归属哪份转储时，需要指定来源。「字节范围」保留原始地址和资产身份，下游不能越过范围。内置地址与整数读取支持精确 64 位值；已导入 pack 的脚本地址仍限于安全整数。
 
+### Pack 商店
+
+节点库的「Pack 商店」和顶栏按钮会从 GitHub 读取静态目录，浏览并安装常见格式 pack。默认地址：
+
+```text
+https://cdn.jsdelivr.net/gh/qmjianda/mem-link-packs@main/index.json
+```
+
+商店内容由独立仓库 [`qmjianda/mem-link-packs`](https://github.com/qmjianda/mem-link-packs) 提供，源文件在主仓库 `store/`：
+
+- 10 个手工 pack：NES、SQLite、PNG、BMP、ZIP、GIF、ELF、PE、JPEG、WAV。
+- 83 个从 Nybble format registry 移植，284 个从 ImHex-Patterns 移植；共 377 个。
+  其中 192 个完整、185 个部分布局；59 个部分布局带有 321 个动态辅助节点
+  （calc/list/array/变体），由 `meta.json` 的 `coverage` 与 `helpers` 标记。
+- 安装时用索引里的 SHA-256 校验；安装后的源码随蓝图和缓存保存，离线可用。
+- 支持搜索、分类、版本、更新/重装、自定义商店地址。商店地址也可以是任意
+  GitHub 仓库、分支或 `index.json`。
+
+应用只在打开商店和安装/更新时联网；其它解析与求值仍然是本地行为。维护命令：
+
+```bash
+pnpm packs:index       # 重新生成 store/index.json
+pnpm packs:check       # 校验索引与 377 个 pack 一致
+pnpm packs:publish     # 同步到独立商店仓库（需先 gh auth）
+```
+
+`store/` 下手工 pack 为 MIT；Nybble 派生 pack 按上游声明可自由使用/再分发；
+ImHex 派生 pack 为 **GPL-2.0-or-later**（与仓库根目录的专有许可分开），完整文本
+与来源见 [`store/NOTICE.md`](store/NOTICE.md)。
+
+详见 [`docs/pack-store.md`](docs/pack-store.md)。
+
 **不写 pack 的用法**：载入转储后添加「读结构」，在检查器新建结构布局、填写字段名、偏移和类型。数组及链表可引用同一布局；改字段名不会断开连线。试读选中字节、切换进制／时间／枚举／标志位都不改变图。需要把某个位接出去时，在布局中定义具名位段。
 
 **验证**：把「字节范围」接到「算校验和」得到实际值，再与表头中的预期值一起接到「断言」。断言区分通过、不通过、未能校验；失败时检查器显示能定位的原始字节。
 
 生成两个无脚本示例：`node scripts/gen-default-nodes.mjs`。构建后用 `pnpm verify:default-nodes` 运行其浏览器回归。
 
-**图格式已更新。** 新版保存为 `memlink-blueprint/2`，不加载旧蓝图或旧缓存，不会删除这些文件。已有 `.bp.ts` 仍可单独导入。
+**图格式已更新。** 新版保存为 `memlink-blueprint/3`，不加载旧蓝图或旧缓存，不会删除这些文件。旧 `.bp.ts` 的显式偏移写法也不再加载；随附示例与模板已迁移到新 DSL。
 
 **配置自动继承**：再次添加同类节点时，宽度 / 符号 / 字节序 / 指针宽度等下拉会沿用上一次的设置——连续解析同一结构时不必逐个重设；显式修改任意一项都会以你改的为准。
 
@@ -118,8 +152,11 @@ nvme-sq.bin ──> 提交队列 SQ (4 × 64 B SQE)
 
 ### hex 与画布双向定位
 
-- **hex → 画布**：选中文件节点，在「缓冲区」的 hex 里点任意字节，下方出现地址与「在此解析 →」，直接进入跟随地址浮层——看到可疑指针点一下就能展开解析。
-- **画布 → hex**：跳转框支持 `0x1200`、十进制，以及相对文件基址的 `+0x100` / `-0x40`，回车后 hex 从该处显示并高亮选中字节。
+- **整段可滚**：File 节点的「缓冲区」是覆盖整份转储的滚动窗口，只渲染可见行（大文件也不卡）；顶部读数跟随滚动显示当前起址，右侧拖动可调高。
+- **展开**：点「展开」让缓冲区占满检查器，`Esc` 或「收起」返回；展开 / 收起都保持原来的阅读位置。
+- **hex → 画布**：在「缓冲区」里点任意字节，下方出现地址与「在此解析 →」，直接进入跟随地址浮层——看到可疑指针点一下就能展开解析。
+- **画布 → hex**：跳转框支持 `0x1200`、十进制，以及相对文件基址的 `+0x100` / `-0x40`，回车后滚动到该处并高亮选中字节。
+- **结构体 → 缓冲区**：结构体 / 元素节点的字节预览下方有「在缓冲区打开 →」，选中来源 File 节点并定位到该实例的绝对地址。
 - 结构体 / 元素节点的字节区同样可点：点一个字节会**反向选中包含它的字段**，与「字段悬停 → 字节高亮」构成双向联动。
 
 ### 一键自动布局
@@ -156,6 +193,20 @@ nvme-sq.bin ──> 提交队列 SQ (4 × 64 B SQE)
 ### 字段 ↔ 字节联动
 
 检查器的字段表：悬停即高亮缓冲区里对应字节，**点击锁定**（再点取消），并显示该字段的绝对地址范围；工具条提供 `值` / `地址` / `HEX` 三种复制，以及字段值可跳转时的「在此解析 →」。
+
+### 结构设计器
+
+无脚本布局不再在 318px 检查器里逐字段填表。选中一个「读结构 / 展开数组 / 遍历链表」节点后，检查器只显示结构选择、长度、字段数、引用数和「打开结构设计器」；真正的几何编辑在独立全屏页面完成。
+
+- **两个视图**：字节视图按可配置的 4/8/16/32 字节行显示字段块；位视图按 1/2/4/8 字节存储单元显示位域泳道。切换视图不修改文档。
+- **自动 / 锚定**：虚线字段按声明顺序自动排布；拖动字段主体会锚定到具体偏移，拖动重排手柄只改自动顺序。没有自动/手动模式开关。
+- **直接操作**：从左侧类型面板拖入、点击类型后点空白格，或使用「插入字段」菜单（可直接填写偏移）都能创建字段；拖动、缩放、重排只在松手时校验并提交，非法落点回弹且不产生撤销记录。
+- **嵌套与联合**：record/array 显示目标布局与数量，双击或点「进入子布局」沿面包屑进入；union 用共享偏移的叠层显示。pack 类型在检查器中只读，布局仍只嵌套布局。
+- **引用安全**：修改共享布局会显示父布局、节点、连线和 pack 引用；删除仍被引用的布局会被拒绝并列出引用来源；删除被节点或连线使用的字段会先列出受影响入口，确认后保留缺失连线作为问题。
+- **历史**：每次手势、字段表提交或导入只产生一个撤销步骤；文字输入在失焦/Enter 时提交，Esc 还原；「撤销本次修改」可整体回到打开设计器时的状态。
+- **快捷键**：Tab/Enter 选择或进入，F2 改名，Delete 删除，方向键移动，Shift 加速，Alt+方向键改大小，`Ctrl/Cmd+Z` 撤销，`Ctrl/Cmd+Shift+Z` 重做，`Ctrl/Cmd+C/V/D` 复制/粘贴/重复，`Ctrl/Cmd+A` 全选；Esc 依次取消手势、关闭浮层、返回父布局、退出设计器。
+- **导入 / 导出 / 模板**：设计器内可粘贴 C 风格声明生成布局、把当前布局导出为 pack 类型源码，并插入表头、位域、嵌套数组、池下标链表模板；导入不执行任何代码。
+- **文档格式**：仍为 `memlink-blueprint/3`，没有迁移；位域组内区间重叠现在会显示可修复错误，不会被静默解码。
 
 ### 快捷键
 
@@ -196,7 +247,7 @@ File/Buffer ──buffer──> Header ──head──> Entry 链表 ──elem
 - **输入回显**：某个输入被连线后，画布与检查器里的输入框自动变成上游的实际值（地址按 `0x…` 显示），并带来源提示和一键断开；断开后恢复原来的手动输入。
 - **元素级输出**：链表/数组的每个元素、结构体里 `array`/`record` 字段的每个成员都是一个可连线的输出点。把「链表 #2」接到另一个节点的 `address`，就会在 #2 的地址上重新解析，并沿继承链沿用同一份文件。
 - **Element**：接一个 `instance`，或用 `list` + `index` 把列表项展开成字段端口；由「在此地址解析 → 元素解析」创建时还会带 `address`，按推断出的类型在该地址解码。类型只来自推断，不手动指定；没有连接时节点是空的，不显示任何结构体字段。
-- **图**：顶栏 `新建 / 导入转储 / 打开图 / 导出` 使用 `memlink-blueprint/2` JSON；pack 源码、连线和每个转储的数据都在图里。`导出` 与 `Ctrl+S` 同口径，浏览器只能确认「已发起下载」。工作草稿会独立自动缓存；新建、打开图或拖入 `.json` 会先确认，取消或打开失败都保留当前图。示例以**临时副本**打开，点 `返回我的蓝图` 恢复原来的文档、撤销状态和视口。
+- **图**：顶栏 `新建 / 导入转储 / 打开图 / 导出` 使用 `memlink-blueprint/3` JSON；pack 源码、连线和每个转储的数据都在图里。`导出` 与 `Ctrl+S` 同口径，浏览器只能确认「已发起下载」。工作草稿会独立自动缓存；新建、打开图或拖入 `.json` 会先确认，取消或打开失败都保留当前图。示例以**临时副本**打开，点 `返回我的蓝图` 恢复原来的文档、撤销状态和视口。
 - **问题入口**：顶栏右侧的问题计数就是唯一入口，点击在右栏切到「问题」页签；点某条问题会选中并居中对应节点，同时切回检查器。没有问题时点击只提示「没有发现问题」，不会打断当前检查。
 
 ### 导入、HEX 与字节试读
@@ -218,19 +269,19 @@ const idxToAddr = (v: unknown) => {
   return n < 0 ? null : BASE + n * STRIDE;
 };
 
-const Header = struct('Header', 8, [
-  u16('magic', 0, { format: 'hex' }),
-  u16('head', 2, { transform: (v) => idxToAddr(v) }),
-  u16('tail', 4, { transform: (v) => idxToAddr(v) }),
-  u16('count', 6),
+const Header = struct('Header', [
+  u16('magic', { format: 'hex' }),
+  u16('head', { transform: (v) => idxToAddr(v) }),
+  u16('tail', { transform: (v) => idxToAddr(v) }),
+  u16('count'),
 ]);
 
-const Entry = struct('Entry', 24, [
-  i16('next', 0, { transform: (v) => idxToAddr(v) }),
-  i16('prev', 2, { transform: (v) => idxToAddr(v) }),
-  u16('flags', 4, { format: 'hex' }),
-  str('name', 8, 12),
-  u32('ts', 20, { format: 'time' }),
+const Entry = struct('Entry', [
+  i16('next', { transform: (v) => idxToAddr(v) }),
+  i16('prev', { transform: (v) => idxToAddr(v) }),
+  u16('flags', { format: 'hex' }),
+  str('name', { size: 12 }),
+  u32('ts', { format: 'time' }),
 ]);
 
 export default definePack({
@@ -260,9 +311,9 @@ export default definePack({
 
 ### 字段构造器
 
-`u8/u16/u32/u64`、`i8/i16/i32/i64`、`f32/f64`、`bool/char/ptr`、`str(name,offset,count)`、`bytes(name,offset,count)`、`bits(name,offset,size,bitOffset,width)`、`record(name,offset,type)`、`array(name,offset,type,count)`。
+`u8/u16/u32/u64`、`i8/i16/i32/i64`、`f32/f64`、`bool/char/ptr`、`str(name,{size})`、`bytes(name,{size})`、`bits(name,width,{unit,bit})`、`record(name,type,{at})`、`array(name,type,count,{at})`。
 
-`struct(name,size,fields)` / `union(name,size,fields)` 定义布局；字段偏移按字节写死，工具不再解析 C。
+`struct(name,fields,{size})` / `union(name,fields,{size})` 定义布局：字段按声明顺序自动排布，写 `at` 就固定偏移；`pad(n)` / `align(n)` 处理填充与对齐。工具不解析 C，复杂 C 结构请按[字段映射表](docs/description-format.md#9-c-构造映射)落地。
 
 常用的字段选项：
 
@@ -307,6 +358,7 @@ export default definePack({
 | `Ctrl/Cmd+0` / `Ctrl/Cmd+1` | 适配全图 / 缩放到 100% |
 | `?` | 快捷键帮助 |
 | `Delete` / `Backspace` | 删除选中节点或边 |
+| 缓冲区聚焦后 `PageUp` / `PageDown` / `Home` / `End` | 翻屏 / 跳到缓冲区首尾 |
 | 滚轮 | 以光标为中心缩放 |
 | 拖动空白 | 平移画布 |
 | 拖动节点头 | 移动节点 |
@@ -321,7 +373,7 @@ export default definePack({
 ## 安全边界
 
 - pack 是**代码**：工具用 Sucrase 去掉类型，再用 `new Function` 执行；只加载可信文件。
-- 页面没有网络请求；CSP 需要允许 `unsafe-eval`（或 `wasm-unsafe-eval` 之外的脚本求值）。
+- 页面默认不联网；只有显式打开「Pack 商店」和安装/更新 pack 时会访问商店索引与源码。CSP 需要允许 `unsafe-eval`（pack 执行模型不变）。
 - 图上列表最多 4096 项；全屏结构树按需解码，链表上限取 pack 的 `max`，未声明时为 20 万条硬上限。越界、环、未知类型都会变成图上的问题节点/条目，不会静默截断。
 
 ## 代码结构

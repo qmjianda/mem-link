@@ -43,6 +43,7 @@ import {
 } from './precision';
 import { isByteSpan, ReadIssue } from './binary-read';
 import { layoutFieldType, type BinaryLayout } from './layouts';
+import { buildStructureRegistry, type StructureRegistry } from './structure';
 
 /** Prefix of runtime-generated ports. Names are rebuilt from the node view. */
 export const ELEMENT_PORT = 'elem:';
@@ -216,7 +217,10 @@ export function portsFor(
   packs: Map<string, BlueprintPack>,
   view?: NodeView,
   layouts: readonly BinaryLayout[] = [],
+  structures?: StructureRegistry,
 ): { inputs: PortSpec[]; outputs: PortSpec[] } {
+  const registry = structures ?? buildStructureRegistry(layouts, packs);
+  const activePacks = registry.packs;
   if (node.packId === '') {
     if (node.nodeId === 'element') {
         /**
@@ -241,7 +245,7 @@ export function portsFor(
         // publishes, which also come from `item.fields`.
         const inst = view?.kind === 'element' ? view.inst : undefined;
         if (inst) {
-          const decl = findTypeByName(inst.typeName, node.params.packId, packs);
+          const decl = findTypeByName(inst.typeName, node.params.packId, activePacks);
           const byName = new Map<string, FieldDef>();
           for (const f of decl?.fields ?? []) byName.set(f.name, f);
           return {
@@ -267,11 +271,11 @@ export function portsFor(
     // Every other built-in is declarative: the registry is the single source
     // for ports, palette entries and evaluation.
     const def = getBuiltin(node.nodeId);
-    if (def) return def.ports?.(node.params, layouts, view) ?? { inputs: def.inputs, outputs: def.outputs };
+    if (def) return def.ports?.(node.params, registry, view) ?? { inputs: def.inputs, outputs: def.outputs };
     return { inputs: [], outputs: [] };
   }
 
-  const pack = packs.get(node.packId);
+  const pack = activePacks.get(node.packId);
   const def = pack?.nodes[node.nodeId];
   if (!pack || !def) return { inputs: [], outputs: [] };
   if (def.kind === 'calc') {
@@ -350,7 +354,7 @@ function makeEntry(
     try {
       value[f.name] = f.transform(rv, {
         v: rv,
-        addr: addr + f.offset,
+        addr: addr + (f.offset ?? 0),
         self: raw,
         mem: memApi,
         consts: pack.constants,
@@ -374,7 +378,7 @@ function makeView(entry: EntryView, compat: Pick<Pack, 'pointerSize' | 'types'>,
       label: f.label,
       kind: f.kind,
       type: f.kind === 'record' || f.kind === 'array' ? (f.of ?? f.kind) : f.kind,
-      offset: f.offset,
+      offset: f.offset ?? 0,
       size: fieldSize(f, compat),
       raw,
       value,
@@ -496,7 +500,9 @@ export function evaluateGraph(
   const problemOrigins = new Map<string, ByteOrigin>();
   const problems: Problem[] = [];
   const state = new Map<string, 0 | 1 | 2>();
-  const declaredPorts = (node: BPNode, view?: NodeView) => portsFor(node, packs, view, opts?.layouts);
+  const structures = buildStructureRegistry(opts?.layouts ?? [], packs);
+  const activePacks = structures.packs;
+  const declaredPorts = (node: BPNode, view?: NodeView) => portsFor(node, packs, view, opts?.layouts, structures);
 
   /**
    * 问题条目：`message` 只写「对象：事实」，可执行建议放 `detail`，原因码放
@@ -583,7 +589,8 @@ export function evaluateGraph(
     // Stable field IDs let us classify local record outputs even before a collection item is selected.
     if (!src.packId && (src.nodeId === 'item' || src.nodeId === 'element')) {
       const field = /^field:([^:]+):([^:]+)$/.exec(port);
-      const f = field && opts?.layouts?.find((l) => l.id === field[1])?.fields.find((f) => f.id === field[2]);
+      const structure = field ? structures.get(field[1]) : undefined;
+      const f = field && structure?.layout?.fields.find((x) => x.id === field[2]);
       return !!f && ['string', 'bytes'].includes(layoutFieldType(f));
     }
     return false;
@@ -676,7 +683,7 @@ export function evaluateGraph(
     }
     if (found.length) {
       const first = found[0].info;
-      const names = found.map(({ info, edge }) => info.buffer?.name ?? nodeLabelOf(byId.get(edge.from.node), packs));
+      const names = found.map(({ info, edge }) => info.buffer?.name ?? nodeLabelOf(byId.get(edge.from.node), activePacks));
       const identity = (r: SourceInfo): string => r.valueSource
         ? JSON.stringify(r.valueSource)
         : r.buffer ? `${r.buffer.assetId}@${r.buffer.mappingBase ?? r.buffer.base}:${r.buffer.base}+${r.buffer.bytes.length}`
@@ -854,7 +861,7 @@ export function evaluateGraph(
           from: {
             node: e.from.node,
             port: e.from.port,
-            label: `${nodeLabelOf(src, packs)} · ${portLabelOf(src, e.from.port)}`,
+            label: `${nodeLabelOf(src, activePacks)} · ${portLabelOf(src, e.from.port)}`,
           },
           inline,
           invalid: value === undefined,
@@ -960,10 +967,10 @@ export function evaluateGraph(
                   setView({ kind: 'element' });
                 }
               } else {
-                let pack = packs.get(node.params.packId ?? '');
+                let pack = activePacks.get(node.params.packId ?? '');
                 let type = pack?.types[node.params.typeId ?? ''];
                 if (!type) {
-                  for (const p of packs.values()) {
+                  for (const p of activePacks.values()) {
                     const t = p.types[node.params.typeId ?? ''];
                     if (t) { pack = p; type = t; break; }
                   }
@@ -1034,7 +1041,7 @@ export function evaluateGraph(
             setView({ kind: 'calc', outputs: out, error: '输入缺失或无法无损转换' });
             return out;
           }
-          const bctx = makeBuiltinCtx(sourceInfo.buffer, node.params, sourceNote, opts?.layouts,
+          const bctx = makeBuiltinCtx(sourceInfo.buffer, node.params, sourceNote, structures,
             (issue, warn, origin) => add(node, warn ? 'warn' : 'error', issue.message, issue.code, undefined, issue.address,
               origin ?? (issue.address !== undefined && sourceInfo.buffer
                 ? { buffer: sourceInfo.buffer, address: issue.address, length: issue.length ?? 1 } : undefined)),
@@ -1051,7 +1058,7 @@ export function evaluateGraph(
         return out;
       }
 
-      const pack = packs.get(node.packId);
+      const pack = activePacks.get(node.packId);
       const def: NodeDef | undefined = pack?.nodes[node.nodeId];
       if (!pack || !def) {
         if (opts?.disabledPacks?.has(node.packId)) {

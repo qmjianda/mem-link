@@ -1,5 +1,5 @@
 {
-  "format": "memlink-blueprint/2",
+  "format": "memlink-blueprint/3",
   "packs": [],
   "layouts": [
     {
@@ -11,18 +11,17 @@
         {
           "id": "f1",
           "name": "next",
-          "offset": "0",
+          "at": "0",
           "kind": "i16",
           "role": "index"
         },
         {
           "id": "f2",
           "name": "value",
-          "offset": "2",
+          "at": "2",
           "kind": "u16"
         }
-      ],
-      "nextField": 3
+      ]
     }
   ],
   "nodes": [
@@ -60,7 +59,7 @@
       "x": 670,
       "y": 70,
       "params": {
-        "layoutId": "entry",
+        "structureId": "layout/entry",
         "nextField": "f1",
         "mode": "index",
         "stopValue": "-1",

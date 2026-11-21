@@ -95,7 +95,7 @@ describe('在此地址解析：候选清单', () => {
 
   it('列出全部按地址工作的内置解析节点，且不重复元素解析', () => {
     const items = buildFollowItems({ packs, packNames });
-    const builtins = items.filter((i) => i.packId === '').map((i) => i.nodeId);
+    const builtins = items.filter((i) => i.packId === '' && !i.structureId).map((i) => i.nodeId);
     expect(builtins.sort()).toEqual(['arrayread', 'listread', 'ptrwalk', 'readint', 'slice', 'structread', 'text']);
     expect(items.find((item) => item.nodeId === 'ptrwalk')?.inputPort).toBe('address');
     expect(items.find((item) => item.nodeId === 'readint')?.inputPort).toBe('address');

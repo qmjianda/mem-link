@@ -8,7 +8,7 @@
 
 import type { Endian } from '../core/types';
 import type { TypeDef } from '../core/pack';
-import { PACK_DSL } from '../core/pack';
+import { PACK_DSL, collectTypes, finalizeTypes } from '../core/pack';
 import type {
   ArrayNodeDef, BlueprintPack, CalcNodeDef, ListNodeDef, NodeDef, PortType,
   StructNodeDef,
@@ -24,15 +24,15 @@ export interface BlueprintPackInput {
 }
 
 export function definePack(input: BlueprintPackInput): BlueprintPack {
-  const types: Record<string, TypeDef> = Array.isArray(input.types)
-    ? Object.fromEntries(input.types.map((t) => [t.name, t]))
-    : input.types;
+  const roots = Array.isArray(input.types) ? input.types : Object.values(input.types);
+  const types = collectTypes(roots);
+  finalizeTypes(types, input.pointerSize ?? 4);
   return {
     name: input.name ?? 'pack',
     endian: input.endian ?? 'little',
     pointerSize: input.pointerSize ?? 4,
     constants: input.constants ?? {},
-    types,
+    types: Object.fromEntries(types),
     nodes: input.nodes,
   };
 }

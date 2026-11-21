@@ -9,27 +9,27 @@ const idxToAddr = (v: unknown) => {
   return n < 0 ? null : BASE + n * STRIDE;
 };
 
-const Header = struct('Header', 8, [
-  u16('magic', 0, { format: 'hex' }),
-  u16('head', 2, { transform: (v) => idxToAddr(v) }),
-  u16('tail', 4, { transform: (v) => idxToAddr(v) }),
-  u16('count', 6),
+const Header = struct('Header', [
+  u16('magic', { format: 'hex' }),
+  u16('head', { transform: (v) => idxToAddr(v) }),
+  u16('tail', { transform: (v) => idxToAddr(v) }),
+  u16('count'),
 ]);
 
-const Entry = struct('Entry', 24, [
-  i16('next', 0, { transform: (v) => idxToAddr(v) }),
-  i16('prev', 2, { transform: (v) => idxToAddr(v) }),
-  u16('flags', 4, { format: 'hex' }),
-  u16('refcount', 6),
-  str('name', 8, 12),
-  u32('ts', 20, { format: 'time' }),
+const Entry = struct('Entry', [
+  i16('next', { transform: (v) => idxToAddr(v) }),
+  i16('prev', { transform: (v) => idxToAddr(v) }),
+  u16('flags', { format: 'hex' }),
+  u16('refcount'),
+  str('name', { size: 12 }),
+  u32('ts', { format: 'time' }),
 ]);
 
-const Meta = struct('Meta', 2, [
-  bits('kind', 0, 2, 0, 2),
-  bits('active', 0, 2, 2, 1),
-  bits('mode', 0, 2, 3, 3),
-  u8('reserved', 1),
+const Meta = struct('Meta', [
+  bits('kind', 2),
+  bits('active', 1),
+  bits('mode', 3),
+  u8('reserved'),
 ]);
 
 export default definePack({

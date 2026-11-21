@@ -1,0 +1,2191 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>结构设计器 · mem-link 原型</title>
+<style>
+  :root {
+    --bg: #0a0d12;
+    --panel: #0f141c;
+    --panel-2: #111823;
+    --panel-3: #151d29;
+    --well: #0a0f15;
+    --line: #1c2634;
+    --line-2: #2a3748;
+    --text: #dce6f2;
+    --text-2: #97a7bb;
+    --dim: #62748c;
+    --accent: #4ed8c0;
+    --accent-soft: rgba(78, 216, 192, 0.12);
+    --amber: #f0b45f;
+    --red: #f2707a;
+    --violet: #a78bfa;
+    --blue: #61a8f5;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.45 var(--sans);
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+  button, input, textarea, select { font-family: inherit; color: inherit; }
+  button { cursor: pointer; }
+  .mono { font-family: var(--mono); font-variant-ligatures: none; }
+  .grow { flex: 1; }
+  .muted { color: var(--dim); }
+  .pill {
+    display: inline-flex; align-items: center; height: 17px; padding: 0 6px;
+    border: 1px solid var(--line-2); border-radius: 999px;
+    color: var(--dim); font-size: 10px; letter-spacing: .04em;
+  }
+  .badge {
+    display: inline-flex; align-items: center; height: 20px; padding: 0 7px;
+    border-radius: 5px; background: var(--accent-soft); color: var(--accent);
+    font: 600 10px var(--mono); letter-spacing: .02em;
+  }
+  .badge.bits { background: rgba(167,139,250,.13); color: var(--violet); }
+  .badge.text { background: rgba(240,180,95,.13); color: var(--amber); }
+  .badge.struct { background: rgba(97,168,245,.13); color: var(--blue); }
+
+  /* ------------------------------------------------------------ app shell */
+  .designer {
+    position: fixed; inset: 0; z-index: 10;
+    display: grid; grid-template-rows: 52px minmax(0, 1fr) 28px;
+    background: var(--bg);
+  }
+  .designer[hidden] { display: none; }
+
+  .topbar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 12px;
+    background: linear-gradient(180deg, #101721, #0b1016);
+    border-bottom: 1px solid var(--line);
+    min-width: 0;
+  }
+  .brand { display: flex; align-items: center; gap: 8px; min-width: 0; white-space: nowrap; }
+  .brand .logo {
+    width: 24px; height: 24px; display: grid; place-items: center;
+    border-radius: 7px; background: linear-gradient(135deg, #153a38, #0f2428);
+    border: 1px solid #235b55; color: var(--accent); font: 700 13px var(--mono);
+  }
+  .brand b { font-size: 13px; letter-spacing: .01em; }
+  .crumbs {
+    display: flex; align-items: center; gap: 5px;
+    padding-left: 6px; min-width: 0; color: var(--dim); white-space: nowrap;
+  }
+  .crumbs button {
+    border: 0; background: none; padding: 3px 4px; border-radius: 4px;
+    color: var(--text-2); font-size: 12px;
+  }
+  .crumbs button:hover { background: #1a2330; color: var(--text); }
+  .crumbs .sep { color: #3b4b60; }
+  .crumbs .cur { color: var(--text); font-weight: 600; }
+
+  .btn, .icon-btn, .seg button, .mini-btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+    height: 28px; padding: 0 9px;
+    border: 1px solid var(--line-2); border-radius: 7px;
+    background: #131b25; color: var(--text-2);
+    font: 500 12px var(--sans); white-space: nowrap;
+    transition: background .13s, border-color .13s, color .13s;
+  }
+  .btn:hover, .mini-btn:hover, .icon-btn:hover, .seg button:hover { background: #18222e; border-color: #3a4a5f; color: var(--text); }
+  .btn.primary { background: #11312d; border-color: #26675f; color: #b9f4e9; }
+  .btn.primary:hover { background: #16413b; border-color: #3b8b7f; }
+  .btn:disabled, .mini-btn:disabled { opacity: .35; cursor: default; }
+  .icon-btn { width: 28px; padding: 0; }
+  .mini-btn { height: 24px; padding: 0 7px; font-size: 11px; }
+  .mini-btn.danger { color: #ffb1b7; border-color: #4a2730; background: #23141a; }
+  .mini-btn.danger:hover { background: #331a22; border-color: #71414e; }
+  .seg { display: inline-flex; padding: 2px; gap: 2px; border: 1px solid var(--line); border-radius: 8px; background: #0b1016; }
+  .seg button { height: 24px; border: 0; background: transparent; border-radius: 6px; padding: 0 9px; font-size: 11px; }
+  .seg button.on { background: #1a2b31; color: var(--accent); box-shadow: inset 0 0 0 1px #235b55; }
+  .inline { display: inline-flex; align-items: center; gap: 5px; color: var(--dim); font-size: 11px; white-space: nowrap; }
+  .inline select, .select, .input {
+    height: 27px; padding: 0 7px;
+    border: 1px solid var(--line-2); border-radius: 6px;
+    background: #0d131b; color: var(--text-2); font-size: 12px;
+    outline: none;
+  }
+  .inline select:focus, .select:focus, .input:focus { border-color: #3b8b7f; color: var(--text); }
+  .input.wide { width: 100%; }
+  .input.mono { font-family: var(--mono); }
+  .zoom-label { min-width: 42px; text-align: center; color: var(--dim); font: 11px var(--mono); }
+  .top-sep { width: 1px; height: 22px; background: var(--line); margin: 0 1px; }
+
+  /* --------------------------------------------------------------- layout */
+  .workspace {
+    min-height: 0;
+    display: grid; grid-template-columns: 224px minmax(0, 1fr) 318px;
+  }
+  .panel { background: var(--panel); display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .panel.left { border-right: 1px solid var(--line); }
+  .panel.right { border-left: 1px solid var(--line); }
+  .panel-head {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 7px;
+    padding: 10px 12px 7px;
+    color: var(--dim); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+  }
+  .panel-head span { color: #46566b; font-weight: 500; letter-spacing: 0; text-transform: none; }
+  .panel-head .grow { flex: 1; }
+
+  .layout-list { padding: 0 8px 10px; display: flex; flex-direction: column; gap: 4px; }
+  .layout-card {
+    width: 100%; display: grid; grid-template-columns: 8px minmax(0,1fr) auto;
+    align-items: center; gap: 7px;
+    padding: 7px 8px; border: 1px solid transparent; border-radius: 7px;
+    background: transparent; text-align: left; color: var(--text-2);
+  }
+  .layout-card:hover { background: #131b25; border-color: var(--line); }
+  .layout-card.on { background: #102421; border-color: #235b55; color: var(--text); }
+  .layout-card .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--blue); }
+  .layout-card .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
+  .layout-card .meta { color: var(--dim); font: 10px var(--mono); }
+  .layout-card .ref { color: var(--violet); font: 9px var(--mono); }
+
+  .palette { padding: 0 8px; display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+  .palette-card {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+    padding: 6px 7px; min-height: 42px;
+    border: 1px solid var(--line); border-radius: 7px;
+    background: #0d131b; color: var(--text-2); text-align: left;
+  }
+  .palette-card:hover { background: #131d27; border-color: #33455a; color: var(--text); }
+  .palette-card .pname { display: flex; align-items: center; gap: 5px; font: 600 11px var(--mono); }
+  .palette-card .pmeta { color: var(--dim); font-size: 9px; }
+  .palette-card .swatch { width: 6px; height: 6px; border-radius: 2px; background: var(--accent); }
+  .palette-card.bits .swatch { background: var(--violet); }
+  .palette-card.text .swatch { background: var(--amber); }
+  .palette-card.struct .swatch { background: var(--blue); }
+  .palette-card .drag-mark { margin-left: auto; color: #3d4e63; font: 10px var(--mono); }
+  .layout-palette { padding: 0 8px; display: flex; flex-direction: column; gap: 4px; }
+  .layout-palette .palette-card { min-height: 34px; flex-direction: row; align-items: center; gap: 7px; }
+  .layout-palette .palette-card .pmeta { margin-left: auto; }
+
+  .left-hint {
+    margin: auto 10px 12px; padding: 9px 10px;
+    border: 1px dashed #243247; border-radius: 7px;
+    color: var(--dim); font-size: 10.5px; line-height: 1.55;
+  }
+  .left-hint b { color: var(--text-2); font-weight: 600; }
+  .armed {
+    margin: 8px 8px 0; padding: 7px 8px;
+    display: flex; align-items: center; gap: 6px;
+    border: 1px solid #26675f; border-radius: 7px;
+    background: #102421; color: #b9f4e9; font-size: 11px;
+  }
+  .armed button { margin-left: auto; border: 0; background: none; color: var(--accent); font-size: 11px; }
+
+  /* ---------------------------------------------------------------- center */
+  .center { min-width: 0; min-height: 0; display: grid; grid-template-rows: 40px minmax(0, 1fr) auto; background: var(--bg); }
+  .canvas-bar {
+    display: flex; align-items: center; gap: 10px; padding: 0 12px;
+    border-bottom: 1px solid var(--line); background: #0b1017; min-width: 0;
+  }
+  .canvas-title { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+  .canvas-title b { font-size: 12px; }
+  .canvas-title span { color: var(--dim); font: 10px var(--mono); white-space: nowrap; }
+  .canvas-hint { margin-left: auto; color: var(--dim); font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .legend { display: flex; align-items: center; gap: 10px; color: var(--dim); font-size: 10px; white-space: nowrap; }
+  .legend i { display: inline-block; width: 14px; height: 9px; margin-right: 4px; border-radius: 2px; vertical-align: -1px; }
+  .legend .auto { border: 1px dashed #5d6f86; background: #0d131b; }
+  .legend .anchor { border: 1px solid #3e536a; background: #17212d; }
+
+  .canvas-scroll { position: relative; min-height: 0; overflow: auto; padding: 0; background: #080b10; }
+  .canvas-stage { position: relative; }
+  .canvas {
+    position: absolute; left: 0; top: 0;
+    transform-origin: top left;
+    background:
+      radial-gradient(circle at 20% 0%, rgba(78,216,192,.035), transparent 32%),
+      #0b1017;
+  }
+  .canvas.armed { cursor: crosshair; }
+  .ruler { position: absolute; left: 0; top: 0; height: 28px; width: 100%; pointer-events: none; }
+  .ruler-cell {
+    position: absolute; top: 7px; height: 16px;
+    color: #506278; font: 9px var(--mono); text-align: center;
+    border-left: 1px solid #172231;
+  }
+  .row-label {
+    position: absolute; display: flex; align-items: flex-start; justify-content: flex-end;
+    padding: 8px 8px 0 0; color: #506278; font: 10px var(--mono);
+  }
+  .byte-cell {
+    position: absolute; border-right: 1px solid #121c27; border-bottom: 1px solid #121c27;
+    background-image: radial-gradient(#1d2a38 0.7px, transparent 0.7px);
+    background-size: 8px 8px;
+  }
+  .byte-cell:hover { background-color: rgba(78,216,192,.035); }
+  .byte-cell.out { background-image: none; background: #090d12; opacity: .55; }
+
+  .field-block {
+    position: absolute; z-index: 2; overflow: hidden;
+    padding: 5px 7px; border: 1px solid #2b6f66; border-radius: 5px;
+    background: linear-gradient(180deg, rgba(38,116,105,.42), rgba(25,77,72,.34));
+    color: #c8f5ec; cursor: grab;
+    box-shadow: 0 1px 0 rgba(255,255,255,.04) inset;
+    user-select: none;
+  }
+  .field-block:hover { border-color: #4ed8c0; }
+  .field-block:focus-visible, .bit-bar:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .field-block.selected { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(78,216,192,.3), 0 8px 24px rgba(0,0,0,.35); z-index: 4; }
+  .field-block.auto { border-style: dashed; border-color: #587089; background: linear-gradient(180deg, rgba(62,82,103,.28), rgba(38,51,66,.24)); color: #c8d6e6; }
+  .field-block.auto.selected { border-color: var(--accent); }
+  .field-block.overlap { border-color: var(--red); }
+  .field-block.overlap.selected { box-shadow: 0 0 0 2px rgba(242,112,122,.35), 0 8px 24px rgba(0,0,0,.35); }
+  .field-block.cont { padding: 0; border-top-style: dashed; border-bottom-style: dashed; }
+  .field-block.cont.selected { border-color: var(--accent); }
+  .field-block.kind-bits { border-color: #7558b8; background: linear-gradient(180deg, rgba(121,89,194,.42), rgba(79,55,138,.34)); color: #e5dcff; }
+  .field-block.kind-text { border-color: #8a6430; background: linear-gradient(180deg, rgba(168,119,50,.38), rgba(105,75,30,.3)); color: #ffe3b2; }
+  .field-block.kind-struct { border-color: #36679b; background: linear-gradient(180deg, rgba(55,111,168,.38), rgba(33,70,110,.3)); color: #d1e6ff; }
+  .field-block.dragging { opacity: .35; cursor: grabbing; }
+  .field-name { font-size: 11px; font-weight: 650; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .field-meta { margin-top: 1px; color: rgba(220,235,245,.62); font: 9px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .auto-tag {
+    display: inline-block; margin-left: 4px; padding: 0 3px;
+    border: 1px solid #52677e; border-radius: 3px;
+    color: #91a5bb; font: 8px var(--mono); vertical-align: 1px;
+  }
+  .field-handle {
+    position: absolute; right: 0; top: 0; width: 8px; height: 100%;
+    cursor: ew-resize; background: linear-gradient(90deg, transparent, rgba(255,255,255,.08));
+  }
+  .field-handle::after { content: ""; position: absolute; right: 2px; top: 50%; width: 2px; height: 14px; margin-top: -7px; border-radius: 1px; background: currentColor; opacity: .55; }
+  .mini-bits { position: absolute; left: 6px; right: 6px; bottom: 4px; height: 4px; display: flex; border-radius: 2px; overflow: hidden; background: rgba(0,0,0,.25); }
+  .mini-bits i { display: block; height: 100%; border-right: 1px solid rgba(0,0,0,.25); background: rgba(213,199,255,.8); }
+
+  .drop-target {
+    position: absolute; z-index: 5; border: 1px dashed var(--accent); border-radius: 5px;
+    background: rgba(78,216,192,.1); pointer-events: none;
+    box-shadow: 0 0 0 1px rgba(78,216,192,.15) inset;
+  }
+
+  /* ---------------------------------------------------------------- table */
+  .table-wrap { border-top: 1px solid var(--line); background: var(--panel); max-height: 218px; display: flex; flex-direction: column; }
+  .table-head { flex: 0 0 32px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid var(--line); }
+  .table-head b { font-size: 11px; }
+  .table-head span { color: var(--dim); font: 10px var(--mono); }
+  .table-head .grow { flex: 1; }
+  .table-scroll { min-height: 0; overflow: auto; }
+  table.fields { width: 100%; border-collapse: collapse; font-size: 11px; }
+  table.fields th {
+    position: sticky; top: 0; z-index: 1;
+    padding: 6px 8px; text-align: left;
+    background: #0c121a; color: #596b81; font: 9px var(--sans); font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+    border-bottom: 1px solid var(--line);
+  }
+  table.fields td { padding: 6px 8px; border-bottom: 1px solid #131c27; color: var(--text-2); white-space: nowrap; }
+  table.fields tr { cursor: pointer; }
+  table.fields tr:hover td { background: #111a24; }
+  table.fields tr.on td { background: #102421; color: var(--text); }
+  table.fields td.name { color: var(--text); font-weight: 600; }
+  table.fields td.num { font-family: var(--mono); font-size: 10px; color: #8fa2b8; }
+  table.fields .dot { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--accent); vertical-align: 1px; }
+  table.fields tr.bits .dot { background: var(--violet); }
+  table.fields tr.text .dot { background: var(--amber); }
+  table.fields tr.struct .dot { background: var(--blue); }
+  table.fields .state { color: var(--dim); font: 9px var(--mono); }
+  table.fields .state.auto { color: #8ea3ba; }
+  table.fields tr.on .state { color: var(--accent); }
+  .table-wrap.collapsed .table-scroll { display: none; }
+
+  /* -------------------------------------------------------------- inspector */
+  .inspector { min-height: 0; overflow: auto; padding: 0 12px 16px; }
+  .insp-head { display: flex; align-items: center; gap: 7px; padding: 12px 0 9px; border-bottom: 1px solid var(--line); }
+  .insp-head b { font-size: 12px; }
+  .insp-head .muted { font: 10px var(--mono); }
+  .insp-section { padding: 10px 0 2px; }
+  .insp-title { margin: 0 0 7px; color: var(--dim); font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+  .prop { display: grid; grid-template-columns: 88px minmax(0, 1fr); align-items: center; gap: 8px; margin: 7px 0; }
+  .prop > span { color: var(--dim); font-size: 10.5px; }
+  .prop .input, .prop .select { width: 100%; }
+  .prop .derived { color: var(--text-2); font: 11px var(--mono); }
+  .prop .derived em { color: var(--dim); font-style: normal; }
+  .prop-note { margin: 7px 0 0; color: var(--dim); font-size: 10px; line-height: 1.5; }
+  .check { display: flex; align-items: center; gap: 7px; margin: 8px 0; color: var(--text-2); font-size: 11px; }
+  .check input { accent-color: var(--accent); }
+  .insp-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+  .member-list { display: flex; flex-direction: column; gap: 5px; margin: 8px 0; }
+  .member-row {
+    display: grid; grid-template-columns: 6px minmax(0,1fr) 46px 42px; align-items: center; gap: 5px;
+    padding: 5px 6px; border: 1px solid var(--line); border-radius: 6px; background: #0b1119;
+  }
+  .member-row.on { border-color: #3d7b70; background: #10201e; }
+  .member-row .swatch { width: 5px; height: 18px; border-radius: 2px; background: var(--violet); }
+  .member-row input { width: 100%; height: 23px; padding: 0 4px; border: 1px solid #243247; border-radius: 4px; background: #0a0f15; color: var(--text-2); font: 10px var(--mono); }
+  .member-row input:focus { border-color: #3b8b7f; color: var(--text); }
+  .member-row .mlabel { color: var(--dim); font: 8px var(--mono); }
+  .member-row .mcell { min-width: 0; }
+  .ref-list { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+  .ref-list button { display: flex; align-items: center; gap: 6px; padding: 5px 7px; border: 1px solid var(--line); border-radius: 6px; background: #0b1119; color: var(--text-2); font-size: 10.5px; text-align: left; }
+  .ref-list button:hover { border-color: #33455a; background: #111a24; color: var(--text); }
+  .ref-list .grow { flex: 1; }
+  .ref-list em { color: var(--dim); font: 9px var(--mono); font-style: normal; }
+  .insp-empty { padding: 20px 4px; color: var(--dim); font-size: 11px; line-height: 1.6; }
+  .insp-empty b { display: block; margin-bottom: 4px; color: var(--text-2); }
+
+  /* -------------------------------------------------------------- statusbar */
+  .statusbar {
+    display: flex; align-items: center; gap: 14px; padding: 0 12px;
+    background: #0c1118; border-top: 1px solid var(--line);
+    color: var(--dim); font: 10px var(--mono); white-space: nowrap; overflow: hidden;
+  }
+  .statusbar .ok { color: #6fbf9e; }
+  .statusbar .warn { color: var(--amber); }
+  .statusbar .bad { color: var(--red); }
+  .statusbar .grow { flex: 1; }
+  .statusbar .hint { color: #4c5e74; }
+
+  /* ----------------------------------------------------------------- toast */
+  .toast {
+    position: fixed; left: 50%; bottom: 48px; z-index: 60;
+    transform: translate(-50%, 8px); opacity: 0; pointer-events: none;
+    padding: 9px 13px; border: 1px solid #2d465e; border-radius: 8px;
+    background: #101a25; color: #d7e7f5; font-size: 12px;
+    box-shadow: 0 12px 30px rgba(0,0,0,.45);
+    transition: opacity .16s, transform .16s;
+  }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+  .toast.err { border-color: #6a3038; background: #241419; color: #ffc3c8; }
+  .toast.ok { border-color: #26675f; background: #10201e; color: #b9f4e9; }
+
+  .drag-ghost {
+    position: fixed; z-index: 70; pointer-events: none;
+    padding: 6px 9px; border: 1px solid #3b8b7f; border-radius: 6px;
+    background: #102421; color: #b9f4e9; font: 10px var(--mono);
+    box-shadow: 0 8px 24px rgba(0,0,0,.45);
+    transform: translate(12px, 12px);
+  }
+  .drag-ghost small { display: block; margin-top: 2px; color: #7fb9ad; font-size: 9px; }
+
+  body.dragging { user-select: none; }
+  body.dragging * { cursor: grabbing !important; }
+
+  /* ---------------------------------------------------------------- bit view */
+  .bit-stage { padding: 16px 18px 24px; min-height: 100%; background: #080b10; }
+  .bit-stage.empty { display: grid; place-items: center; color: var(--dim); font-size: 12px; }
+  .bit-group { max-width: 980px; margin: 0 0 16px; padding: 10px 12px 12px; border: 1px solid var(--line); border-radius: 8px; background: #0c121a; }
+  .bit-group-head { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
+  .bit-group-head b { font-size: 12px; }
+  .bit-group-head .muted { font: 10px var(--mono); }
+  .bit-group-head .grow { flex: 1; }
+  .bit-group-head select { height: 25px; }
+  .bit-lane { position: relative; padding-top: 18px; }
+  .bit-ruler { position: relative; height: 16px; color: #53667c; font: 9px var(--mono); }
+  .bit-ruler span { position: absolute; top: 0; transform: translateX(-50%); }
+  .bit-track {
+    position: relative; height: 44px; border-radius: 5px;
+    background:
+      repeating-linear-gradient(90deg, rgba(255,255,255,.035) 0 1px, transparent 1px var(--bit-w, 20px)),
+      #0a0f15;
+    border: 1px solid #1c2938;
+  }
+  .bit-bar {
+    position: absolute; top: 7px; height: 30px;
+    display: flex; align-items: center; gap: 5px; overflow: hidden;
+    padding: 0 7px; border: 1px solid #7558b8; border-radius: 4px;
+    background: linear-gradient(180deg, rgba(141,111,222,.68), rgba(92,65,164,.58));
+    color: #f0eaff; font-size: 10px; font-weight: 600; white-space: nowrap;
+    cursor: grab; user-select: none;
+  }
+  .bit-bar:hover { border-color: #b9a6ff; }
+  .bit-bar.selected { border-color: #d9ccff; box-shadow: 0 0 0 2px rgba(167,139,250,.36); }
+  .bit-bar.overlap { border-color: var(--red); background: linear-gradient(180deg, rgba(180,73,93,.7), rgba(119,45,60,.6)); }
+  .bit-bar .range { color: rgba(235,228,255,.62); font: 9px var(--mono); font-weight: 400; }
+  .bit-bar .handle { position: absolute; top: 0; width: 7px; height: 100%; cursor: ew-resize; background: rgba(255,255,255,.05); }
+  .bit-bar .handle.left { left: 0; border-right: 1px solid rgba(255,255,255,.16); }
+  .bit-bar .handle.right { right: 0; border-left: 1px solid rgba(255,255,255,.16); }
+  .bit-drop { position: absolute; top: 5px; height: 34px; border: 1px dashed #c9b8ff; border-radius: 4px; background: rgba(167,139,250,.16); pointer-events: none; }
+  .bit-empty { padding: 22px 10px; color: var(--dim); font-size: 11px; text-align: center; }
+  .other-fields { max-width: 980px; margin-top: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: #0b1119; }
+  .other-fields h4 { margin: 0 0 7px; color: var(--dim); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+  .other-fields .chips { display: flex; flex-wrap: wrap; gap: 5px; }
+  .other-fields button { display: inline-flex; align-items: center; gap: 6px; padding: 5px 7px; border: 1px solid #243247; border-radius: 6px; background: #0d141d; color: var(--text-2); font-size: 10.5px; }
+  .other-fields button:hover { border-color: #3b526b; color: var(--text); }
+  .other-fields em { color: var(--dim); font: 9px var(--mono); font-style: normal; }
+
+  /* ----------------------------------------------------------------- modal */
+  .modal-backdrop { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; background: rgba(2,5,8,.72); backdrop-filter: blur(3px); }
+  .modal { width: min(680px, calc(100vw - 40px)); max-height: calc(100vh - 80px); display: flex; flex-direction: column; border: 1px solid #2b3c50; border-radius: 10px; background: #0f1620; box-shadow: 0 24px 80px rgba(0,0,0,.6); }
+  .modal-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  .modal-head b { font-size: 13px; }
+  .modal-head .grow { flex: 1; }
+  .modal-body { padding: 14px; overflow: auto; }
+  .modal-body p { margin: 0 0 10px; color: var(--text-2); line-height: 1.65; }
+  .modal-body pre { margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 7px; background: #080d13; color: #b9e8dd; font: 11px/1.55 var(--mono); overflow: auto; max-height: 50vh; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 7px; padding: 12px 14px; border-top: 1px solid var(--line); }
+  .modal .note { color: var(--dim); font-size: 10.5px; }
+
+  /* ------------------------------------------------------------ blueprint mock */
+  .blueprint {
+    position: fixed; inset: 0; z-index: 1;
+    display: grid; grid-template-rows: 52px minmax(0,1fr) 28px;
+    background: var(--bg);
+  }
+  .blueprint[hidden] { display: none; }
+  .bp-top { display: flex; align-items: center; gap: 10px; padding: 0 12px; background: linear-gradient(180deg,#101721,#0b1016); border-bottom: 1px solid var(--line); }
+  .bp-top .brand b { font-size: 13px; }
+  .bp-top .spacer { flex: 1; }
+  .bp-body { display: grid; grid-template-columns: minmax(0,1fr) 318px; min-height: 0; }
+  .bp-canvas { position: relative; overflow: hidden; background: #080b10 radial-gradient(circle at 30% 20%, rgba(78,216,192,.035), transparent 40%); }
+  .bp-canvas svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .bp-canvas svg path { fill: none; stroke: #2f4b5a; stroke-width: 1.4; }
+  .bp-canvas svg path.hot { stroke: #4ed8c0; }
+  .bp-node { position: absolute; width: 210px; padding: 9px 10px; border: 1px solid #263748; border-radius: 7px; background: #0f1721; box-shadow: 0 8px 24px rgba(0,0,0,.25); }
+  .bp-node .nt { display: flex; align-items: center; gap: 6px; color: var(--text); font-size: 11px; font-weight: 650; }
+  .bp-node .nd { margin-top: 4px; color: var(--dim); font: 9px var(--mono); }
+  .bp-node .np { display: flex; gap: 5px; margin-top: 8px; }
+  .bp-node .port { height: 16px; padding: 0 6px; border: 1px solid #2a3c50; border-radius: 4px; background: #0a1017; color: #71869d; font: 8px var(--mono); display: flex; align-items: center; }
+  .bp-node.struct { border-color: #2d625a; }
+  .bp-node .edit-struct { margin-top: 8px; width: 100%; }
+  .bp-side { border-left: 1px solid var(--line); background: var(--panel); padding: 12px; overflow: auto; }
+  .bp-side h3 { margin: 0 0 8px; font-size: 11px; color: var(--text-2); }
+  .bp-side .card { padding: 10px; border: 1px solid var(--line); border-radius: 7px; background: #0b1119; }
+  .bp-side .row { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0; color: var(--dim); font-size: 10.5px; border-bottom: 1px solid #131c27; }
+  .bp-side .row:last-child { border-bottom: 0; }
+  .bp-side .row b { color: var(--text-2); font: 10px var(--mono); font-weight: 500; }
+  .bp-side .hint { margin-top: 10px; color: var(--dim); font-size: 10px; line-height: 1.55; }
+  .bp-status { display: flex; align-items: center; gap: 14px; padding: 0 12px; border-top: 1px solid var(--line); background: #0c1118; color: var(--dim); font: 10px var(--mono); }
+
+  @media (max-width: 1280px) {
+    .workspace { grid-template-columns: 206px minmax(0,1fr) 294px; }
+    .canvas-hint { display: none; }
+  }
+  @media (max-width: 1080px) {
+    .workspace { grid-template-columns: 190px minmax(0,1fr) 276px; }
+    .brand b { display: none; }
+    .topbar .pill { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ============================== blueprint mock (the page behind the designer) -->
+<div class="blueprint" id="blueprint" hidden>
+  <header class="bp-top">
+    <div class="brand"><span class="logo">◇</span><b>mem-link</b><span class="pill">蓝图原型</span></div>
+    <span class="muted" style="font-size:11px">demo.blueprint.json</span>
+    <div class="spacer"></div>
+    <button class="btn primary" data-open-designer>结构设计器</button>
+  </header>
+  <div class="bp-body">
+    <div class="bp-canvas">
+      <svg>
+        <path d="M 270 148 C 310 148 310 148 348 148" />
+        <path class="hot" d="M 558 148 C 598 148 598 148 636 148" />
+        <path d="M 558 148 C 598 148 598 238 636 238" />
+      </svg>
+      <div class="bp-node" style="left:60px;top:104px">
+        <div class="nt"><span class="badge">FILE</span> demo.bin</div>
+        <div class="nd">512 B · base 0x0000</div>
+        <div class="np"><span class="port">buffer</span><span class="port">base</span></div>
+      </div>
+      <div class="bp-node struct" style="left:348px;top:104px">
+        <div class="nt"><span class="badge">READ</span> 读结构 · Header</div>
+        <div class="nd">layout/header · 16 B · 8 字段</div>
+        <div class="np"><span class="port">buffer</span><span class="port">address</span><span class="port">field:*</span></div>
+        <button class="btn primary edit-struct" data-open-designer>编辑结构</button>
+      </div>
+      <div class="bp-node" style="left:636px;top:104px">
+        <div class="nt"><span class="badge">COLLECTION</span> Entry 数组</div>
+        <div class="nd">layout/entry · 4 B × 1</div>
+        <div class="np"><span class="port">list</span><span class="port">count</span></div>
+      </div>
+      <div class="bp-node" style="left:636px;top:238px">
+        <div class="nt"><span class="badge">ITEM</span> 元素 · Entry</div>
+        <div class="nd">id / value</div>
+        <div class="np"><span class="port">instance</span></div>
+      </div>
+      <div class="muted" style="position:absolute;left:60px;bottom:24px;font-size:10px">原型背景：真实应用保留完整画布、撤销、视口与连线。这里只演示“从蓝图打开独立设计器”的入口。</div>
+    </div>
+    <aside class="bp-side">
+      <h3>检查器 · 读结构</h3>
+      <div class="card">
+        <div class="row"><span>结构</span><b>Header</b></div>
+        <div class="row"><span>来源</span><b>layout/header</b></div>
+        <div class="row"><span>长度</span><b>16 B</b></div>
+        <div class="row"><span>字段</span><b>8</b></div>
+        <div class="row"><span>被引用</span><b>1 处</b></div>
+        <button class="btn primary" style="width:100%;margin-top:10px" data-open-designer>打开结构设计器</button>
+      </div>
+      <div class="hint">右栏现在只保留“选择 + 摘要”。字段编辑、偏移、位域都在独立页面完成，不再把所有输入框塞进 318px。</div>
+    </aside>
+  </div>
+  <footer class="bp-status"><span>1 pack</span><span>4 类型</span><span>4 节点 · 3 连线</span><span class="grow"></span><span>本地求值 · 2.4 ms</span></footer>
+</div>
+
+<!-- ============================================================ designer -->
+<div class="designer" id="designer">
+  <header class="topbar" id="topbar"></header>
+
+  <main class="workspace">
+    <aside class="panel left" id="leftPanel"></aside>
+
+    <section class="center">
+      <div class="canvas-bar" id="canvasBar"></div>
+      <div class="canvas-scroll" id="canvasScroll">
+        <div class="canvas-stage" id="canvasStage"><div class="canvas" id="canvas"></div></div>
+        <div class="bit-stage" id="bitStage" hidden></div>
+      </div>
+      <div class="table-wrap" id="tableWrap">
+        <div class="table-head" id="tableHead"></div>
+        <div class="table-scroll" id="tableScroll"></div>
+      </div>
+    </section>
+
+    <aside class="panel right" id="rightPanel"></aside>
+  </main>
+
+  <footer class="statusbar" id="statusbar"></footer>
+</div>
+
+<div class="drag-ghost" id="dragGhost" hidden></div>
+<div class="toast" id="toast"></div>
+<div id="modalHost"></div>
+
+<script>
+/* ================================================================ helpers */
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+const clone = (v) => JSON.parse(JSON.stringify(v));
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+const hex = (n) => '0x' + Number(n).toString(16).padStart(2, '0');
+const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
+const num = (v, fallback = 0) => { const n = Number(v); return Number.isFinite(n) ? n : fallback; };
+const nid = () => 'f' + Math.random().toString(36).slice(2, 8);
+
+const SCALAR = {
+  u8: 1, i8: 1, bool: 1, char: 1,
+  u16: 2, i16: 2,
+  u32: 4, i32: 4, f32: 4,
+  u64: 8, i64: 8, f64: 8,
+  ptr: 4,
+};
+const KIND_LABEL = {
+  u8:'u8', i8:'i8', u16:'u16', i16:'i16', u32:'u32', i32:'i32', u64:'u64', i64:'i64',
+  f32:'f32', f64:'f64', bool:'bool', char:'char', ptr:'ptr', string:'string', bytes:'bytes',
+  bits:'bits', record:'record', array:'array',
+};
+const KIND_CLASS = (kind) => kind === 'bits' ? 'bits' : (kind === 'string' || kind === 'bytes') ? 'text' : (kind === 'record' || kind === 'array') ? 'struct' : '';
+const KIND_COLOR = (kind) => kind === 'bits' ? 'var(--violet)' : (kind === 'string' || kind === 'bytes') ? 'var(--amber)' : (kind === 'record' || kind === 'array') ? 'var(--blue)' : 'var(--accent)';
+
+/* ================================================================ seed data */
+function seedLayouts() {
+  return [
+    {
+      id: 'header', name: 'Header', endian: 'little',
+      fields: [
+        { id: 'f1', name: 'magic', kind: 'u16', at: '0' },
+        { id: 'f2', name: 'version', kind: 'u16' },
+        { id: 'f3', name: 'count', kind: 'u32' },
+        { id: 'f4', name: 'kind', kind: 'bits', at: '8', bit: '0', width: '2', unit: '2' },
+        { id: 'f5', name: 'active', kind: 'bits', at: '8', bit: '2', width: '1', unit: '2' },
+        { id: 'f6', name: 'mode', kind: 'bits', at: '8', bit: '3', width: '3', unit: '2' },
+        { id: 'f7', name: 'reserved', kind: 'u16' },
+        { id: 'f8', name: 'entries', kind: 'array', of: 'layout/entry', count: '1', at: '12' },
+      ],
+    },
+    {
+      id: 'entry', name: 'Entry', endian: 'little',
+      fields: [
+        { id: 'f1', name: 'id', kind: 'u16' },
+        { id: 'f2', name: 'value', kind: 'u16' },
+      ],
+    },
+    {
+      id: 'flags', name: 'Flags', endian: 'little',
+      fields: [
+        { id: 'f1', name: 'kind', kind: 'bits', at: '0', bit: '0', width: '2', unit: '2' },
+        { id: 'f2', name: 'active', kind: 'bits', at: '0', bit: '2', width: '1', unit: '2' },
+        { id: 'f3', name: 'mode', kind: 'bits', at: '0', bit: '3', width: '3', unit: '2' },
+        { id: 'f4', name: 'ready', kind: 'bits', at: '0', bit: '6', width: '1', unit: '2' },
+        { id: 'f5', name: 'error', kind: 'bits', at: '0', bit: '7', width: '1', unit: '2' },
+      ],
+    },
+    {
+      id: 'message', name: 'Message', endian: 'little',
+      fields: [
+        { id: 'f1', name: 'tag', kind: 'u8' },
+        { id: 'f2', name: 'length', kind: 'u16' },
+        { id: 'f3', name: 'body', kind: 'string', size: '8' },
+      ],
+    },
+  ];
+}
+
+/* ================================================================== state */
+const state = {
+  layouts: seedLayouts(),
+  currentId: 'header',
+  stack: ['header'],
+  view: 'byte',              // byte | bit
+  rowBytes: 4,
+  bitOrder: 'lsb',           // lsb | msb (display only)
+  zoom: 1,
+  selected: { type: 'field', id: 'f3' },
+  armed: null,               // { kind } | { layoutId }
+  history: [],
+  future: [],
+  tableOpen: true,
+  drop: null,
+  drag: null,
+};
+
+const params = new URLSearchParams(location.search);
+if (params.get('view') === 'bit') state.view = 'bit';
+if (params.get('layout') && state.layouts.some((l) => l.id === params.get('layout'))) {
+  state.currentId = params.get('layout');
+  state.stack = [state.currentId];
+}
+if (params.get('select')) state.selected = { type: 'field', id: params.get('select') };
+
+/* ============================================================= layout math */
+function layoutById(id) { return state.layouts.find((l) => l.id === id); }
+function currentLayout() { return layoutById(state.currentId) || state.layouts[0]; }
+
+function fieldSize(f, stack = []) {
+  if (!f) return 0;
+  if (f.kind === 'bits') return Math.max(1, num(f.unit, Math.ceil(((num(f.bit) + num(f.width, 1))) / 8)));
+  if (f.kind === 'string' || f.kind === 'bytes') return Math.max(1, num(f.size, 1));
+  if (f.kind === 'record') {
+    const l = layoutById(String(f.of || '').replace(/^layout\//, ''));
+    return l ? compile(l, stack).size : 0;
+  }
+  if (f.kind === 'array') {
+    const l = layoutById(String(f.of || '').replace(/^layout\//, ''));
+    const elem = l ? compile(l, stack).size : (SCALAR[f.of] || 1);
+    return Math.max(0, num(f.count, 0)) * elem;
+  }
+  return SCALAR[f.kind] ?? 1;
+}
+
+function compile(layout, stack = []) {
+  if (!layout) return { fields: [], size: 0, cursor: 0, invalid: false, cycle: false };
+  if (stack.includes(layout.id)) {
+    return { fields: layout.fields.map((f) => ({ ...f, offset: 0, size: 0 })), size: 0, cursor: 0, invalid: false, cycle: true };
+  }
+  const nextStack = [...stack, layout.id];
+  let cursor = 0;
+  let lastBits = null;
+  const fields = [];
+  for (const f of layout.fields) {
+    const size = fieldSize(f, nextStack);
+    let at;
+    if (f.at !== undefined && f.at !== null && f.at !== '') at = num(f.at, 0);
+    else if (f.kind === 'bits' && lastBits) at = lastBits.offset;
+    else at = layout.union ? 0 : cursor;
+    const offset = Math.max(0, at);
+    fields.push({ ...f, offset, size });
+    cursor = Math.max(cursor, offset + size);
+    lastBits = f.kind === 'bits' ? { offset } : null;
+  }
+  const explicit = layout.size !== undefined && layout.size !== null && layout.size !== '';
+  const declared = explicit ? num(layout.size, cursor) : cursor;
+  return { fields, size: Math.max(0, declared), cursor, invalid: explicit && declared < cursor, cycle: false };
+}
+
+function groupsFor(compiled) {
+  const map = new Map();
+  for (const f of compiled.fields) {
+    if (f.kind !== 'bits') continue;
+    const unit = Math.max(1, num(f.unit, Math.ceil(((num(f.bit) + num(f.width, 1))) / 8)));
+    const key = f.offset + ':' + unit;
+    if (!map.has(key)) map.set(key, { key, offset: f.offset, unit, members: [] });
+    map.get(key).members.push(f);
+  }
+  return Array.from(map.values()).map((g) => {
+    g.members.sort((a, b) => num(a.bit) - num(b.bit));
+    const used = new Set();
+    const overlapIds = new Set();
+    let overlapPairs = 0;
+    for (let i = 0; i < g.members.length; i += 1) {
+      const m = g.members[i];
+      for (let bit = num(m.bit); bit < num(m.bit) + Math.max(1, num(m.width, 1)); bit += 1) used.add(bit);
+      for (let j = i + 1; j < g.members.length; j += 1) {
+        const other = g.members[j];
+        if (num(m.bit) < num(other.bit) + Math.max(1, num(other.width, 1)) && num(other.bit) < num(m.bit) + Math.max(1, num(m.width, 1))) {
+          overlapIds.add(m.id);
+          overlapIds.add(other.id);
+          overlapPairs += 1;
+        }
+      }
+    }
+    g.used = used.size;
+    g.overlapIds = overlapIds;
+    g.overlapPairs = overlapPairs;
+    return g;
+  }).sort((a, b) => a.offset - b.offset);
+}
+
+function entitiesFor(compiled) {
+  const groups = groupsFor(compiled);
+  const out = [];
+  for (const f of compiled.fields) {
+    if (f.kind === 'bits') continue;
+    out.push({ type: 'field', key: 'field:' + f.id, id: f.id, name: f.name, kind: f.kind, offset: f.offset, size: f.size, field: f });
+  }
+  for (const g of groups) {
+    out.push({
+      type: 'bits', key: 'bits:' + g.key, group: g, offset: g.offset, size: g.unit,
+      name: g.members.map((m) => m.name).join(' / '), kind: 'bits',
+    });
+  }
+  return out.sort((a, b) => a.offset - b.offset || (a.type === 'bits' ? 1 : -1));
+}
+
+function groupOfField(f) {
+  if (!f || f.kind !== 'bits') return null;
+  const c = compile(currentLayout());
+  return groupsFor(c).find((g) => g.members.some((m) => m.id === f.id)) || null;
+}
+
+function analyze(layout) {
+  const c = compile(layout);
+  const groups = groupsFor(c);
+  const spans = [];
+  for (const f of c.fields) {
+    if (f.kind !== 'bits') spans.push({ start: f.offset, end: f.offset + f.size, name: f.name, kind: f.kind });
+  }
+  for (const g of groups) spans.push({ start: g.offset, end: g.offset + g.unit, name: '位域组', kind: 'bits' });
+  const overlaps = [];
+  if (!layout.union) {
+    for (let i = 0; i < spans.length; i += 1) {
+      for (let j = i + 1; j < spans.length; j += 1) {
+        if (spans[i].start < spans[j].end && spans[j].start < spans[i].end) overlaps.push([spans[i], spans[j]]);
+      }
+    }
+  }
+  const used = new Set();
+  for (const s of spans) {
+    for (let i = Math.floor(s.start); i < Math.ceil(s.end); i += 1) {
+      if (i >= 0 && i < c.size) used.add(i);
+    }
+  }
+  const bitOverlaps = groups.reduce((n, g) => n + (g.overlapPairs || 0), 0);
+  return { c, groups, spans, overlaps, bitOverlaps, used: used.size, free: Math.max(0, c.size - used.size) };
+}
+
+function countRefs(id) {
+  return state.layouts.reduce((n, l) => n + l.fields.filter((f) => f.of === 'layout/' + id).length, 0);
+}
+
+function selectionField() {
+  if (!state.selected) return null;
+  if (state.selected.type === 'field') return currentLayout().fields.find((f) => f.id === state.selected.id) || null;
+  return null;
+}
+
+function selectionGroup() {
+  if (!state.selected || state.selected.type !== 'group') return null;
+  return groupsFor(compile(currentLayout())).find((g) => g.key === state.selected.key) || null;
+}
+
+/* ============================================================== snapshots */
+function snapshot() {
+  return { layouts: clone(state.layouts), currentId: state.currentId, stack: [...state.stack], selected: clone(state.selected) };
+}
+
+function restore(snap) {
+  state.layouts = clone(snap.layouts);
+  state.currentId = snap.currentId;
+  state.stack = [...snap.stack];
+  state.selected = snap.selected ? clone(snap.selected) : null;
+  if (!layoutById(state.currentId)) {
+    state.currentId = state.layouts[0]?.id;
+    state.stack = [state.currentId];
+  }
+  if (state.selected?.type === 'field' && !currentLayout()?.fields.some((f) => f.id === state.selected.id)) state.selected = null;
+  if (state.selected?.type === 'group' && !selectionGroup()) state.selected = null;
+}
+
+function mutate(fn) {
+  const before = snapshot();
+  const result = fn();
+  if (result === false) return false;
+  state.history.push(before);
+  if (state.history.length > 80) state.history.shift();
+  state.future = [];
+  render();
+  return true;
+}
+
+function commitSnapshot(before) {
+  state.history.push(before);
+  if (state.history.length > 80) state.history.shift();
+  state.future = [];
+  render();
+}
+
+function undo() {
+  const snap = state.history.pop();
+  if (!snap) return toast('没有可撤销的操作');
+  state.future.push(snapshot());
+  restore(snap);
+  render();
+  toast('已撤销');
+}
+function redo() {
+  const snap = state.future.pop();
+  if (!snap) return toast('没有可重做的操作');
+  state.history.push(snapshot());
+  restore(snap);
+  render();
+  toast('已重做');
+}
+
+/* ================================================================= toast */
+let toastTimer;
+function toast(msg, tone = '') {
+  const el = $('#toast');
+  el.textContent = msg;
+  el.className = 'toast show ' + tone;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.className = 'toast'; }, 2200);
+}
+
+/* ================================================================ geometry */
+function cellWidth(rowBytes) {
+  return rowBytes <= 4 ? 112 : rowBytes <= 8 ? 76 : 54;
+}
+const ROW_H = 58;
+const GUTTER = 58;
+const PAD = 18;
+const RULER_H = 28;
+
+function geometryFor(analysis) {
+  const rows = Math.max(1, Math.ceil(Math.max(analysis.c.size, analysis.c.cursor, 1) / state.rowBytes));
+  const cellW = cellWidth(state.rowBytes);
+  return {
+    rows, cellW, rowH: ROW_H, gutter: GUTTER, pad: PAD, rulerH: RULER_H,
+    width: PAD * 2 + GUTTER + state.rowBytes * cellW,
+    height: PAD * 2 + RULER_H + rows * ROW_H,
+  };
+}
+
+function segments(entity, rowBytes) {
+  const out = [];
+  const end = entity.offset + entity.size;
+  let start = entity.offset;
+  while (start < end) {
+    const row = Math.floor(start / rowBytes);
+    const col = start % rowBytes;
+    const len = Math.min(rowBytes - col, end - start);
+    out.push({ row, col, len, first: start === entity.offset });
+    start += len;
+  }
+  return out;
+}
+
+function cellRect(offset, size, geo) {
+  const row = Math.floor(offset / state.rowBytes);
+  const col = offset % state.rowBytes;
+  return {
+    left: geo.pad + geo.gutter + col * geo.cellW,
+    top: geo.pad + geo.rulerH + row * geo.rowH,
+    width: Math.max(1, size) * geo.cellW,
+    height: geo.rowH,
+  };
+}
+
+function canvasPoint(clientX, clientY) {
+  const canvas = $('#canvas');
+  const r = canvas.getBoundingClientRect();
+  return { x: (clientX - r.left) / state.zoom, y: (clientY - r.top) / state.zoom };
+}
+
+function offsetAt(clientX, clientY, allowEnd = false) {
+  if (state.view !== 'byte') return null;
+  const geo = state.geo;
+  if (!geo) return null;
+  const p = canvasPoint(clientX, clientY);
+  const col = Math.floor((p.x - geo.pad - geo.gutter) / geo.cellW);
+  const row = Math.floor((p.y - geo.pad - geo.rulerH) / geo.rowH);
+  if (col < 0 || col >= state.rowBytes || row < 0) return null;
+  const a = analyze(currentLayout());
+  const max = allowEnd ? Math.max(a.c.size, a.c.cursor) : Math.max(0, a.c.size - 1);
+  return clamp(row * state.rowBytes + col, 0, max);
+}
+
+/* =============================================================== rendering */
+function render() {
+  const layout = currentLayout();
+  if (!layout) return;
+  const a = analyze(layout);
+  state.geo = geometryFor(a);
+  renderTopbar(layout, a);
+  renderLeft(layout, a);
+  renderCanvasBar(layout, a);
+  if (state.view === 'byte') renderCanvas(layout, a); else renderBits(layout, a);
+  renderTable(layout, a);
+  renderInspector(layout, a);
+  renderStatus(layout, a);
+}
+
+/* ---------------------------------------------------------------- topbar */
+function renderTopbar(layout, a) {
+  const crumbs = state.stack.map((id, i) => {
+    const l = layoutById(id);
+    if (!l) return '';
+    const last = i === state.stack.length - 1;
+    return `<button data-layout-open="${l.id}" class="${last ? 'cur' : ''}">${esc(l.name)}</button>${last ? '' : '<span class="sep">/</span>'}`;
+  }).join('');
+  const canBack = state.stack.length > 1;
+  const viewByte = state.view === 'byte';
+  $('#topbar').innerHTML = `
+    <div class="brand"><span class="logo">◇</span><b>结构设计器</b><span class="pill">原型</span></div>
+    <div class="crumbs">
+      ${canBack ? '<button data-crumb-back title="返回上级布局">←</button>' : ''}
+      <button data-open-blueprint title="返回蓝图">蓝图</button><span class="sep">/</span>${crumbs}
+    </div>
+    <div class="top-sep"></div>
+    <div class="seg">
+      <button data-view="byte" class="${viewByte ? 'on' : ''}">字节</button>
+      <button data-view="bit" class="${viewByte ? '' : 'on'}">位</button>
+    </div>
+    ${viewByte
+      ? `<label class="inline">每行 <select data-row-bytes>${[4, 8, 16].map((n) => `<option value="${n}" ${n === state.rowBytes ? 'selected' : ''}>${n} B</option>`).join('')}</select></label>`
+      : `<label class="inline">位序 <select data-bit-order><option value="lsb" ${state.bitOrder === 'lsb' ? 'selected' : ''}>LSB 在左</option><option value="msb" ${state.bitOrder === 'msb' ? 'selected' : ''}>MSB 在左</option></select></label>`}
+    <div class="top-sep"></div>
+    <button class="icon-btn" data-zoom="-1" title="缩小">−</button>
+    <span class="zoom-label">${Math.round(state.zoom * 100)}%</span>
+    <button class="icon-btn" data-zoom="1" title="放大">＋</button>
+    <button class="mini-btn" data-fit title="适应画布宽度">适应</button>
+    <div class="grow"></div>
+    <button class="mini-btn" data-undo ${state.history.length ? '' : 'disabled'} title="撤销 (Ctrl+Z)">撤销</button>
+    <button class="mini-btn" data-redo ${state.future.length ? '' : 'disabled'} title="重做 (Ctrl+Shift+Z)">重做</button>
+    <button class="mini-btn" data-export>导出</button>
+    <button class="btn primary" data-return-modal>完成</button>
+  `;
+}
+
+/* ------------------------------------------------------------------ left */
+function renderLeft(layout, a) {
+  const layouts = state.layouts.map((l) => {
+    const c = compile(l);
+    const refs = countRefs(l.id);
+    return `<button class="layout-card ${l.id === layout.id ? 'on' : ''}" data-layout-open="${l.id}">
+      <span class="dot" style="background:${l.id === layout.id ? 'var(--accent)' : 'var(--blue)'}"></span>
+      <span class="name">${esc(l.name)}</span>
+      <span class="meta">${c.size} B · ${l.fields.length} 字段${refs ? ` <span class="ref">引用 ${refs}</span>` : ''}</span>
+    </button>`;
+  }).join('');
+
+  const scalars = [
+    ['u8', '1 B'], ['u16', '2 B'], ['u32', '4 B'], ['u64', '8 B'],
+    ['i16', '2 B'], ['f32', '4 B'], ['string', '4 B'], ['bytes', '4 B'],
+  ].map(([kind, meta]) => `<button class="palette-card ${KIND_CLASS(kind)}" draggable="true" data-palette-kind="${kind}">
+    <span class="pname"><i class="swatch"></i>${KIND_LABEL[kind]}<span class="drag-mark">⠿</span></span>
+    <span class="pmeta">${meta}</span>
+  </button>`).join('');
+
+  const bitsCard = `<button class="palette-card bits" draggable="true" data-palette-kind="bits">
+    <span class="pname"><i class="swatch"></i>bits<span class="drag-mark">⠿</span></span>
+    <span class="pmeta">位域 1 bit</span>
+  </button>`;
+
+  const layoutCards = state.layouts.map((l) => {
+    const c = compile(l);
+    return `<button class="palette-card struct" draggable="true" data-palette-layout="${l.id}">
+      <span class="pname"><i class="swatch"></i>${esc(l.name)}</span>
+      <span class="pmeta">${c.size} B · 嵌套</span>
+    </button>`;
+  }).join('');
+
+  $('#leftPanel').innerHTML = `
+    <div class="panel-head">结构 <span>${state.layouts.length}</span><span class="grow"></span><button class="mini-btn" data-new-layout>+ 新建</button></div>
+    <div class="layout-list">${layouts}</div>
+    ${state.armed ? `<div class="armed">已选择 <b>${esc(armedLabel())}</b>：点击画布空白处放置 <button data-arm-cancel>取消</button></div>` : ''}
+    <div class="panel-head">类型 <span>拖到画布</span></div>
+    <div class="palette">${scalars}${bitsCard}</div>
+    <div class="panel-head" style="padding-top:12px">布局 <span>拖入 = 嵌套</span></div>
+    <div class="layout-palette">${layoutCards}</div>
+    <div class="left-hint"><b>虚线</b>字段按声明顺序自动排布；拖动后会锚定到具体偏移。<br><b>实线</b>字段已固定，不随前序字段移动。</div>
+  `;
+}
+
+function armedLabel() {
+  if (!state.armed) return '';
+  if (state.armed.layoutId) return layoutById(state.armed.layoutId)?.name ?? '布局';
+  return KIND_LABEL[state.armed.kind] ?? state.armed.kind;
+}
+
+/* ------------------------------------------------------------- canvas bar */
+function renderCanvasBar(layout, a) {
+  const hint = state.view === 'byte'
+    ? '拖字段移动 · 拖右边缘改长度 · 双击嵌套字段进入 · 拖左侧类型到空白处创建'
+    : '拖位域条移动 · 拖左右边缘改宽度 · 位序只影响显示，不改变解码';
+  $('#canvasBar').innerHTML = `
+    <div class="canvas-title"><b>${esc(layout.name)}</b><span>${a.c.size} B</span><span>${layout.fields.length} 字段</span><span>${(a.overlaps.length + a.bitOverlaps) ? `<b style="color:var(--red)">重叠 ${a.overlaps.length + a.bitOverlaps}</b>` : '无重叠'}</span></div>
+    <div class="legend"><span><i class="auto"></i>自动</span><span><i class="anchor"></i>锚定</span></div>
+    <div class="canvas-hint">${hint}</div>
+  `;
+}
+
+/* ---------------------------------------------------------------- canvas */
+function renderCanvas(layout, a) {
+  $('#bitStage').hidden = true;
+  $('#bitStage').innerHTML = '';
+  $('#canvasStage').hidden = false;
+  const geo = state.geo;
+  const entities = entitiesFor(a.c);
+  let html = '';
+
+  // ruler
+  for (let i = 0; i < state.rowBytes; i += 1) {
+    html += `<div class="ruler-cell" style="left:${geo.pad + geo.gutter + i * geo.cellW}px;width:${geo.cellW}px">+${i}</div>`;
+  }
+
+  // rows + empty cells
+  for (let r = 0; r < geo.rows; r += 1) {
+    const top = geo.pad + geo.rulerH + r * geo.rowH;
+    html += `<div class="row-label" style="top:${top}px;height:${geo.rowH}px">${hex(r * state.rowBytes)}</div>`;
+    for (let c = 0; c < state.rowBytes; c += 1) {
+      const off = r * state.rowBytes + c;
+      const out = off >= a.c.size ? ' out' : '';
+      html += `<div class="byte-cell${out}" data-cell="${off}" style="left:${geo.pad + geo.gutter + c * geo.cellW}px;top:${top}px;width:${geo.cellW}px;height:${geo.rowH}px"></div>`;
+    }
+  }
+
+  // field blocks
+  for (const e of entities) {
+    const selected = isEntitySelected(e);
+    const overlap = e.type === 'bits' ? !!e.group.overlapPairs : a.overlaps.some(([x, y]) => (x.start === e.offset && x.end === e.offset + e.size) || (y.start === e.offset && y.end === e.offset + e.size));
+    for (const seg of segments(e, state.rowBytes)) {
+      const left = geo.pad + geo.gutter + seg.col * geo.cellW;
+      const top = geo.pad + geo.rulerH + seg.row * geo.rowH;
+      const width = seg.len * geo.cellW;
+      const cls = [
+        'field-block', 'kind-' + (e.type === 'bits' ? 'bits' : KIND_CLASS(e.kind)),
+        selected ? 'selected' : '',
+        overlap ? 'overlap' : '',
+        seg.first ? '' : 'cont',
+        e.type === 'field' && e.field.at == null ? 'auto' : '',
+      ].filter(Boolean).join(' ');
+      const data = e.type === 'bits'
+        ? `data-group="${e.group.key}" data-entity="${e.key}"`
+        : `data-field="${e.id}" data-entity="${e.key}"`;
+      const resizable = e.type === 'field' && (e.kind === 'string' || e.kind === 'bytes');
+      let inner = '';
+      if (seg.first) {
+        const meta = e.type === 'bits'
+          ? `${hex(e.offset)} · ${e.size} B · bit ${e.group.members.map((m) => `${num(m.bit)}–${num(m.bit) + num(m.width, 1) - 1}`).join(', ')}`
+          : `${hex(e.offset)} · ${KIND_LABEL[e.kind] || e.kind} · ${e.size} B`;
+        const autoTag = e.type === 'field' && e.field.at == null ? '<span class="auto-tag">自动</span>' : '';
+        inner = `<div class="field-name">${esc(e.type === 'bits' ? '位域 · ' + e.group.members.length + ' 项' : e.name)}</div><div class="field-meta">${esc(meta)}${autoTag}</div>`;
+        if (e.type === 'bits') {
+          const bits = e.group.unit * 8;
+          const mini = e.group.members.map((m) => {
+            const leftPct = (num(m.bit) / bits) * 100;
+            const widthPct = Math.max(1, (num(m.width, 1) / bits) * 100);
+            return `<i style="position:absolute;left:${leftPct}%;width:${widthPct}%" title="${esc(m.name)} bit ${num(m.bit)}–${num(m.bit) + num(m.width, 1) - 1}"></i>`;
+          }).join('');
+          inner += `<div class="mini-bits">${mini}</div>`;
+        }
+      }
+      if (resizable && seg.first) inner += '<span class="field-handle" data-resize="1"></span>';
+      const aria = e.type === 'bits'
+        ? `位域组 ${e.group.members.length} 项，偏移 ${hex(e.offset)}，${e.size} 字节`
+        : `${e.name}，${KIND_LABEL[e.kind] || e.kind}，偏移 ${hex(e.offset)}，${e.size} 字节${e.field.at == null ? '，自动排布' : '，锚定'}`;
+      html += `<div class="${cls}" ${data} role="button" tabindex="0" aria-label="${esc(aria)}" style="left:${left + 2}px;top:${top + 5}px;width:${width - 4}px;height:${geo.rowH - 10}px">${inner}</div>`;
+    }
+  }
+
+  html += '<div class="drop-target" id="dropTarget" hidden></div>';
+  const canvas = $('#canvas');
+  canvas.innerHTML = html;
+  canvas.classList.toggle('armed', !!state.armed);
+  canvas.style.width = geo.width + 'px';
+  canvas.style.height = geo.height + 'px';
+  canvas.style.transform = `scale(${state.zoom})`;
+  canvas.style.display = '';
+  const stage = $('#canvasStage');
+  stage.style.width = geo.width * state.zoom + 'px';
+  stage.style.height = geo.height * state.zoom + 'px';
+}
+
+function isEntitySelected(e) {
+  if (!state.selected) return false;
+  if (e.type === 'bits') {
+    if (state.selected.type === 'group') return state.selected.key === e.group.key;
+    if (state.selected.type === 'field') return e.group.members.some((m) => m.id === state.selected.id);
+    return false;
+  }
+  return state.selected.type === 'field' && state.selected.id === e.id;
+}
+
+/* ---------------------------------------------------------------- bit view */
+function renderBits(layout, a) {
+  $('#canvasStage').hidden = true;
+  const stage = $('#bitStage');
+  stage.hidden = false;
+  const groups = a.groups;
+  if (!groups.length) {
+    stage.className = 'bit-stage empty';
+    stage.innerHTML = `<div><b style="color:var(--text-2)">当前布局没有位域</b><br><span class="muted">切回字节视图，拖入 bits 类型，或选择 Flags 布局。</span></div>`;
+    return;
+  }
+  stage.className = 'bit-stage';
+  const others = a.c.fields.filter((f) => f.kind !== 'bits');
+  stage.innerHTML = groups.map((g) => bitGroupHTML(g, layout)).join('') + (others.length ? otherFieldsHTML(others) : '');
+}
+
+function bitGroupHTML(g, layout) {
+  const bits = g.unit * 8;
+  const laneW = Math.max(440, Math.min(880, bits * 34));
+  const bitW = laneW / bits;
+  const step = bits <= 16 ? 4 : bits <= 32 ? 8 : 16;
+  let ticks = '';
+  for (let pos = 0; pos < bits; pos += step) {
+    const label = state.bitOrder === 'lsb' ? pos : bits - pos;
+    ticks += `<span style="left:${pos * bitW}px">${label}</span>`;
+  }
+  const bars = g.members.map((m) => {
+    const w = Math.max(1, num(m.width, 1));
+    const pos = state.bitOrder === 'lsb' ? num(m.bit) : bits - num(m.bit) - w;
+    const selected = state.selected?.type === 'field' && state.selected.id === m.id;
+    return `<div class="bit-bar ${selected ? 'selected' : ''} ${g.overlapIds.has(m.id) ? 'overlap' : ''}" data-group-bar="${g.key}" data-field="${m.id}" role="button" tabindex="0" aria-label="${esc(m.name)}，位偏移 ${num(m.bit)}，位宽 ${w}" title="${esc(m.name)} · bit ${num(m.bit)}–${num(m.bit) + w - 1}" style="left:${pos * bitW + 1}px;width:${Math.max(8, w * bitW - 2)}px">
+      <span style="overflow:hidden;text-overflow:ellipsis">${esc(m.name)}</span>
+      ${w * bitW > 92 ? `<span class="range">bit ${num(m.bit)}–${num(m.bit) + w - 1}</span>` : ''}
+      <span class="handle left" data-bedge="left" title="拖动左边缘改宽度"></span>
+      <span class="handle right" data-bedge="right" title="拖动右边缘改宽度"></span>
+    </div>`;
+  }).join('');
+  return `<section class="bit-group" data-group-card="${g.key}">
+    <div class="bit-group-head">
+      <span class="badge bits">位域组</span>
+      <b>${hex(g.offset)}</b>
+      <span class="muted">${g.unit} B · ${bits} bit · 已用 ${g.used}</span>
+      <div class="grow"></div>
+      <label class="inline">存储 <select data-group-unit="${g.key}">${[1, 2, 4, 8].map((n) => `<option value="${n}" ${n === g.unit ? 'selected' : ''}>${n} B</option>`).join('')}</select></label>
+      <button class="mini-btn" data-add-bit="${g.key}">+ 位域</button>
+    </div>
+    <div class="bit-lane" style="width:${laneW}px">
+      <div class="bit-ruler" style="width:${laneW}px">${ticks}</div>
+      <div class="bit-track" data-bit-track="${g.key}" style="width:${laneW}px;--bit-w:${bitW}px">${bars}</div>
+    </div>
+  </section>`;
+}
+
+function otherFieldsHTML(fields) {
+  return `<section class="other-fields">
+    <h4>字节字段 · 切回字节视图查看空间关系</h4>
+    <div class="chips">${fields.map((f) => `<button data-open-byte-field="${f.id}">${esc(f.name)} <em>${hex(f.offset)} · ${f.size} B</em></button>`).join('')}</div>
+  </section>`;
+}
+
+/* ----------------------------------------------------------------- table */
+function renderTable(layout, a) {
+  const wrap = $('#tableWrap');
+  wrap.classList.toggle('collapsed', !state.tableOpen);
+  $('#tableHead').innerHTML = `<b>字段表</b><span>${layout.fields.length} 项</span><span class="grow"></span><button class="mini-btn" data-table-toggle>${state.tableOpen ? '收起' : '展开'}</button>`;
+  const rows = a.c.fields.slice().sort((x, y) => x.offset - y.offset || (x.kind === 'bits' ? 0 : 1) - (y.kind === 'bits' ? 0 : 1) || num(x.bit) - num(y.bit)).map((f, i) => {
+    const isBits = f.kind === 'bits';
+    const selected = state.selected?.type === 'field' && state.selected.id === f.id;
+    const auto = isBits ? '组' : (f.at == null ? '自动' : '锚定');
+    const size = isBits ? `bit ${num(f.bit)}–${num(f.bit) + num(f.width, 1) - 1}` : `${f.size} B`;
+    return `<tr data-row-field="${f.id}" class="${selected ? 'on' : ''} ${KIND_CLASS(f.kind)}">
+      <td class="num">${i + 1}</td>
+      <td class="name"><span class="dot"></span>${esc(f.name)}</td>
+      <td class="num">${esc(KIND_LABEL[f.kind] || f.kind)}</td>
+      <td class="num">${isBits ? '+' + num(f.bit) : hex(f.offset)}</td>
+      <td class="num">${size}</td>
+      <td class="state ${auto === '自动' ? 'auto' : ''}">${auto}</td>
+    </tr>`;
+  }).join('');
+  $('#tableScroll').innerHTML = `<table class="fields">
+    <thead><tr><th>#</th><th>字段</th><th>类型</th><th>偏移</th><th>大小 / 位宽</th><th>位置</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+/* ------------------------------------------------------------- inspector */
+function renderInspector(layout, a) {
+  const group = selectionGroup();
+  if (group) return renderGroupInspector(layout, group, a);
+  const f = selectionField();
+  if (f) return renderFieldInspector(layout, f, a);
+  return renderLayoutInspector(layout, a);
+}
+
+function renderLayoutInspector(layout, a) {
+  const refs = state.layouts.flatMap((l) => l.fields.filter((f) => f.of === 'layout/' + layout.id).map((f) => ({ layout: l, field: f })));
+  $('#rightPanel').innerHTML = `
+    <div class="insp-head"><span class="badge struct">布局</span><b>${esc(layout.name)}</b><span class="muted">${a.c.size} B</span></div>
+    <div class="inspector">
+      <div class="insp-section">
+        <div class="insp-title">布局属性</div>
+        <label class="prop"><span>名称</span><input class="input" data-lprop="name" value="${esc(layout.name)}"></label>
+        <label class="prop"><span>字节序</span><select class="select" data-lprop="endian"><option value="little" ${layout.endian === 'little' ? 'selected' : ''}>小端</option><option value="big" ${layout.endian === 'big' ? 'selected' : ''}>大端</option></select></label>
+        <label class="check"><input type="checkbox" data-lprop="union" ${layout.union ? 'checked' : ''}> 联合视图（允许字段共享偏移）</label>
+        <label class="prop"><span>长度覆盖</span><input class="input mono" data-lprop="size" placeholder="自动 ${a.c.cursor} B" value="${layout.size == null ? '' : esc(layout.size)}"></label>
+        <div class="prop"><span>推导长度</span><div class="derived">${a.c.cursor} B <em>· 最终游标</em></div></div>
+        <div class="prop"><span>字段 / 引用</span><div class="derived">${layout.fields.length} / ${refs.length}</div></div>
+        ${a.overlaps.length ? `<div class="prop"><span>重叠</span><div class="derived" style="color:var(--red)">${a.overlaps.length} 对 <em>· 非联合布局</em></div></div>` : ''}
+      </div>
+      <div class="insp-section">
+        <div class="insp-title">被引用</div>
+        ${refs.length ? `<div class="ref-list">${refs.map((r) => `<button data-layout-open="${r.layout.id}"><span>${esc(r.layout.name)}</span><span class="grow"></span><em>${esc(r.field.name)}</em></button>`).join('')}</div>` : '<div class="muted" style="font-size:10.5px">还没有其他布局引用它。</div>'}
+      </div>
+      <div class="insp-empty"><b>选择字段查看属性</b>画布上的字段可以拖动、缩放；位域组请切到位视图。</div>
+    </div>
+  `;
+}
+
+function renderFieldInspector(layout, f, a) {
+  const cf = a.c.fields.find((x) => x.id === f.id) || { ...f, offset: 0, size: 0 };
+  const isBits = f.kind === 'bits';
+  const group = isBits ? groupOfField(f) : null;
+  const auto = f.at == null;
+  const targetOptions = state.layouts.filter((l) => l.id !== layout.id).map((l) => `<option value="layout/${l.id}" ${f.of === 'layout/' + l.id ? 'selected' : ''}>${esc(l.name)}</option>`).join('');
+  let body = '';
+
+  if (isBits && group) {
+    body = `
+      <div class="prop"><span>所属位域组</span><div class="derived">${hex(group.offset)} · ${group.unit} B <button class="mini-btn" style="margin-left:6px" data-back-group="${group.key}">查看整组</button></div></div>
+      <label class="prop"><span>位偏移</span><input class="input mono" type="number" min="0" max="${group.unit * 8 - 1}" data-fprop="bit" value="${num(f.bit)}"></label>
+      <label class="prop"><span>位宽</span><input class="input mono" type="number" min="1" max="${group.unit * 8 - num(f.bit)}" data-fprop="width" value="${num(f.width, 1)}"></label>
+      <div class="prop"><span>存储单元</span><div class="derived">${group.unit} B <em>· 在组上修改</em></div></div>
+    `;
+  } else {
+    body = `
+      <label class="prop"><span>偏移</span>${auto
+        ? `<div class="derived">自动 → ${hex(cf.offset)} <em>· 随前序字段</em></div>`
+        : `<input class="input mono" type="number" min="0" data-fprop="at" value="${num(f.at)}">`}</label>
+      <label class="check"><input type="checkbox" data-fprop="auto" ${auto ? 'checked' : ''}> 自动排布（不写 at）</label>
+      ${auto ? '<div class="prop-note">拖动这个字段会把它锚定到具体偏移；也可以用右侧“锚定”按钮。</div>' : ''}
+      ${f.kind === 'string' || f.kind === 'bytes' ? `<label class="prop"><span>长度</span><input class="input mono" type="number" min="1" data-fprop="size" value="${num(f.size, 1)}"></label>` : ''}
+      ${f.kind === 'record' || f.kind === 'array' ? `
+        <label class="prop"><span>目标布局</span><select class="select" data-fprop="of"><option value="">选择布局</option>${targetOptions}</select></label>
+        <label class="check"><input type="checkbox" data-fprop="asArray" ${f.kind === 'array' ? 'checked' : ''}> 作为数组</label>
+        ${f.kind === 'array' ? `<label class="prop"><span>数量</span><input class="input mono" type="number" min="1" data-fprop="count" value="${num(f.count, 1)}"></label>` : ''}
+      ` : ''}
+      ${f.kind !== 'string' && f.kind !== 'bytes' && f.kind !== 'record' && f.kind !== 'array' && f.kind !== 'bits' ? `
+        <label class="prop"><span>字节序</span><select class="select" data-fprop="endian"><option value="">跟随布局</option><option value="little" ${f.endian === 'little' ? 'selected' : ''}>小端</option><option value="big" ${f.endian === 'big' ? 'selected' : ''}>大端</option></select></label>
+        <label class="prop"><span>数值语义</span><select class="select" data-fprop="role"><option value="">普通整数</option><option value="address" ${f.role === 'address' ? 'selected' : ''}>绝对地址</option><option value="offset" ${f.role === 'offset' ? 'selected' : ''}>字节偏移</option><option value="index" ${f.role === 'index' ? 'selected' : ''}>池下标</option></select></label>
+      ` : ''}
+    `;
+  }
+
+  const readOnlyField = isBits;
+  $('#rightPanel').innerHTML = `
+    <div class="insp-head"><span class="badge ${KIND_CLASS(f.kind)}">${esc(KIND_LABEL[f.kind] || f.kind)}</span><b>${esc(f.name)}</b><span class="muted">${hex(cf.offset)}</span></div>
+    <div class="inspector" data-field-panel="${f.id}">
+      <div class="insp-section">
+        <div class="insp-title">字段属性</div>
+        <label class="prop"><span>名称</span><input class="input" data-fprop="name" value="${esc(f.name)}"></label>
+        <div class="prop"><span>类型</span><div class="derived">${esc(KIND_LABEL[f.kind] || f.kind)} <em>· ${isBits ? '位域' : cf.size + ' B'}</em></div></div>
+        ${body}
+      </div>
+      ${!readOnlyField ? `<div class="insp-actions">
+        ${(f.kind === 'record' || f.kind === 'array') ? `<button class="mini-btn" data-enter-field>进入子布局</button>` : ''}
+        ${auto && !isBits ? `<button class="mini-btn" data-auto-anchor>锚定到 ${hex(cf.offset)}</button>` : ''}
+        ${!auto && !isBits ? `<button class="mini-btn" data-restore-auto>恢复自动</button>` : ''}
+        <button class="mini-btn danger" data-delete-field>删除字段</button>
+      </div>` : `<div class="insp-actions"><button class="mini-btn danger" data-delete-field>删除位域</button></div>`}
+      <div class="insp-note">字段 ID <code>${esc(f.id)}</code> 稳定；改名/移动不会断开节点端口。</div>
+    </div>
+  `;
+}
+
+function renderGroupInspector(layout, g, a) {
+  const bits = g.unit * 8;
+  const members = g.members.map((m) => {
+    const selected = state.selected?.type === 'field' && state.selected.id === m.id;
+    return `<div class="member-row ${selected ? 'on' : ''}">
+      <span class="swatch"></span>
+      <div class="mcell"><input data-member="${m.id}" data-mprop="name" value="${esc(m.name)}"></div>
+      <div class="mcell"><div class="mlabel">bit</div><input type="number" min="0" max="${bits - 1}" data-member="${m.id}" data-mprop="bit" value="${num(m.bit)}"></div>
+      <div class="mcell"><div class="mlabel">宽</div><input type="number" min="1" max="${bits}" data-member="${m.id}" data-mprop="width" value="${num(m.width, 1)}"></div>
+    </div>`;
+  }).join('');
+  $('#rightPanel').innerHTML = `
+    <div class="insp-head"><span class="badge bits">位域组</span><b>${hex(g.offset)}</b><span class="muted">${g.unit} B · ${bits} bit</span></div>
+    <div class="inspector">
+      <div class="insp-section">
+        <div class="insp-title">组属性</div>
+        <label class="prop"><span>存储单元</span><select class="select" data-group-unit="${g.key}">${[1, 2, 4, 8].map((n) => `<option value="${n}" ${n === g.unit ? 'selected' : ''}>${n} B（${n * 8} bit）</option>`).join('')}</select></label>
+        <div class="prop"><span>已用 / 空闲</span><div class="derived">${g.used} / ${bits} bit <em>· 剩余 ${bits - g.used}</em></div></div>
+        ${g.overlapPairs ? `<div class="prop"><span>位域重叠</span><div class="derived" style="color:var(--red)">${g.overlapPairs} 对 <em>· 同一存储单元</em></div></div>` : ''}
+        <div class="prop"><span>位域数</span><div class="derived">${g.members.length}</div></div>
+      </div>
+      <div class="insp-section">
+        <div class="insp-title">成员 · 修改即时生效</div>
+        <div class="member-list">${members}</div>
+        <div class="insp-actions">
+          <button class="mini-btn" data-add-bit="${g.key}">+ 添加位域</button>
+          <button class="mini-btn danger" data-delete-group="${g.key}">删除整组</button>
+        </div>
+      </div>
+      <div class="insp-note">位域组共享一个存储单元；位宽合计不能超过 ${bits} bit。虚线边框表示整个组仍按自动偏移排布。</div>
+    </div>
+  `;
+}
+
+/* ---------------------------------------------------------------- status */
+function renderStatus(layout, a) {
+  const overlap = a.overlaps.length + a.bitOverlaps;
+  const group = selectionGroup();
+  const field = selectionField();
+  let selection = '未选择';
+  if (group) selection = `位域组 ${hex(group.offset)} · ${group.used}/${group.unit * 8} bit`;
+  else if (field) selection = `${field.name} · ${hex(a.c.fields.find((x) => x.id === field.id)?.offset || 0)}`;
+  $('#statusbar').innerHTML = `
+    <span>总长 <b style="color:var(--text-2)">${a.c.size} B</b></span>
+    <span>已用 <b style="color:var(--text-2)">${a.used} B</b></span>
+    <span>空闲 <b style="color:var(--text-2)">${a.free} B</b></span>
+    <span class="${overlap ? 'bad' : 'ok'}">${overlap ? `重叠 ${overlap}` : '无重叠'}</span>
+    <span>${layout.fields.length} 字段</span>
+    <span class="grow"></span>
+    <span>${esc(selection)}</span>
+    <span class="hint">${state.view === 'byte' ? '拖动试试 · Ctrl+Z 撤销' : '位序仅影响显示'}</span>
+  `;
+}
+
+/* ============================================================== selection */
+function selectField(id) {
+  if (state.selected?.type === 'field' && state.selected.id === id) return;
+  state.selected = { type: 'field', id };
+  render();
+}
+function selectGroup(key) {
+  if (state.selected?.type === 'group' && state.selected.key === key) return;
+  state.selected = { type: 'group', key };
+  render();
+}
+function clearSelection() {
+  state.selected = null;
+  render();
+}
+function openLayout(id) {
+  const layout = layoutById(id);
+  if (!layout) return;
+  if (state.stack[state.stack.length - 1] !== id) state.stack.push(id);
+  state.currentId = id;
+  state.selected = null;
+  render();
+}
+function openLayoutRoot(id) {
+  const layout = layoutById(id);
+  if (!layout) return;
+  state.currentId = id;
+  state.stack = [id];
+  state.selected = null;
+  render();
+}
+function crumbBack() {
+  if (state.stack.length <= 1) return;
+  state.stack.pop();
+  state.currentId = state.stack[state.stack.length - 1];
+  state.selected = null;
+  render();
+}
+function enterNested(field) {
+  if (field.kind !== 'record' && field.kind !== 'array') return;
+  const id = String(field.of || '').replace(/^layout\//, '');
+  if (!layoutById(id)) return toast('这个字段还没有选择目标布局');
+  openLayout(id);
+}
+
+/* ================================================================ editing */
+function uniqueName(layout, base) {
+  const used = new Set(layout.fields.map((f) => f.name));
+  if (!used.has(base)) return base;
+  let n = 2;
+  while (used.has(base + n)) n += 1;
+  return base + n;
+}
+
+function uniqueLayoutName(base) {
+  const used = new Set(state.layouts.map((l) => l.name));
+  if (!used.has(base)) return base;
+  let n = 2;
+  while (used.has(base + n)) n += 1;
+  return base + n;
+}
+
+function newLayout() {
+  const id = 'l' + Math.random().toString(36).slice(2, 7);
+  const layout = { id, name: uniqueLayoutName('布局'), endian: 'little', fields: [{ id: nid(), name: 'field1', kind: 'u8' }] };
+  mutate(() => {
+    state.layouts.push(layout);
+    state.currentId = id;
+    state.stack = [id];
+    state.selected = { type: 'field', id: layout.fields[0].id };
+  });
+  toast('已新建 ' + layout.name, 'ok');
+}
+
+function createField(payload, offset) {
+  const layout = currentLayout();
+  let f = null;
+  if (payload.layoutId) {
+    const target = layoutById(payload.layoutId);
+    if (!target) return toast('目标布局不存在', 'err');
+    const size = compile(target).size;
+    if (!size) return toast('目标布局还没有长度', 'err');
+    f = {
+      id: nid(), name: uniqueName(layout, target.name.toLowerCase()),
+      kind: 'record', of: 'layout/' + target.id, at: String(offset),
+    };
+  } else {
+    const kind = payload.kind;
+    f = { id: nid(), name: uniqueName(layout, kind), kind, at: String(offset) };
+    if (kind === 'bits') { f.bit = '0'; f.width = '1'; f.unit = '1'; }
+    if (kind === 'string' || kind === 'bytes') f.size = '4';
+  }
+  const size = fieldSize(f);
+  const a = analyze(layout);
+  const conflict = a.spans.some((s) => offset < s.end && s.start < offset + size);
+  if (conflict) return toast('这个位置已经被占用', 'err');
+  if (layout.size != null && layout.size !== '' && offset + size > num(layout.size)) {
+    return toast(`超出布局长度 ${num(layout.size)} B`, 'err');
+  }
+  mutate(() => {
+    layout.fields.push(f);
+    state.selected = { type: 'field', id: f.id };
+  });
+  toast(`已创建 ${f.name} · ${hex(offset)}`, 'ok');
+}
+
+function deleteSelected() {
+  const group = selectionGroup();
+  if (group) {
+    mutate(() => {
+      const ids = new Set(group.members.map((m) => m.id));
+      const layout = currentLayout();
+      layout.fields = layout.fields.filter((f) => !ids.has(f.id));
+      state.selected = null;
+    });
+    toast('已删除位域组');
+    return;
+  }
+  const f = selectionField();
+  if (!f) return toast('先选择一个字段');
+  mutate(() => {
+    const layout = currentLayout();
+    layout.fields = layout.fields.filter((x) => x.id !== f.id);
+    state.selected = null;
+  });
+  toast('已删除 ' + f.name);
+}
+
+function anchorField(f) {
+  const a = analyze(currentLayout());
+  const cf = a.c.fields.find((x) => x.id === f.id);
+  if (!cf) return;
+  mutate(() => {
+    f.at = String(cf.offset);
+  });
+  toast(`已锚定到 ${hex(cf.offset)}`, 'ok');
+}
+
+function restoreAuto(f) {
+  mutate(() => {
+    delete f.at;
+  });
+  toast('已恢复自动排布');
+}
+
+function moveFieldTo(f, offset) {
+  const layout = currentLayout();
+  const a = analyze(layout);
+  const cf = a.c.fields.find((x) => x.id === f.id);
+  const source = layout.fields.find((x) => x.id === f.id);
+  if (!cf || !source) return;
+  const size = cf.size;
+  const conflict = a.spans.some((s) => {
+    if (s.start === cf.offset && s.end === cf.offset + size) return false;
+    return offset < s.end && s.start < offset + size;
+  });
+  // Moving can create an overlap; we still commit so the red validation is visible.
+  mutate(() => {
+    if (source.kind === 'bits') {
+      const group = groupOfField(source);
+      if (group) {
+        const members = new Set(group.members.map((m) => m.id));
+        layout.fields.forEach((x) => { if (members.has(x.id)) x.at = String(offset); });
+      } else source.at = String(offset);
+    } else {
+      source.at = String(offset);
+    }
+  });
+  if (conflict) toast('已移动，但产生了重叠（底部标红）', 'err');
+}
+
+function resizeField(f, size) {
+  const layout = currentLayout();
+  const source = layout.fields.find((x) => x.id === f.id);
+  if (!source) return;
+  mutate(() => {
+    source.size = String(Math.max(1, size));
+  });
+}
+
+function resizeBits(f, bit, width) {
+  const group = groupOfField(f);
+  if (!group) return;
+  const bits = group.unit * 8;
+  const b = clamp(bit, 0, bits - 1);
+  const w = clamp(width, 1, bits - b);
+  mutate(() => {
+    f.bit = String(b);
+    f.width = String(w);
+  });
+}
+
+function addBit(groupKey) {
+  const group = groupsFor(compile(currentLayout())).find((g) => g.key === groupKey);
+  if (!group) return toast('位域组不存在', 'err');
+  const bits = group.unit * 8;
+  const occupied = new Set();
+  for (const m of group.members) {
+    for (let i = num(m.bit); i < num(m.bit) + num(m.width, 1); i += 1) occupied.add(i);
+  }
+  let free = -1;
+  for (let i = 0; i < bits; i += 1) {
+    if (!occupied.has(i)) { free = i; break; }
+  }
+  if (free < 0) return toast('这个存储单元没有空位了', 'err');
+  const layout = currentLayout();
+  mutate(() => {
+    layout.fields.push({
+      id: nid(), name: uniqueName(layout, 'bit'), kind: 'bits',
+      at: String(group.offset), bit: String(free), width: '1', unit: String(group.unit),
+    });
+    state.selected = { type: 'group', key: group.key };
+  });
+  toast(`已在 bit ${free} 添加位域`, 'ok');
+}
+
+function changeGroupUnit(groupKey, unit) {
+  const group = groupsFor(compile(currentLayout())).find((g) => g.key === groupKey);
+  if (!group) return;
+  const need = Math.max(...group.members.map((m) => num(m.bit) + num(m.width, 1)));
+  if (need > unit * 8) return toast(`成员需要 ${need} bit，放不进 ${unit} B`, 'err');
+  mutate(() => {
+    const layout = currentLayout();
+    const ids = new Set(group.members.map((m) => m.id));
+    layout.fields.forEach((f) => { if (ids.has(f.id)) f.unit = String(unit); });
+    if (state.selected?.type === 'group') state.selected = { type: 'group', key: group.offset + ':' + unit };
+  });
+  toast(`存储单元已切换为 ${unit} B`, 'ok');
+}
+
+/* ================================================================ gestures */
+function beginMove(e, entity) {
+  if (e.button !== 0) return;
+  if (e.target.closest('[data-resize]')) return;
+  e.preventDefault();
+  const startOffset = offsetAt(e.clientX, e.clientY);
+  if (startOffset == null) return;
+  const before = snapshot();
+  const grab = clamp(startOffset - entity.offset, 0, Math.max(0, entity.size - 1));
+  const drag = { type: 'move', entity, before, grab, startOffset, moved: false, lastOffset: entity.offset };
+  state.drag = drag;
+  document.body.classList.add('dragging');
+  e.target.closest('.field-block')?.classList.add('dragging');
+  showGhost(entityLabel(entity), hex(entity.offset));
+  window.addEventListener('pointermove', onDragMove);
+  window.addEventListener('pointerup', onDragEnd, { once: true });
+}
+
+function beginResize(e, entity) {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const field = entity.field;
+  if (!field) return;
+  const before = snapshot();
+  const drag = { type: 'resize', entity, before, startOffset: entity.offset, startSize: entity.size, lastSize: entity.size, moved: false };
+  state.drag = drag;
+  document.body.classList.add('dragging');
+  e.target.closest('.field-block')?.classList.add('dragging');
+  showGhost(entityLabel(entity), entity.size + ' B');
+  window.addEventListener('pointermove', onDragMove);
+  window.addEventListener('pointerup', onDragEnd, { once: true });
+}
+
+function onDragMove(e) {
+  const d = state.drag;
+  if (!d) return;
+  if (d.type === 'move') {
+    const at = offsetAt(e.clientX, e.clientY);
+    if (at == null) return;
+    const target = clamp(at - d.grab, 0, Math.max(0, analyze(currentLayout()).c.size - 1));
+    d.lastOffset = target;
+    d.moved = target !== d.entity.offset;
+    showGhost(entityLabel(d.entity), hex(target));
+    showDropTarget(target, d.entity.size);
+  } else if (d.type === 'resize') {
+    const at = offsetAt(e.clientX, e.clientY);
+    if (at == null) return;
+    const size = clamp(at + 1 - d.entity.offset, 1, 64);
+    d.lastSize = size;
+    d.moved = size !== d.entity.size;
+    showGhost(entityLabel(d.entity), size + ' B');
+    showDropTarget(d.entity.offset, size);
+  }
+}
+
+function onDragEnd() {
+  const d = state.drag;
+  state.drag = null;
+  document.body.classList.remove('dragging');
+  hideGhost();
+  hideDropTarget();
+  window.removeEventListener('pointermove', onDragMove);
+  $$('.field-block.dragging').forEach((el) => el.classList.remove('dragging'));
+  if (!d) return;
+  if (!d.moved) {
+    if (d.entity.type === 'bits') selectGroup(d.entity.group.key);
+    else selectField(d.entity.id);
+    return;
+  }
+  state.suppressClick = true;
+  setTimeout(() => { state.suppressClick = false; }, 0);
+  if (d.type === 'move') {
+    const field = d.entity.type === 'bits' ? d.entity.group.members[0] : d.entity.field;
+    if (field) {
+      state.selected = d.entity.type === 'bits' ? { type: 'group', key: d.entity.group.key } : { type: 'field', id: field.id };
+      moveFieldTo(field, d.lastOffset);
+    }
+  } else if (d.type === 'resize') {
+    if (d.entity.field) {
+      state.selected = { type: 'field', id: d.entity.field.id };
+      resizeField(d.entity.field, d.lastSize);
+    }
+  }
+}
+
+function beginBitDrag(e, bar) {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  const groupKey = bar.dataset.groupBar;
+  const fieldId = bar.dataset.field;
+  const group = groupsFor(compile(currentLayout())).find((g) => g.key === groupKey);
+  const field = currentLayout().fields.find((f) => f.id === fieldId);
+  if (!group || !field) return;
+  const edge = e.target.closest('[data-bedge]')?.dataset.bedge;
+  const track = bar.closest('.bit-track');
+  if (!track) return;
+  const bits = group.unit * 8;
+  const bit = bitAtClient(track, group, e.clientX);
+  const before = snapshot();
+  const d = {
+    type: edge ? 'bit-resize' : 'bit-move',
+    group, field, before, edge: edge || 'right',
+    startBit: num(field.bit), startWidth: num(field.width, 1),
+    grab: clamp(bit - num(field.bit), 0, Math.max(0, num(field.width, 1) - 1)),
+    lastBit: num(field.bit), lastWidth: num(field.width, 1), moved: false, track,
+  };
+  state.drag = d;
+  document.body.classList.add('dragging');
+  bar.classList.add('selected');
+  showGhost(field.name, `bit ${num(field.bit)} · ${num(field.width, 1)} bit`);
+  window.addEventListener('pointermove', onBitMove);
+  window.addEventListener('pointerup', onBitEnd, { once: true });
+}
+
+function bitAtClient(track, group, clientX) {
+  const r = track.getBoundingClientRect();
+  const bits = group.unit * 8;
+  const p = clamp((clientX - r.left) / r.width, 0, 0.999999);
+  let bit = Math.floor(p * bits);
+  if (state.bitOrder === 'msb') bit = bits - 1 - bit;
+  return clamp(bit, 0, bits - 1);
+}
+
+function onBitMove(e) {
+  const d = state.drag;
+  if (!d || (d.type !== 'bit-move' && d.type !== 'bit-resize')) return;
+  const bits = d.group.unit * 8;
+  const bit = bitAtClient(d.track, d.group, e.clientX);
+  if (d.type === 'bit-move') {
+    const next = clamp(bit - d.grab, 0, bits - d.startWidth);
+    d.lastBit = next;
+    d.lastWidth = d.startWidth;
+    d.moved = next !== d.startBit;
+    showGhost(d.field.name, `bit ${next}–${next + d.startWidth - 1}`);
+    showBitDrop(d.track, d.group, next, d.startWidth);
+  } else {
+    let nextBit = d.startBit;
+    let nextWidth = d.startWidth;
+    if (d.edge === 'left') {
+      const end = d.startBit + d.startWidth;
+      nextBit = clamp(bit, 0, end - 1);
+      nextWidth = end - nextBit;
+    } else {
+      nextBit = d.startBit;
+      nextWidth = clamp(bit + 1 - d.startBit, 1, bits - d.startBit);
+    }
+    d.lastBit = nextBit;
+    d.lastWidth = nextWidth;
+    d.moved = nextBit !== d.startBit || nextWidth !== d.startWidth;
+    showGhost(d.field.name, `bit ${nextBit}–${nextBit + nextWidth - 1}`);
+    showBitDrop(d.track, d.group, nextBit, nextWidth);
+  }
+}
+
+function onBitEnd() {
+  const d = state.drag;
+  state.drag = null;
+  document.body.classList.remove('dragging');
+  hideGhost();
+  hideBitDrop();
+  window.removeEventListener('pointermove', onBitMove);
+  if (!d) return;
+  if (!d.moved) {
+    selectField(d.field.id);
+    return;
+  }
+  state.suppressClick = true;
+  setTimeout(() => { state.suppressClick = false; }, 0);
+  state.selected = { type: 'field', id: d.field.id };
+  resizeBits(d.field, d.lastBit, d.lastWidth);
+  const after = groupsFor(compile(currentLayout())).find((g) => g.members.some((m) => m.id === d.field.id));
+  if (after?.overlapPairs) toast(`${d.field.name} · bit ${d.lastBit}–${d.lastBit + d.lastWidth - 1}（位域重叠）`, 'err');
+  else toast(`${d.field.name} · bit ${d.lastBit}–${d.lastBit + d.lastWidth - 1}`, 'ok');
+}
+
+function showGhost(label, meta) {
+  const el = $('#dragGhost');
+  el.hidden = false;
+  el.innerHTML = `${esc(label)}<small>${esc(meta)}</small>`;
+}
+function hideGhost() { $('#dragGhost').hidden = true; }
+
+function showDropTarget(offset, size) {
+  const target = $('#dropTarget');
+  if (!target || !state.geo) return;
+  const rect = cellRect(offset, size, state.geo);
+  target.hidden = false;
+  target.style.left = (rect.left + 2) + 'px';
+  target.style.top = (rect.top + 5) + 'px';
+  target.style.width = Math.max(8, rect.width - 4) + 'px';
+  target.style.height = (state.geo.rowH - 10) + 'px';
+}
+function hideDropTarget() { const t = $('#dropTarget'); if (t) t.hidden = true; }
+
+function showBitDrop(track, group, bit, width) {
+  hideBitDrop();
+  const bits = group.unit * 8;
+  const pos = state.bitOrder === 'lsb' ? bit : bits - bit - width;
+  const bitW = track.getBoundingClientRect().width / bits;
+  const el = document.createElement('div');
+  el.className = 'bit-drop';
+  el.id = 'bitDrop';
+  el.style.left = (pos * bitW) + 'px';
+  el.style.width = Math.max(8, width * bitW - 2) + 'px';
+  track.appendChild(el);
+}
+function hideBitDrop() { const el = $('#bitDrop'); if (el) el.remove(); }
+
+function entityLabel(e) {
+  return e.type === 'bits' ? '位域组 · ' + e.group.members.length + ' 项' : e.name;
+}
+
+/* =============================================================== events */
+function onClick(e) {
+  if (state.suppressClick) { state.suppressClick = false; return; }
+  const t = e.target;
+
+  // navigation / topbar
+  const layoutBtn = t.closest('[data-layout-open]');
+  if (layoutBtn) { openLayout(layoutBtn.dataset.layoutOpen); return; }
+  if (t.closest('[data-crumb-back]')) { crumbBack(); return; }
+  if (t.closest('[data-open-blueprint]')) { openBlueprint(); return; }
+  if (t.closest('[data-return-modal]')) { openReturnModal(); return; }
+  if (t.closest('[data-open-designer]')) { openDesigner(); return; }
+  const viewBtn = t.closest('[data-view]');
+  if (viewBtn) { state.view = viewBtn.dataset.view; state.selected = null; render(); return; }
+  if (t.closest('[data-undo]')) { undo(); return; }
+  if (t.closest('[data-redo]')) { redo(); return; }
+  const zoomBtn = t.closest('[data-zoom]');
+  if (zoomBtn) { state.zoom = clamp(Math.round((state.zoom + (zoomBtn.dataset.zoom === '1' ? 0.1 : -0.1)) * 10) / 10, 0.5, 1.6); render(); return; }
+  if (t.closest('[data-fit]')) { fit(); return; }
+  if (t.closest('[data-export]')) { openExport(); return; }
+  if (t.closest('[data-table-toggle]')) { state.tableOpen = !state.tableOpen; render(); return; }
+  if (t.closest('[data-arm-cancel]')) { state.armed = null; render(); return; }
+  if (t.closest('[data-new-layout]')) { newLayout(); return; }
+
+  // palette arm
+  const palette = t.closest('[data-palette-kind], [data-palette-layout]');
+  if (palette) {
+    if (palette.dataset.paletteLayout) state.armed = { layoutId: palette.dataset.paletteLayout };
+    else state.armed = { kind: palette.dataset.paletteKind };
+    render();
+    toast(`已选择 ${armedLabel()}：点击画布空白处放置`, 'ok');
+    return;
+  }
+
+  // selection
+  const groupEl = t.closest('[data-group]');
+  if (groupEl) { selectGroup(groupEl.dataset.group); return; }
+  const fieldEl = t.closest('[data-field]');
+  if (fieldEl && !t.closest('[data-bedge]')) { selectField(fieldEl.dataset.field); return; }
+  const row = t.closest('[data-row-field]');
+  if (row) { selectField(row.dataset.rowField); return; }
+  const openByte = t.closest('[data-open-byte-field]');
+  if (openByte) { state.view = 'byte'; selectField(openByte.dataset.openByteField); return; }
+  const backGroup = t.closest('[data-back-group]');
+  if (backGroup) { selectGroup(backGroup.dataset.backGroup); return; }
+  if (t.closest('[data-auto-anchor]')) {
+    const f = selectionField();
+    if (f) anchorField(f);
+    return;
+  }
+  if (t.closest('[data-restore-auto]')) {
+    const f = selectionField();
+    if (f) restoreAuto(f);
+    return;
+  }
+  if (t.closest('[data-enter-field]')) {
+    const f = selectionField();
+    if (f) enterNested(f);
+    return;
+  }
+  if (t.closest('[data-delete-field]')) { deleteSelected(); return; }
+  if (t.closest('[data-delete-group]')) { deleteSelected(); return; }
+  const addBitBtn = t.closest('[data-add-bit]');
+  if (addBitBtn) { addBit(addBitBtn.dataset.addBit); return; }
+
+  // create on empty cell when armed
+  const cell = t.closest('[data-cell]');
+  if (cell && state.armed) {
+    const off = Number(cell.dataset.cell);
+    const payload = state.armed;
+    state.armed = null;
+    createField(payload, off);
+    return;
+  }
+  if (cell) { clearSelection(); return; }
+
+  // click background clears selection, but not when clicking controls
+  if (t.closest('.canvas') && !t.closest('.field-block')) clearSelection();
+}
+
+function onChange(e) {
+  const t = e.target;
+
+  if (t.matches('[data-row-bytes]')) { state.rowBytes = Number(t.value) || 4; state.zoom = 1; render(); return; }
+  if (t.matches('[data-bit-order]')) { state.bitOrder = t.value; render(); return; }
+
+  const lprop = t.dataset.lprop;
+  if (lprop) {
+    const layout = currentLayout();
+    const before = snapshot();
+    if (lprop === 'name') {
+      const v = t.value.trim();
+      if (!v) { toast('布局名不能为空', 'err'); render(); return; }
+      layout.name = v;
+    } else if (lprop === 'endian') layout.endian = t.value;
+    else if (lprop === 'union') layout.union = t.checked || undefined;
+    else if (lprop === 'size') {
+      if (t.value.trim() === '') delete layout.size;
+      else {
+        const n = Number(t.value);
+        if (!Number.isInteger(n) || n < 1) { toast('长度必须是正整数', 'err'); render(); return; }
+        if (n < compile(layout).cursor) { toast(`长度不能小于字段结束位置 ${compile(layout).cursor}`, 'err'); render(); return; }
+        layout.size = String(n);
+      }
+    }
+    state.history.push(before); state.future = []; render();
+    return;
+  }
+
+  const fprop = t.dataset.fprop;
+  if (fprop) {
+    const id = t.closest('[data-field-panel]')?.dataset.fieldPanel;
+    const f = currentLayout().fields.find((x) => x.id === id);
+    if (!f) return;
+    const before = snapshot();
+    if (fprop === 'name') {
+      const v = t.value.trim();
+      if (!v) { toast('字段名不能为空', 'err'); render(); return; }
+      f.name = v;
+    } else if (fprop === 'at') {
+      const n = Number(t.value);
+      if (!Number.isInteger(n) || n < 0) { toast('偏移必须是非负整数', 'err'); render(); return; }
+      f.at = String(n);
+    } else if (fprop === 'auto') {
+      if (t.checked) {
+        const a = analyze(currentLayout());
+        const cf = a.c.fields.find((x) => x.id === f.id);
+        delete f.at;
+        if (cf) toast(`已恢复自动；当前偏移 ${hex(cf.offset)}`);
+      } else {
+        const a = analyze(currentLayout());
+        const cf = a.c.fields.find((x) => x.id === f.id);
+        f.at = String(cf?.offset ?? 0);
+      }
+    } else if (fprop === 'size') {
+      const n = Number(t.value);
+      if (!Number.isInteger(n) || n < 1) { toast('长度必须是正整数', 'err'); render(); return; }
+      f.size = String(n);
+    } else if (fprop === 'bit') {
+      const group = groupOfField(f);
+      if (!group) return;
+      const n = clamp(Math.round(Number(t.value)), 0, group.unit * 8 - 1);
+      f.bit = String(n);
+      if (num(f.bit) + num(f.width, 1) > group.unit * 8) f.width = String(group.unit * 8 - n);
+    } else if (fprop === 'width') {
+      const group = groupOfField(f);
+      if (!group) return;
+      const n = clamp(Math.round(Number(t.value)), 1, group.unit * 8 - num(f.bit));
+      f.width = String(n);
+    } else if (fprop === 'of') {
+      if (!t.value) return;
+      f.of = t.value;
+    } else if (fprop === 'asArray') {
+      if (t.checked) { f.kind = 'array'; if (!f.count) f.count = '2'; }
+      else { f.kind = 'record'; delete f.count; }
+    } else if (fprop === 'count') {
+      const n = Number(t.value);
+      if (!Number.isInteger(n) || n < 1) { toast('数量必须是正整数', 'err'); render(); return; }
+      f.count = String(n);
+    } else if (fprop === 'endian') {
+      if (t.value) f.endian = t.value; else delete f.endian;
+    } else if (fprop === 'role') {
+      if (t.value) f.role = t.value; else delete f.role;
+    } else {
+      return;
+    }
+    state.history.push(before); state.future = []; render();
+    return;
+  }
+
+  const member = t.dataset.member;
+  if (member) {
+    const f = currentLayout().fields.find((x) => x.id === member);
+    const group = f ? groupOfField(f) : null;
+    if (!f || !group) return;
+    const before = snapshot();
+    const prop = t.dataset.mprop;
+    if (prop === 'name') {
+      const v = t.value.trim();
+      if (!v) { toast('字段名不能为空', 'err'); render(); return; }
+      f.name = v;
+    } else if (prop === 'bit') {
+      f.bit = String(clamp(Math.round(Number(t.value)), 0, group.unit * 8 - 1));
+      if (num(f.bit) + num(f.width, 1) > group.unit * 8) f.width = String(group.unit * 8 - num(f.bit));
+    } else if (prop === 'width') {
+      f.width = String(clamp(Math.round(Number(t.value)), 1, group.unit * 8 - num(f.bit)));
+    }
+    state.history.push(before); state.future = []; render();
+    return;
+  }
+
+  const gu = t.dataset.groupUnit;
+  if (gu) { changeGroupUnit(gu, Number(t.value)); return; }
+}
+
+function onPointerDown(e) {
+  const handle = e.target.closest('[data-resize]');
+  const block = e.target.closest('.field-block');
+  if (block) {
+    const entityKey = block.dataset.entity;
+    const a = analyze(currentLayout());
+    const entity = entitiesFor(a.c).find((x) => x.key === entityKey);
+    if (!entity) return;
+    if (handle) beginResize(e, entity);
+    else beginMove(e, entity);
+    return;
+  }
+  const bar = e.target.closest('.bit-bar');
+  if (bar) { beginBitDrag(e, bar); return; }
+}
+
+function onDoubleClick(e) {
+  const block = e.target.closest('.field-block');
+  if (!block) return;
+  const a = analyze(currentLayout());
+  const entity = entitiesFor(a.c).find((x) => x.key === block.dataset.entity);
+  if (entity?.type === 'field') enterNested(entity.field);
+}
+
+function onKeyDown(e) {
+  const editing = e.target.closest('input, textarea, select, [contenteditable="true"]');
+  if (e.key === 'Escape') {
+    if ($('#modalHost').innerHTML) { closeModal(); return; }
+    if (state.armed) { state.armed = null; render(); return; }
+    if (state.selected) { state.selected = null; render(); return; }
+    return;
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+    e.preventDefault();
+    if (e.shiftKey) redo(); else undo();
+    return;
+  }
+  if (editing) return;
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    e.preventDefault();
+    deleteSelected();
+    return;
+  }
+  if (e.key === 'Enter') {
+    const block = e.target.closest?.('.field-block');
+    if (block) {
+      const a = analyze(currentLayout());
+      const entity = entitiesFor(a.c).find((x) => x.key === block.dataset.entity);
+      if (entity?.type === 'bits') selectGroup(entity.group.key);
+      else if (entity) selectField(entity.id);
+      e.preventDefault();
+      return;
+    }
+    const bar = e.target.closest?.('.bit-bar');
+    if (bar) { selectField(bar.dataset.field); e.preventDefault(); return; }
+  }
+  const f = selectionField();
+  if (!f) return;
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+    e.preventDefault();
+    const a = analyze(currentLayout());
+    const cf = a.c.fields.find((x) => x.id === f.id);
+    if (!cf) return;
+    if (f.kind === 'bits') {
+      const g = groupOfField(f);
+      if (!g) return;
+      const d = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0;
+      if (d) resizeBits(f, num(f.bit) + d * (e.shiftKey ? 4 : 1), num(f.width, 1));
+      return;
+    }
+    const step = e.shiftKey ? state.rowBytes : 1;
+    const d = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : e.key === 'ArrowUp' ? -state.rowBytes : state.rowBytes;
+    moveFieldTo(f, Math.max(0, cf.offset + d));
+  }
+}
+
+/* ============================================================ palette DnD */
+function onDragStart(e) {
+  const card = e.target.closest('[data-palette-kind], [data-palette-layout]');
+  if (!card) return;
+  const payload = card.dataset.paletteLayout
+    ? { layoutId: card.dataset.paletteLayout }
+    : { kind: card.dataset.paletteKind };
+  state.drop = payload;
+  e.dataTransfer.effectAllowed = 'copy';
+  e.dataTransfer.setData('text/plain', JSON.stringify(payload));
+  document.body.classList.add('dragging');
+}
+function onPaletteDragEnd() {
+  state.drop = null;
+  document.body.classList.remove('dragging');
+  hideDropTarget();
+}
+function onCanvasDragOver(e) {
+  if (!state.drop) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'copy';
+  const at = offsetAt(e.clientX, e.clientY, true);
+  if (at == null) { hideDropTarget(); return; }
+  const payload = state.drop;
+  let size = 1;
+  if (payload.layoutId) size = compile(layoutById(payload.layoutId)).size;
+  else if (payload.kind === 'bits') size = 1;
+  else if (payload.kind === 'string' || payload.kind === 'bytes') size = 4;
+  else size = SCALAR[payload.kind] || 1;
+  showDropTarget(at, size);
+}
+function onCanvasDrop(e) {
+  if (!state.drop) return;
+  e.preventDefault();
+  const at = offsetAt(e.clientX, e.clientY, true);
+  const payload = state.drop;
+  state.drop = null;
+  document.body.classList.remove('dragging');
+  hideDropTarget();
+  if (at == null) return;
+  createField(payload, at);
+}
+
+/* ================================================================ zoom fit */
+function fit() {
+  if (state.view !== 'byte') { toast('位视图按宽度自适应'); return; }
+  const a = analyze(currentLayout());
+  const geo = geometryFor(a);
+  const avail = $('#canvasScroll').clientWidth - 16;
+  state.zoom = clamp(Math.min(1.2, avail / geo.width), 0.5, 1.2);
+  render();
+}
+
+/* ============================================================== export/modal */
+function openExport() {
+  const payload = { format: 'memlink-blueprint/3', layouts: state.layouts };
+  $('#modalHost').innerHTML = `<div class="modal-backdrop" data-modal-backdrop>
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="modal-head"><b>导出布局 JSON</b><span class="pill">原型</span><div class="grow"></div><button class="icon-btn" data-close-modal>×</button></div>
+      <div class="modal-body"><p>真实实现会把当前布局写回文档；这里展示的是同一份 <code>BinaryLayout[]</code> 结构。字段 ID、<code>at</code>、<code>bit</code>、<code>width</code> 都是稳定数据。</p><pre>${esc(JSON.stringify(payload, null, 2))}</pre></div>
+      <div class="modal-actions"><span class="note grow">不修改文档 · 只读预览</span><button class="btn" data-copy-export>复制 JSON</button><button class="btn primary" data-close-modal>关闭</button></div>
+    </div>
+  </div>`;
+}
+function openReturnModal() {
+  $('#modalHost').innerHTML = `<div class="modal-backdrop" data-modal-backdrop>
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="modal-head"><b>返回蓝图</b><div class="grow"></div><button class="icon-btn" data-close-modal>×</button></div>
+      <div class="modal-body"><p>这是独立原型。真实实现里，关掉设计器会回到原来的蓝图画布，保留选择、视口和撤销历史；所有引用该布局的节点会自动使用新偏移。</p><p class="note">当前编辑只存在这个页面内，不会写入项目文件。</p></div>
+      <div class="modal-actions"><button class="btn" data-close-modal>继续设计</button><button class="btn primary" data-close-modal data-do-return>模拟返回蓝图</button></div>
+    </div>
+  </div>`;
+}
+function closeModal() { $('#modalHost').innerHTML = ''; }
+
+function openBlueprint() {
+  $('#designer').hidden = true;
+  $('#blueprint').hidden = false;
+}
+function openDesigner() {
+  $('#blueprint').hidden = true;
+  $('#designer').hidden = false;
+  render();
+}
+
+/* ================================================================ listeners */
+document.addEventListener('click', (e) => {
+  if (e.target.matches('[data-modal-backdrop]')) { closeModal(); return; }
+  if (e.target.closest('[data-close-modal]')) {
+    const doReturn = e.target.closest('[data-do-return]');
+    closeModal();
+    if (doReturn) { openBlueprint(); toast('原型：已模拟返回蓝图'); }
+    return;
+  }
+  if (e.target.closest('[data-copy-export]')) {
+    const text = $('.modal pre')?.textContent ?? '';
+    const done = () => toast('已复制 JSON', 'ok');
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).then(done).catch(() => toast('剪贴板不可用', 'err'));
+    else toast('剪贴板不可用', 'err');
+    return;
+  }
+  onClick(e);
+});
+document.addEventListener('change', onChange);
+document.addEventListener('pointerdown', onPointerDown);
+document.addEventListener('dblclick', onDoubleClick);
+document.addEventListener('keydown', onKeyDown);
+document.addEventListener('dragstart', onDragStart);
+document.addEventListener('dragend', onPaletteDragEnd);
+const canvasScroll = $('#canvasScroll');
+canvasScroll.addEventListener('dragover', onCanvasDragOver);
+canvasScroll.addEventListener('drop', onCanvasDrop);
+canvasScroll.addEventListener('dragleave', (e) => { if (!canvasScroll.contains(e.relatedTarget)) hideDropTarget(); });
+
+/* ================================================================ boot */
+window.__PROTO = { state, render, analyze, compile, groupsFor }; // prototype debug hook
+if (state.view === 'bit' && !params.get('select')) {
+  const g = groupsFor(compile(currentLayout()))[0];
+  if (g) state.selected = { type: 'group', key: g.key };
+}
+render();
+if (params.get('view') === 'bit') state.selected = state.selected;
+</script>
+</body>
+</html>

@@ -30,12 +30,19 @@ import {
 } from './clipboard';
 import {
   addPack, cleanupPackNodes, disabledPackIds, enabledPackMap, packImpact, removePackAtomic,
-  renamePack, setPackEnabled,
+  renamePack, setPackEnabled, updatePackSource,
 } from './packops';
+import { installedPackOf, readStorePrefs, verifyPackSource, writeStorePrefs, type StorePackEntry } from './store';
+import PackStore from './PackStore';
 import { initialParseParams } from './add-defaults';
 import { addressHex, addressInteger, isMappedAddress, offsetIn, packMemory, safeNumber, sameMapping } from './precision';
 import { addOffset, pointerRead } from './binary-read';
-import type { BinaryLayout } from './layouts';
+import { validLayoutDocument, type BinaryLayout } from './layouts';
+import { reviewLayouts } from './designer/operations';
+import { buildStructureRegistry } from './structure';
+import { buildLayoutUsage, layoutsEqual } from './designer/usage';
+import { parseDesignerHash, designerHash } from './designer/route';
+import DesignerApp, { type DesignerApplyResult } from './designer/DesignerApp';
 import {
   canRedo, canUndo, currentDoc, initHistory, isDirty, markSaved, push, redo, redoLabel, undo, undoLabel,
   type HistoryState,
@@ -59,7 +66,7 @@ import FollowPicker, {
 } from './FollowPicker';
 import GraphSearch, { type SearchHit } from './GraphSearch';
 import { buildMenu, type MenuCtx, type MenuItem, type MenuTarget } from './menus';
-import { IconAlert, IconDownload, IconFolder, IconRefresh, IconUndo, IconUpload, Logo } from '../ui/icons';
+import { IconAlert, IconDownload, IconFolder, IconRefresh, IconStore, IconUndo, IconUpload, Logo } from '../ui/icons';
 import StructTree, { type TreeSession } from './StructTree';
 import LocalTree from './LocalTree';
 import type { TreeFocus, TreeRootSpec } from './tree';
@@ -79,13 +86,20 @@ function initialDoc(): DocState {
   const packs: LoadedPack[] = [];
   for (const p of d.packs) {
     const r = loadBlueprintPack(p.source);
-    if (r.pack) packs.push({ id: p.id, name: p.name, source: p.source, pack: r.pack, enabled: true });
+    if (r.pack) packs.push({ id: p.id, name: p.name, source: p.source, pack: r.pack, enabled: true, ...(p.store ? { store: p.store } : {}) });
   }
   return { packs, nodes: d.nodes, edges: d.edges, layouts: d.layouts };
 }
 
 function emptyDoc(): DocState {
   return { packs: [], nodes: [], edges: [] };
+}
+
+function cloneLayouts(layouts: readonly BinaryLayout[] | undefined): BinaryLayout[] {
+  return (layouts ?? []).map(l => ({
+    ...l,
+    fields: l.fields.map(f => ({ ...f, ...(f.values ? { values: { ...f.values } } : {}) })),
+  }));
 }
 
 function readFile(f: File): Promise<Uint8Array> {
@@ -139,14 +153,35 @@ export default function BlueprintApp() {
   const [helpOpen, setHelpOpen] = useState(false);
   /** 快速添加浮层 */
   const [quickAddOpen, setQuickAddOpen] = useState(false);
+  /** pack 商店浮层与上次使用的商店地址 */
+  const [storeOpen, setStoreOpen] = useState(false);
+  const [storeUrl, setStoreUrl] = useState(() => readStorePrefs().url);
   /** 右键菜单：目标 + 屏幕坐标 */
   const [menu, setMenu] = useState<{ target: MenuTarget; x: number; y: number } | null>(null);
   /** 内存剪贴板里有多少节点（菜单禁用态要据此刷新） */
   const [clipCount, setClipCount] = useState(0);
   /** 右栏当前页签：问题 chip 与检查器共用同一个入口，避免两套列表 */
   const [rightTab, setRightTab] = useState<'inspect' | 'problems'>('inspect');
+  /** 结构体 → 缓冲区的一次性定位目标；FileEditor 挂载时消费 */
+  const [bufferFocus, setBufferFocus] = useState<{ nodeId: string; addr: bigint } | null>(null);
+  const bufferFocusTimer = useRef(0);
   /** 拖入文件时的覆盖层 */
   const [dropping, setDropping] = useState(false);
+  /** 全屏结构设计器：null = 关闭；[] = 布局选择器；其余为布局栈 */
+  const [designerStack, setDesignerStack] = useState<string[] | null>(() => {
+    return parseDesignerHash(window.location.hash)?.stack ?? null;
+  });
+  /** 本次打开设计器前的布局快照，用于「撤销本次修改」 */
+  const [designerBase, setDesignerBase] = useState<BinaryLayout[] | null>(() => {
+    return parseDesignerHash(window.location.hash) ? cloneLayouts(boot.doc.layouts) : null;
+  });
+  const designerReturnHash = useRef(window.location.hash.startsWith('#design') ? '' : window.location.hash);
+  const designerTrigger = useRef<HTMLElement | null>(null);
+  const designerStackRef = useRef<string[] | null>(designerStack);
+  designerStackRef.current = designerStack;
+  const designerOpen = designerStack !== null;
+  const designerOpenRef = useRef(designerOpen);
+  designerOpenRef.current = designerOpen;
   /** 全屏结构树：打开时把节点、根类型与内存快照一起固定下来 */
   const [tree, setTree] = useState<{
     nodeId: string; root: TreeRootSpec; title: string; subtitle?: string; focus?: TreeFocus;
@@ -236,6 +271,15 @@ export default function BlueprintApp() {
   const edges = doc.edges;
 
   const packsMap = useMemo(() => enabledPackMap(packs), [packs]);
+  const structures = useMemo(() => buildStructureRegistry(doc.layouts ?? [], packsMap), [doc.layouts, packsMap]);
+  const layoutUsage = useMemo(() => buildLayoutUsage({
+    layouts: doc.layouts, nodes, edges, packs: doc.packs,
+  }, {
+    nodeLabel: (n) => displayTitle(n,
+      n.packId
+        ? (packsMap.get(n.packId)?.nodes[n.nodeId]?.label ?? n.nodeId)
+        : (getBuiltin(n.nodeId)?.label ?? n.nodeId)),
+  }), [doc.layouts, nodes, edges, doc.packs, packsMap]);
   /** 已被禁用的 pack：画布据此显示「已禁用」错误态 */
   const disabledPacks = useMemo(() => disabledPackIds(packs), [packs]);
   /** 展示用的全量 map：标签与端口说明要能解析出被禁用 pack 的名字 */
@@ -760,8 +804,8 @@ export default function BlueprintApp() {
    * 工作的内置解析节点。元素解析由浮层顶部带类型下拉的「元素解析」承担。
    */
   const followItems = useMemo<FollowItem[]>(
-    () => buildFollowItems({ packs: allPacks, packNames, isEnabled: packEnabled }),
-    [allPacks, packNames, doc.packs], // eslint-disable-line react-hooks/exhaustive-deps
+    () => buildFollowItems({ packs: structures.packs, packNames, isEnabled: packEnabled }),
+    [structures, packNames, doc.packs], // eslint-disable-line react-hooks/exhaustive-deps
   );
   const knownInMapping = (buffer: BufferValue) => knownTypesAt(nodes, fullResult.views, nodeId => {
     const src = fullResult.sources.get(nodeId)?.buffer;
@@ -859,7 +903,7 @@ export default function BlueprintApp() {
       setLocalTree(nodeId);
       return;
     }
-    const pack = node.packId ? allPacks.get(node.packId) : undefined;
+    const pack = node.packId ? structures.packs.get(node.packId) : undefined;
     const def = pack?.nodes[node.nodeId];
     const buffer = fullResult.sources.get(nodeId)?.buffer;
     const fallbackMem = buffer ? packMemory(buffer) : undefined;
@@ -870,7 +914,7 @@ export default function BlueprintApp() {
     };
     const ownerOf = (typeName: string, prefer?: BlueprintPack): BlueprintPack | undefined => {
       if (prefer?.types[typeName]) return prefer;
-      for (const p of allPacks.values()) if (p.types[typeName]) return p;
+      for (const p of structures.packs.values()) if (p.types[typeName]) return p;
       return undefined;
     };
 
@@ -1044,6 +1088,7 @@ export default function BlueprintApp() {
         : {
             ...builtinDefaults(item.nodeId),
             ...inheritOptions(item.nodeId, nodes),
+            ...(item.structureId ? { structureId: item.structureId } : {}),
             [item.inputPort]: finalHex,
             ...(pinnedFile ? { sourceId: pinnedFile } : {}),
           };
@@ -1096,23 +1141,49 @@ export default function BlueprintApp() {
     const source = spec && canConnect(spec.type, 'pack-address') && found !== null && BigInt(found) === BigInt(addr)
       ? { nodeId: id, port: spec.name } : undefined;
     const info = result.sources.get(id);
-    if (!info?.buffer || BigInt(info.buffer.base) !== BigInt(tree.root.mem.base)
-      || (info.buffer.bytes !== tree.root.mem.buf && info.buffer.assetId !== tree.sourceAssetId)) return undefined;
+    const mem = tree.root.mem;
+    // A value-source edge (e.g. File.buffer) is resolved lazily; the tree
+    // already owns the exact bytes. Fall back to the tree memory instead of
+    // rejecting a perfectly valid element row.
+    const treeBuffer: BufferValue = {
+      assetId: tree.sourceAssetId ?? `tree:${mem.base}`,
+      name: '结构树',
+      base: BigInt(mem.base),
+      bytes: mem.buf,
+    };
+    const buffer = info?.buffer ?? treeBuffer;
+    if (BigInt(buffer.base) !== BigInt(mem.base)
+      || (buffer.bytes !== mem.buf && buffer.assetId !== tree.sourceAssetId)) return undefined;
     let bufferSource: FollowRequest['bufferSource'];
-    if (!source && info.fileId) {
+    if (!source && info?.fileId) {
       bufferSource = { nodeId: info.fileId, port: SOURCE_PORT };
-    } else if (info.valueSource) {
+    } else if (info?.valueSource) {
       bufferSource = { nodeId: info.valueSource.node, port: info.valueSource.port };
     }
+    if (!source && !bufferSource) {
+      for (const [nid, s] of result.sources) {
+        if (s.mode !== 'file' || !s.buffer) continue;
+        if (s.buffer.bytes === mem.buf || (!!tree.sourceAssetId && s.buffer.assetId === tree.sourceAssetId)) {
+          bufferSource = { nodeId: nid, port: SOURCE_PORT };
+          break;
+        }
+      }
+    }
     if (!source && !bufferSource) return undefined;
-    return { address: addr, description, source, bufferSource, buffer: info.buffer };
+    return { address: addr, description, source, bufferSource, buffer };
   };
 
   /** 结构树里点 ⊕：按该行实际类型直接落一个元素解析节点，树保持打开。 */
   const resolveFromTree = (addr: number, typeName: string, port?: string): boolean => {
     const req = requestFromTree(addr, `结构树 · ${typeName} @0x${addr.toString(16)}`, port);
     if (!req) return false;
-    const packId = [...packsMap].find(([, pack]) => pack === tree?.root.pack)?.[0];
+    // The tree root uses the materialized pack from StructureRegistry, while
+    // packsMap holds raw loaded packs; prefer the node's own packId and fall
+    // back to identity across both maps.
+    const treeNode = tree ? docRef.current.nodes.find(n => n.id === tree.nodeId) : undefined;
+    const packId = treeNode?.packId
+      || [...structures.packs].find(([, pack]) => pack === tree?.root.pack)?.[0]
+      || [...packsMap].find(([, pack]) => pack === tree?.root.pack)?.[0];
     if (!packId) return false;
     const item = elementFollowItem({ packId, typeName, reason: '结构树当前类型' });
     if (!item) return false;
@@ -1306,6 +1377,47 @@ export default function BlueprintApp() {
     return true;
   };
 
+  /** 商店安装：编译后按商店 id 复用已有 pack（更新）或追加新 pack。 */
+  const onInstallStorePack = async ({
+    entry, source, storeUrl: url,
+  }: { entry: StorePackEntry; source: string; storeUrl: string }): Promise<{ ok: boolean; error?: string; updated?: boolean }> => {
+    const check = await verifyPackSource(source, entry.sha256);
+    if (!check.ok) return { ok: false, error: check.error ?? 'pack 哈希校验失败' };
+    const r = loadBlueprintPack(source);
+    if (!r.pack) return { ok: false, error: r.error ?? 'pack 编译失败' };
+    const ref = {
+      url,
+      packId: entry.id,
+      version: entry.version,
+      ...(entry.sha256 ? { sha256: entry.sha256 } : {}),
+      ...(entry.path ? { path: entry.path } : {}),
+      ...(entry.source?.provider ? { provider: entry.source.provider } : {}),
+      ...(entry.coverage ? { coverage: entry.coverage } : {}),
+      ...(entry.helpers ? { helpers: entry.helpers } : {}),
+    };
+    const existing = installedPackOf(docRef.current.packs, url, entry.id);
+    if (existing) {
+      const next = updatePackSource(docRef.current, existing.id, source, r.pack, ref);
+      commit(() => next, `更新 pack：${entry.name} v${entry.version}`);
+      setPackIssues((xs) => [...xs, ...r.issues]);
+      say(`更新 pack：${entry.name} v${entry.version}`);
+      return { ok: true, updated: true };
+    }
+    const id = `p${++seq.current}`;
+    const added = addPack(docRef.current, {
+      id, name: r.pack.name, source, pack: r.pack, enabled: true, store: ref,
+    });
+    commit(() => added.doc, `安装 pack：${entry.name} v${entry.version}`);
+    setPackIssues((xs) => [...xs, ...r.issues]);
+    say(`安装 pack：${entry.name} v${entry.version}`);
+    return { ok: true, updated: false };
+  };
+
+  const onStoreUrl = (url: string) => {
+    setStoreUrl(url);
+    writeStorePrefs({ url });
+  };
+
   /** 读取失败返回错误文本（由检查器显示在来源旁），成功返回 undefined */
   const onFileNode = async (id: string, f: File): Promise<string | undefined> => {
     try {
@@ -1399,28 +1511,104 @@ export default function BlueprintApp() {
     say(`读数值：${cfg.kind} @ ${addressHex(cfg.address)}`);
   };
 
-  const createLayout = (nodeId: string) => {
+  /**
+   * 结构体 → 来源缓冲区：选中 File 节点，并让它的检查器视图滚到指定绝对地址。
+   * 定位目标只消费一次，之后手动选中 File 节点不会再次跳转。
+   */
+  const openBuffer = (fileId: string, addr: bigint) => {
+    setSelection(selectOnlyNode(fileId));
+    setRightTab('inspect');
+    setBufferFocus({ nodeId: fileId, addr });
+    window.clearTimeout(bufferFocusTimer.current);
+    bufferFocusTimer.current = window.setTimeout(() => setBufferFocus(null), 0);
+  };
+
+  const createLayout = (nodeId: string): string => {
     const id = `l${++seq.current}`;
     commit(d => {
       const next: BinaryLayout = {
-        id, name: `布局 ${1 + (d.layouts?.length ?? 0)}`, size: '1', endian: 'little', nextField: 2,
-        fields: [{ id: 'f1', name: 'field1', kind: 'u8', offset: '0' }],
+        id, name: `布局 ${1 + (d.layouts?.length ?? 0)}`, endian: 'little',
+        fields: [{ id: 'f1', name: 'field1', kind: 'u8' }],
       };
       return {
         ...d, layouts: [...(d.layouts ?? []), next],
-        nodes: d.nodes.map(n => n.id === nodeId ? { ...n, params: { ...n.params, layoutId: id, nextField: '' } } : n),
+        nodes: d.nodes.map(n => n.id === nodeId ? { ...n, params: { ...n.params, structureId: `layout/${id}`, nextField: '' } } : n),
       };
     }, '新建结构布局');
+    return id;
   };
 
-  const editLayout = (layout: BinaryLayout, field?: string) => {
-    commit(d => ({ ...d, layouts: d.layouts?.map(l => l.id === layout.id ? layout : l) }),
-      '修改结构布局', field ? `layout:${layout.id}:${field}` : undefined);
+  const applyDesignerLayouts = (next: BinaryLayout[], label: string): DesignerApplyResult => {
+    if (!validLayoutDocument(next)) {
+      return { ok: false, message: '布局超出文档限制（数量、id、字段数或字段类型无效）' };
+    }
+    const review = reviewLayouts(docRef.current.layouts ?? [], next);
+    if (!review.ok) {
+      return { ok: false, problems: review.problems, message: review.message };
+    }
+    commit(d => ({ ...d, layouts: next }), label);
+    return { ok: true, problems: review.problems };
   };
 
-  const selectLayout = (id: string, layoutId: string) => {
+  const navigateDesigner = (next: string[]) => {
+    if (!designerOpenRef.current) {
+      setDesignerBase(cloneLayouts(docRef.current.layouts));
+      designerReturnHash.current = window.location.hash.startsWith('#design') ? '' : window.location.hash;
+    }
+    window.history.pushState(null, '', designerHash(next));
+    setDesignerStack(next);
+  };
+
+  const openDesigner = (structureId?: string) => {
+    const layouts = docRef.current.layouts ?? [];
+    const raw = structureId?.startsWith('layout/') ? structureId.slice('layout/'.length) : structureId;
+    const stack = raw && layouts.some(l => l.id === raw) ? [raw] : [];
+    if (designerOpenRef.current) { navigateDesigner(stack); return; }
+    designerTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    designerReturnHash.current = window.location.hash.startsWith('#design') ? '' : window.location.hash;
+    setDesignerBase(cloneLayouts(layouts));
+    window.history.pushState(null, '', designerHash(stack));
+    setDesignerStack(stack);
+  };
+
+  const closeDesigner = () => {
+    const target = designerReturnHash.current || `${window.location.pathname}${window.location.search}`;
+    window.history.replaceState(null, '', target);
+    setDesignerStack(null);
+    setDesignerBase(null);
+    window.requestAnimationFrame(() => designerTrigger.current?.focus());
+  };
+
+  const restoreDesignerSession = () => {
+    if (!designerBase) return;
+    commit(d => ({ ...d, layouts: cloneLayouts(designerBase) }), '撤销本次设计器修改');
+  };
+
+  useEffect(() => {
+    const sync = () => {
+      const route = parseDesignerHash(window.location.hash);
+      if (route) {
+        if (!designerOpenRef.current) setDesignerBase(cloneLayouts(docRef.current.layouts));
+        setDesignerStack(route.stack);
+        return;
+      }
+      if (designerOpenRef.current) {
+        setDesignerStack(null);
+        setDesignerBase(null);
+        window.requestAnimationFrame(() => designerTrigger.current?.focus());
+      }
+    };
+    window.addEventListener('popstate', sync);
+    window.addEventListener('hashchange', sync);
+    return () => {
+      window.removeEventListener('popstate', sync);
+      window.removeEventListener('hashchange', sync);
+    };
+  }, []);
+
+  const selectLayout = (id: string, structureId: string) => {
     commit(d => ({ ...d, nodes: d.nodes.map(n => n.id === id
-      ? { ...n, params: { ...n.params, layoutId, nextField: '' } } : n) }), '选择布局');
+      ? { ...n, params: { ...n.params, structureId, nextField: '' } } : n) }), '选择结构');
   };
 
   // ---- pack 管理：全部经 commit，一次 Ctrl+Z 完整回滚 ----------------------
@@ -1488,6 +1676,7 @@ export default function BlueprintApp() {
     const d = docRef.current;
     const packEntries = d.packs.map((p) => ({
       id: p.id, name: p.name, source: p.source, enabled: isPackEnabled(p),
+      ...(p.store ? { store: p.store } : {}),
     }));
     const out = makeDoc(packEntries, d.nodes, d.edges, d.layouts);
     downloadBlob(new TextEncoder().encode(JSON.stringify(out, null, 2)), 'blueprint.json', 'application/json');
@@ -1609,7 +1798,7 @@ export default function BlueprintApp() {
       if (!l.pack) { say(`pack ${p.name} 加载失败：${l.error}`); return false; }
       // enabled 是可选字段，缺省视为启用
       const enabled = (p as { enabled?: boolean }).enabled !== false;
-      loaded.push({ id: p.id, name: p.name, source: p.source, pack: l.pack, enabled });
+      loaded.push({ id: p.id, name: p.name, source: p.source, pack: l.pack, enabled, ...(p.store ? { store: p.store } : {}) });
       issues.push(...l.issues);
     }
     if (sampleModeRef.current) exitSample();
@@ -1672,22 +1861,22 @@ export default function BlueprintApp() {
     const hasFiles = (e: DragEvent) =>
       !!e.dataTransfer && Array.prototype.includes.call(e.dataTransfer.types, 'Files');
     const onEnter = (e: DragEvent) => {
-      if (!hasFiles(e)) return;
+      if (designerOpenRef.current || !hasFiles(e)) return;
       depth += 1;
       setDropping(true);
     };
     const onOver = (e: DragEvent) => {
-      if (!hasFiles(e)) return;
+      if (designerOpenRef.current || !hasFiles(e)) return;
       e.preventDefault();
       if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
     };
     const onLeave = (e: DragEvent) => {
-      if (!hasFiles(e)) return;
+      if (designerOpenRef.current || !hasFiles(e)) return;
       depth = Math.max(0, depth - 1);
       if (!depth) setDropping(false);
     };
     const onDrop = (e: DragEvent) => {
-      if (!hasFiles(e)) return;
+      if (designerOpenRef.current || !hasFiles(e)) return;
       e.preventDefault();
       depth = 0;
       setDropping(false);
@@ -1931,7 +2120,8 @@ export default function BlueprintApp() {
   /** 任一浮层打开时，注册表让位（浮层自己处理按键） */
   const overlayOpenRef = useRef(false);
   overlayOpenRef.current = helpOpen || quickAddOpen || menu !== null
-    || follow !== null || searchOpen || tree !== null || localTree !== null || confirm !== null;
+    || follow !== null || searchOpen || tree !== null || localTree !== null || confirm !== null
+    || designerOpen;
 
   const commands: Command[] = [
     { id: 'save', keys: ['Mod+S'], when: 'global', label: '导出蓝图 JSON', run: () => onSaveDoc() },
@@ -2022,6 +2212,7 @@ export default function BlueprintApp() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // Alt 组合用于「返回 / 前进」导航历史，不能在这里整体拦掉。
+      if (designerOpenRef.current) return;
       if (e.defaultPrevented || e.repeat) return;
       // 中文输入法组合期间的按键属于候选词编辑，不触发应用命令
       if (e.isComposing || e.keyCode === 229) return;
@@ -2042,6 +2233,7 @@ export default function BlueprintApp() {
 
   const selectionSummary = summaryOf(selection);
   const selectionText = selectionSummary.text;
+  const designerDirty = designerBase ? !layoutsEqual(doc.layouts, designerBase) : false;
 
   // 保存态：示例临时副本 > 未持久化 > 未保存 > 已缓存（可能部分转储需重载）
   const dropped = persist?.dropped ?? [];
@@ -2161,6 +2353,13 @@ export default function BlueprintApp() {
               }}
             />
           </label>
+          <button
+            className="btn ghost"
+            onClick={() => setStoreOpen(true)}
+            title="浏览 GitHub 上的 pack 商店（需要网络；安装后离线可用）"
+          >
+            <IconStore size={13} /> Pack 商店
+          </button>
           <label className="btn ghost file-label" title="打开 .json 蓝图（Ctrl+O）；也可以把 .json 拖进窗口">
             <IconFolder size={13} /> 打开图
             <input type="file" accept=".json" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) void onOpenDoc(f); e.currentTarget.value = ''; }} />
@@ -2209,6 +2408,7 @@ export default function BlueprintApp() {
             onDragStart={beginPaletteDrag}
             shouldIgnoreAdd={shouldIgnoreAdd}
             onLoadPack={onLoadPack}
+            onOpenStore={() => setStoreOpen(true)}
             impactOf={(id) => packImpact(doc, id)}
             onTogglePack={onTogglePack}
             onRenamePack={onRenamePack}
@@ -2312,10 +2512,14 @@ export default function BlueprintApp() {
             onHex={onFileHex}
             onBase={onFileBase}
             onAddRead={onAddRead}
+            onOpenBuffer={openBuffer}
+            bufferFocus={bufferFocus}
             layouts={doc.layouts}
-            onCreateLayout={createLayout}
-            onEditLayout={editLayout}
+            structures={structures}
+            usage={layoutUsage}
+            onCreateLayout={(nodeId) => { const id = createLayout(nodeId); openDesigner(`layout/${id}`); }}
             onSelectLayout={selectLayout}
+            onOpenDesigner={(structureId) => openDesigner(structureId)}
             onCollapse={() => toggleCollapsed('right')}
             multi={{ nodes: selectionSummary.nodes, edges: selectionSummary.edges }}
             renameId={renameAt === 'panel' ? renameId : null}
@@ -2376,6 +2580,15 @@ export default function BlueprintApp() {
       {quickAddOpen && (
         <QuickAdd packs={packs} onPick={onQuickPick} onClose={() => setQuickAddOpen(false)} />
       )}
+      {storeOpen && (
+        <PackStore
+          storeUrl={storeUrl}
+          packs={packs}
+          onStoreUrl={onStoreUrl}
+          onInstall={onInstallStorePack}
+          onClose={() => setStoreOpen(false)}
+        />
+      )}
       {follow && (
         <FollowPicker
           request={follow}
@@ -2419,6 +2632,22 @@ export default function BlueprintApp() {
             setTreeHidden(true);
           }}
           onResolve={resolveFromTree}
+        />
+      )}
+      {designerStack !== null && (
+        <DesignerApp
+          layouts={doc.layouts ?? []}
+          stack={designerStack}
+          usage={layoutUsage}
+          sessionDirty={designerDirty}
+          canUndo={canUndo(history)}
+          canRedo={canRedo(history)}
+          onNavigate={navigateDesigner}
+          onClose={closeDesigner}
+          onApply={applyDesignerLayouts}
+          onRestoreSession={restoreDesignerSession}
+          onUndo={doUndo}
+          onRedo={doRedo}
         />
       )}
       {localTree && (() => {

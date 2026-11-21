@@ -1,0 +1,27 @@
+{
+  "id": "gpt",
+  "name": "GPT partition table",
+  "version": "1.0.0",
+  "category": "system",
+  "order": 226,
+  "summary": "GUID Partition Table header",
+  "description": "GUID Partition Table header (after the protective MBR, at LBA 1).",
+  "tags": [
+    "filesystem",
+    "disk",
+    "partition",
+    "uefi"
+  ],
+  "author": "Nybble",
+  "license": "Free use / redistribution (Nybble registry)",
+  "homepage": "https://en.wikipedia.org/wiki/GUID_Partition_Table",
+  "coverage": "complete",
+  "source": {
+    "provider": "nybble",
+    "id": "gpt",
+    "format": "GPT",
+    "version": "1.0.0",
+    "url": "https://github.com/itsmajdbuilds/binary-explorer-registry/tree/main/formats/gpt",
+    "license": "Nybble format registry"
+  }
+}

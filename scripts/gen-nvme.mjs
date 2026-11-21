@@ -110,7 +110,7 @@ const edge = (id, from, fromPort, to, toPort) => ({
 });
 
 const doc = {
-  format: 'memlink-blueprint/2',
+  format: 'memlink-blueprint/3',
   packs: [{ id: 'p1', name: 'nvme-sq', source: packSource }],
   nodes: [
     node('n_file', '', 'file', 0, 40, { name: FILE_NAME },

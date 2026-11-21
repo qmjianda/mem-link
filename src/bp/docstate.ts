@@ -5,9 +5,11 @@
  * 复制 File 节点的 base64 字符串（100 层历史的内存增量只有指针）。
  */
 
-import type { BlueprintPack, BPEdge, BPNode } from './types';
+import type { BlueprintPack, BPEdge, BPNode, PackStoreRef } from './types';
 import { makeDoc } from './doc';
 import type { BinaryLayout } from './layouts';
+
+export type { PackStoreRef } from './types';
 
 /** 已编译的 pack：`source` 是原文（可序列化），`pack` 是编译产物（不可序列化） */
 export interface LoadedPack {
@@ -20,6 +22,8 @@ export interface LoadedPack {
    * 禁用只影响求值：pack、节点、连线都留在文档里。
    */
   enabled?: boolean;
+  /** 从商店安装时的来源信息；本机导入的 pack 没有 */
+  store?: PackStoreRef;
 }
 
 /** 唯一判定入口：只有显式 false 才算禁用 */
@@ -62,7 +66,7 @@ export function maxIdSeq(doc: DocState, floor = 100): number {
 /** 文档的深度可序列化视图。 */
 export function docJson(doc: DocState): string {
   return JSON.stringify(makeDoc(
-    doc.packs.map((p) => ({ id: p.id, name: p.name, source: p.source })),
+    doc.packs.map((p) => ({ id: p.id, name: p.name, source: p.source, ...(p.store ? { store: p.store } : {}) })),
     doc.nodes,
     doc.edges,
     doc.layouts,

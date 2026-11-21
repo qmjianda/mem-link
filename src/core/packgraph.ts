@@ -53,7 +53,7 @@ function endianOf(pack: Pack, f: FieldDef): Endian {
 export function decodeFieldRaw(
   mem: Memory, pack: Pack, type: TypeDef, f: FieldDef, addr: number, depth = 0,
 ): unknown {
-  const at = addr + f.offset;
+  const at = addr + (f.offset ?? 0);
   const endian = endianOf(pack, f);
   switch (f.kind) {
     case 'u8': return mem.readUInt(at, 1, endian, false);
@@ -75,8 +75,8 @@ export function decodeFieldRaw(
       const raw = mem.readBig(at, size, endian, false);
       const width = BigInt(b.width);
       const shift = endian === 'little'
-        ? BigInt(b.offset)
-        : BigInt(size * 8 - b.offset - b.width);
+        ? BigInt(b.offset ?? 0)
+        : BigInt(size * 8 - (b.offset ?? 0) - b.width);
       let v = Number((raw >> shift) & ((1n << width) - 1n));
       if (b.signed && v >= 2 ** (b.width - 1)) v -= 2 ** b.width;
       return v;
@@ -85,13 +85,13 @@ export function decodeFieldRaw(
     case 'bytes': return mem.bytesAt(at, f.count ?? 0).slice();
     case 'record': {
       if (depth >= 3) return { '…': true };
-      const t = pack.types.find((x) => x.name === f.of);
+      const t = f.ofType ?? pack.types.find((x) => x.name === f.of);
       if (!t) return null;
       return decodeRecord(mem, pack, t, at, depth + 1);
     }
     case 'array': {
       const n = f.count ?? 0;
-      const elemType = pack.types.find((x) => x.name === f.of);
+      const elemType = f.ofType ?? pack.types.find((x) => x.name === f.of);
       const es = elemType ? elemType.size : kindSize((f.of ?? 'u8') as FieldDef['kind'], pack.pointerSize);
       const out: unknown[] = [];
       for (let i = 0; i < n; i++) {
@@ -137,6 +137,8 @@ export function formatPackValue(f: FieldDef, v: unknown): string {
   if (typeof v === 'boolean') return v ? 'true' : 'false';
   if (typeof v === 'number') {
     if (!Number.isFinite(v)) return String(v);
+    const mapped = f.values?.[String(v)];
+    if (mapped !== undefined) return mapped;
     switch (f.format) {
       case 'hex': return toHex(v);
       case 'bin': return `${v < 0 ? '-' : ''}0b${Math.abs(Math.trunc(v)).toString(2)}`;

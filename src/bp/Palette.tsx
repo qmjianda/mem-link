@@ -17,6 +17,8 @@ interface Props {
   /** true when the click that follows a drag must not create another node */
   shouldIgnoreAdd: () => boolean;
   onLoadPack: (f: File) => void;
+  /** 打开 pack 商店浮层 */
+  onOpenStore: () => void;
   /** 影响面统计（节点数 / 相关连线数），删除与禁用确认文案要用 */
   impactOf: (packId: string) => PackImpact;
   onTogglePack: (packId: string, enabled: boolean) => void;
@@ -61,7 +63,7 @@ export function nodeItemsOf(packs: LoadedPack[]): PalItem[] {
 
 export default function Palette({
   packs, onAdd, onDragStart, shouldIgnoreAdd,
-  onLoadPack,
+  onLoadPack, onOpenStore,
   impactOf, onTogglePack, onRenamePack, onDeletePack, onCleanupPack,
   collapsedGroups, onToggleGroup, onCollapse,
 }: Props) {
@@ -94,7 +96,7 @@ export default function Palette({
       out.push({
         key: p.id,
         title: p.name,
-        sub: `${Object.keys(p.pack.types).length} 类型 · ${items.length} 节点`,
+        sub: `${p.store ? `v${p.store.version}${p.store.helpers ? ` · ${p.store.helpers} 辅助` : ''} · ` : ''}${Object.keys(p.pack.types).length} 类型 · ${items.length} 节点`,
         enabled: isPackEnabled(p),
         items,
       });
@@ -152,6 +154,9 @@ export default function Palette({
               }}
             />
           </label>
+          <button type="button" className="bp-mini" onClick={onOpenStore} title="从 GitHub 商店浏览并安装 pack">
+            Pack 商店
+          </button>
         </div>
         {groups.map((g) => {
           // 搜索命中时强制展开，但不改写用户已保存的折叠状态。

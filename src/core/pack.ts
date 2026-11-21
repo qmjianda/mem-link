@@ -1,23 +1,9 @@
 /**
  * mem-link / pack
  *
- * A "pack" is a TypeScript-declared description of a binary layout. The file
- * is executed inside the tool with a small DSL injected as globals:
- *
- *   export default definePack({
- *     endian: 'little', pointerSize: 4,
- *     constants: { BASE: 0x100, STRIDE: 24 },
- *     types: [
- *       struct('Entry', 24, [
- *         i16('next', 0, { follow: 'self', transform: (v, c) => v < 0 ? null : c.consts.BASE + v * c.consts.STRIDE }),
- *       ]),
- *     ],
- *     roots: [{ type: 'Entry', address: 0x100 }],
- *   });
- *
- * Layout is explicit: the generator (usually an AI) is responsible for offsets
- * and sizes. The runtime never parses C. Transforms stay live functions, so a
- * pack can be evaluated in the browser without a build step.
+ * One structure DSL: fields are laid out in declaration order, `at` anchors a
+ * byte offset, and types are referenced directly. The runtime never parses C;
+ * C constructs are represented as the resolved byte layout.
  */
 
 import type { Endian } from './types';
@@ -64,38 +50,70 @@ export interface TransformCtx {
 export type TransformFn = (v: unknown, ctx: TransformCtx) => unknown;
 
 export interface FieldOpts {
+  /** byte offset anchor; omitted means "place at the current cursor" */
+  at?: number;
+  /** byte length for string / bytes; optional size override for other kinds */
+  size?: number;
   endian?: Endian;
   format?: string;
   label?: string;
-  follow?: string;
-  transform?: TransformFn;
+  /** numeric value → display label; display only, never changes the value */
+  values?: Record<string, string>;
   signed?: boolean;
-  size?: number;
+  transform?: TransformFn;
 }
+
+export interface BitOpts extends FieldOpts {
+  /** bit offset inside the storage unit */
+  bit?: number;
+  /** storage unit bytes: 1, 2, 4 or 8 */
+  unit?: 1 | 2 | 4 | 8;
+}
+
+export type LayoutOp =
+  | { __op: 'pad'; n: number }
+  | { __op: 'align'; n: number };
 
 export interface FieldDef {
   name: string;
-  offset: number;
   kind: FieldKind;
-  /** explicit byte size (required for bytes/string, optional for the rest) */
+  /** undefined = auto layout; a number = anchored byte offset */
+  offset?: number;
+  /** true when the author supplied at; auto fields are re-flowed on materialize */
+  anchored?: boolean;
+  /** explicit byte size (required for string / bytes; optional override) */
   size?: number;
-  /** element count for array/string */
+  /** element count for array */
   count?: number;
-  /** record type for record/array */
+  /** type name for diagnostics, or scalar kind for array */
   of?: string;
-  bits?: { offset: number; width: number; signed?: boolean };
+  /** direct type reference for record / array */
+  ofType?: TypeDef;
+  bits?: { offset?: number; width: number; unit?: number; unitExplicit?: boolean; signed?: boolean };
   endian?: Endian;
   format?: string;
   label?: string;
-  follow?: string;
+  values?: Record<string, string>;
+  role?: 'address' | 'offset' | 'index';
   transform?: TransformFn;
+  signed?: boolean;
 }
 
 export interface TypeDef {
   name: string;
   size: number;
   union?: boolean;
+  /** fields use the cursor rule; computed again when a layout reference is materialized */
+  auto?: boolean;
   fields: FieldDef[];
+  /** placeholder created by layoutType(id) */
+  ref?: { kind: 'layout'; id: string };
+  /** original declaration list, including pad/align instructions */
+  layoutFields?: Array<FieldDef | LayoutOp>;
+  /** true when a nested field references a document layout */
+  hasLayoutRef?: boolean;
+  /** explicit total length supplied by the author (preserved across re-layouts) */
+  sizeExplicit?: number;
 }
 
 export interface RootDef {
@@ -146,28 +164,30 @@ export function kindSize(kind: FieldKind, pointerSize: 4 | 8): number {
   return KIND_SIZE[kind] ?? 0;
 }
 
-export function fieldSize(f: FieldDef, pack: Pick<Pack, 'pointerSize' | 'types'>): number {
+const sizeBase = (pointerSize: 4 | 8) => ({ pointerSize, types: [] as TypeDef[] });
+
+export function fieldSize(f: Pick<FieldDef, 'kind' | 'size' | 'count' | 'of' | 'ofType' | 'bits'>, pack?: { pointerSize: 4 | 8; types: TypeDef[] }): number {
   if (f.size != null) return f.size;
-  if (f.kind === 'string') return f.count ?? 0;
-  if (f.kind === 'bytes') return f.count ?? 0;
-  if (f.kind === 'bits') return Math.ceil(((f.bits?.offset ?? 0) + (f.bits?.width ?? 0)) / 8);
-  if (f.kind === 'record') {
-    const t = pack.types.find((x) => x.name === f.of);
-    return t?.size ?? 0;
-  }
+  if (f.kind === 'string' || f.kind === 'bytes') return f.count ?? 0;
+  if (f.kind === 'bits') return f.bits?.unit ?? Math.ceil(((f.bits?.offset ?? 0) + (f.bits?.width ?? 0)) / 8);
+  if (f.kind === 'record') return f.ofType?.size ?? 0;
   if (f.kind === 'array') {
-    const elem = f.of ? pack.types.find((x) => x.name === f.of) : undefined;
-    const es = elem ? elem.size : kindSize((f.of ?? 'u8') as FieldKind, pack.pointerSize);
-    return es * (f.count ?? 0);
+    const elem = f.ofType?.size ?? (f.of ? kindSize(f.of as FieldKind, pack?.pointerSize ?? 4) : 0);
+    return elem * (f.count ?? 0);
   }
-  return kindSize(f.kind, pack.pointerSize);
+  return kindSize(f.kind, pack?.pointerSize ?? 4);
 }
 
 /* -------------------------------------------------------------------- DSL */
 
+function cleanOpts(opts: FieldOpts): Omit<FieldOpts, 'at' | 'size' | 'bit' | 'unit'> {
+  const { at: _at, size: _size, ...rest } = opts;
+  return rest;
+}
+
 const scalar = (kind: FieldKind) =>
-  (name: string, offset: number, opts: FieldOpts = {}): FieldDef => ({
-    name, offset, kind, ...opts,
+  (name: string, opts: FieldOpts = {}): FieldDef => ({
+    name, kind, offset: opts.at, anchored: opts.at != null, ...(opts.size != null ? { size: opts.size } : {}), ...cleanOpts(opts),
   });
 
 export const u8 = scalar('u8');
@@ -184,49 +204,248 @@ export const bool = scalar('bool');
 export const char = scalar('char');
 export const ptr = scalar('ptr');
 
-export function str(name: string, offset: number, count: number, opts: FieldOpts = {}): FieldDef {
-  return { name, offset, kind: 'string', count, size: count, ...opts };
+export function str(name: string, opts: FieldOpts & { size: number }): FieldDef {
+  return { name, kind: 'string', offset: opts.at, anchored: opts.at != null, size: opts.size, count: opts.size, ...cleanOpts(opts) };
 }
 
-export function bytes(name: string, offset: number, count: number, opts: FieldOpts = {}): FieldDef {
-  return { name, offset, kind: 'bytes', count, size: count, ...opts };
+export function bytes(name: string, opts: FieldOpts & { size: number }): FieldDef {
+  return { name, kind: 'bytes', offset: opts.at, anchored: opts.at != null, size: opts.size, count: opts.size, ...cleanOpts(opts) };
 }
 
-export function bits(
-  name: string, offset: number, size: number, bitOffset: number, width: number, opts: FieldOpts = {},
-): FieldDef {
+export function bits(name: string, width: number, opts: BitOpts = {}): FieldDef {
   return {
-    name, offset, kind: 'bits', size,
-    bits: { offset: bitOffset, width, signed: opts.signed },
-    ...opts,
+    name, kind: 'bits', offset: opts.at, anchored: opts.at != null,
+    bits: { offset: opts.bit, width, unit: opts.unit, unitExplicit: opts.unit != null, signed: opts.signed },
+    ...cleanOpts(opts),
   };
 }
 
-export function record(name: string, offset: number, of: string, opts: FieldOpts = {}): FieldDef {
-  return { name, offset, kind: 'record', of, ...opts };
+export function record(name: string, type: TypeDef, opts: FieldOpts = {}): FieldDef {
+  return { name, kind: 'record', offset: opts.at, anchored: opts.at != null, of: type.name, ofType: type, ...cleanOpts(opts) };
 }
 
-export function array(
-  name: string, offset: number, of: string, count: number, opts: FieldOpts = {},
-): FieldDef {
-  return { name, offset, kind: 'array', of, count, ...opts };
+export function array(name: string, type: TypeDef | FieldKind, count: number, opts: FieldOpts = {}): FieldDef {
+  return typeof type === 'string'
+    ? { name, kind: 'array', offset: opts.at, anchored: opts.at != null, of: type, count, ...cleanOpts(opts) }
+    : { name, kind: 'array', offset: opts.at, anchored: opts.at != null, of: type.name, ofType: type, count, ...cleanOpts(opts) };
 }
 
-export function struct(name: string, size: number, fields: FieldDef[]): TypeDef {
-  return { name, size, fields };
+export function pad(n: number): LayoutOp {
+  return { __op: 'pad', n };
 }
 
-export function union(name: string, size: number, fields: FieldDef[]): TypeDef {
-  return { name, size, union: true, fields };
+export function align(n: number): LayoutOp {
+  return { __op: 'align', n };
+}
+
+export function layoutType(id: string): TypeDef {
+  return { name: `@layout:${id}`, size: 0, fields: [], ref: { kind: 'layout', id }, auto: true };
+}
+
+interface StructOpts {
+  /** override the derived total length; must not be smaller than the content */
+  size?: number;
+}
+
+function assertAnchor(value: unknown, label: string): void {
+  if (value == null) return;
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw new Error(`${label} 的偏移必须是非负安全整数`);
+  }
+}
+
+function assertCount(value: unknown, label: string): void {
+  if (!Number.isSafeInteger(value) || (value as number) < 1) {
+    throw new Error(`${label} 的长度必须是正整数`);
+  }
+}
+
+function alignUp(value: number, n: number): number {
+  return Math.ceil(value / n) * n;
+}
+
+function bitGroupUnit(bitsNeeded: number, explicit?: number): number {
+  if (explicit != null) {
+    if (![1, 2, 4, 8].includes(explicit)) throw new Error(`位组的存储宽度必须是 1、2、4 或 8 字节`);
+    if (bitsNeeded > explicit * 8) throw new Error(`位组需要 ${bitsNeeded} 位，超过 ${explicit} 字节`);
+    return explicit;
+  }
+  for (const unit of [1, 2, 4, 8]) if (bitsNeeded <= unit * 8) return unit;
+  throw new Error(`位组需要 ${bitsNeeded} 位，超过 64 位上限`);
+}
+
+function buildType(name: string, fields: Array<FieldDef | LayoutOp>, union: boolean, opts: StructOpts, pointerSize: 4 | 8): TypeDef {
+  if (!name.trim()) throw new Error('结构名称不能为空');
+  const type: TypeDef = { name, size: 0, fields: [], union, auto: true, layoutFields: fields.slice() };
+  let cursor = 0;
+  for (let i = 0; i < fields.length; i += 1) {
+    const raw = fields[i];
+    if ('__op' in raw) {
+      assertCount(raw.n, raw.__op === 'pad' ? 'pad' : 'align');
+      cursor = raw.__op === 'pad' ? cursor + raw.n : alignUp(cursor, raw.n);
+      continue;
+    }
+    const f = raw;
+    if (f.kind === 'bits') {
+      const group: FieldDef[] = [f];
+      let j = i + 1;
+      // A bit field with an explicit unit or at-anchor starts a new group only
+      // when it is the first field; consecutive plain bit fields join it.
+      while (j < fields.length) {
+        const next = fields[j];
+        if ('__op' in next || next.kind !== 'bits' || next.anchored || next.bits?.unitExplicit) break;
+        group.push(next);
+        j += 1;
+      }
+      const first = group[0];
+      const start = first.anchored ? (first.offset ?? 0) : (union ? 0 : cursor);
+      assertAnchor(start, `${name}.${first.name}`);
+      let used = 0;
+      let bitCursor = 0;
+      for (const b of group) {
+        if (!b.bits) throw new Error(`${name}.${b.name} 缺少位域参数`);
+        if (b.bits.width < 1 || b.bits.width > 64) throw new Error(`${name}.${b.name} 的位宽必须在 1–64 之间`);
+        const bit = b.bits.offset ?? bitCursor;
+        b.bits = { ...b.bits, offset: bit };
+        bitCursor = Math.max(bitCursor, bit + b.bits.width);
+        used = Math.max(used, bitCursor);
+      }
+      const unit = bitGroupUnit(used, group.find((b) => b.bits?.unit != null)?.bits?.unit);
+      for (const b of group) {
+        b.offset = start;
+        b.bits = { ...b.bits!, unit };
+        b.size = unit;
+        type.fields.push(b);
+      }
+      cursor = Math.max(cursor, start + unit);
+      i = j - 1;
+      continue;
+    }
+    const size = fieldSize(f, sizeBase(pointerSize));
+    if (!Number.isFinite(size) || size <= 0) {
+      if (f.kind === 'record' && f.ofType?.ref) {
+        type.hasLayoutRef = true;
+        f.size = 0;
+      } else {
+        throw new Error(`${name}.${f.name} 的大小非法`);
+      }
+    } else {
+      f.size = f.size ?? size;
+    }
+    const start = f.anchored ? (f.offset ?? 0) : (union ? 0 : cursor);
+    assertAnchor(start, `${name}.${f.name}`);
+    f.offset = start;
+    type.fields.push(f);
+    if (f.ofType) {
+      if (f.ofType.ref) type.hasLayoutRef = true;
+      else if (f.ofType.auto) type.hasLayoutRef = false;
+    }
+    cursor = Math.max(cursor, start + (f.size ?? 0));
+  }
+  if (!union) {
+    const spans = type.fields.filter(f => f.kind !== 'bits')
+      .map(f => ({ name: f.name, start: f.offset ?? 0, end: (f.offset ?? 0) + (f.size ?? 0) }))
+      .sort((a, b) => a.start - b.start || a.end - b.end);
+    for (let i = 1; i < spans.length; i += 1) {
+      if (spans[i].start < spans[i - 1].end) throw new Error(`${name} 字段重叠：${spans[i - 1].name} / ${spans[i].name}`);
+    }
+  }
+  if (opts.size != null) {
+    assertCount(opts.size, `${name} 的长度`);
+    if (opts.size < cursor) throw new Error(`${name} 的长度 ${opts.size} 小于字段结束位置 ${cursor}`);
+    type.size = opts.size;
+  } else {
+    type.size = cursor;
+  }
+  if (type.size <= 0) throw new Error(`${name} 的长度必须大于 0`);
+  if (opts.size != null) type.sizeExplicit = opts.size;
+  return type;
+}
+
+export function struct(name: string, fields: Array<FieldDef | LayoutOp>, opts: StructOpts = {}): TypeDef {
+  return buildType(name, fields, false, opts, 4);
+}
+
+export function union(name: string, fields: Array<FieldDef | LayoutOp>, opts: StructOpts = {}): TypeDef {
+  return buildType(name, fields, true, opts, 4);
+}
+
+/**
+ * Recursively collect direct type references. The same object may be
+ * referenced many times; two different objects with the same name are an
+ * error, never a last-write-wins overwrite.
+ */
+export function collectTypes(roots: TypeDef[]): Map<string, TypeDef> {
+  const out = new Map<string, TypeDef>();
+  const visit = (type: TypeDef, stack: Set<TypeDef>) => {
+    if (type.ref) {
+      const existing = out.get(type.name);
+      if (existing && existing !== type) throw new Error(`类型名 ${type.name} 被不同定义重复使用`);
+      out.set(type.name, type);
+      return;
+    }
+    if (stack.has(type)) throw new Error(`类型 ${type.name} 存在循环引用`);
+    const existing = out.get(type.name);
+    if (existing && existing !== type) throw new Error(`类型名 ${type.name} 被不同定义重复使用`);
+    if (existing) return;
+    out.set(type.name, type);
+    stack.add(type);
+    for (const f of type.fields) {
+      if (f.ofType && !f.ofType.ref) visit(f.ofType, stack);
+      if (f.ofType?.ref) type.hasLayoutRef = true;
+    }
+    stack.delete(type);
+  };
+  for (const root of roots) visit(root, new Set());
+  return out;
+}
+
+/** Recompute auto layouts after pointer size and nested type sizes are known. */
+export function finalizeTypes(types: Map<string, TypeDef>, pointerSize: 4 | 8): void {
+  const done = new Set<TypeDef>();
+  const visit = (type: TypeDef, stack: Set<TypeDef>) => {
+    if (type.ref || done.has(type)) return;
+    if (stack.has(type)) throw new Error(`类型 ${type.name} 存在循环引用`);
+    stack.add(type);
+    for (const f of type.fields) {
+      if (f.ofType && !f.ofType.ref) visit(f.ofType, stack);
+      if (f.ofType?.ref) type.hasLayoutRef = true;
+    }
+    if (type.auto) {
+      const rebuilt = buildType(type.name, type.layoutFields ?? type.fields, !!type.union, { size: type.sizeExplicit }, pointerSize);
+      type.fields = rebuilt.fields;
+      type.layoutFields = rebuilt.layoutFields;
+      type.size = rebuilt.size;
+      type.hasLayoutRef = rebuilt.hasLayoutRef;
+      type.sizeExplicit = rebuilt.sizeExplicit;
+    }
+    stack.delete(type);
+    done.add(type);
+  };
+  for (const type of types.values()) visit(type, new Set());
+}
+
+/** Recompute one auto layout after its nested direct references have sizes. */
+export function relayoutType(type: TypeDef, pointerSize: 4 | 8): TypeDef {
+  if (type.ref || !type.auto) return type;
+  const rebuilt = buildType(type.name, type.layoutFields ?? type.fields, !!type.union, { size: type.sizeExplicit }, pointerSize);
+  type.fields = rebuilt.fields;
+  type.layoutFields = rebuilt.layoutFields;
+  type.size = rebuilt.size;
+  type.hasLayoutRef = rebuilt.hasLayoutRef;
+  type.sizeExplicit = rebuilt.sizeExplicit;
+  return type;
 }
 
 export function definePack(input: PackInput): Pack {
+  const types = collectTypes(input.types ?? []);
+  finalizeTypes(types, input.pointerSize ?? 4);
   return {
     name: input.name ?? 'untitled',
     endian: input.endian ?? 'little',
     pointerSize: input.pointerSize ?? 4,
     constants: input.constants ?? {},
-    types: input.types ?? [],
+    types: [...types.values()],
     roots: input.roots ?? [],
     program: input.program,
   };
@@ -236,5 +455,5 @@ export function definePack(input: PackInput): Pack {
 export const PACK_DSL = {
   definePack, struct, union,
   u8, u16, u32, u64, i8, i16, i32, i64, f32, f64, bool, char, ptr,
-  str, bytes, bits, record, array,
+  str, bytes, bits, record, array, pad, align, layoutType,
 } as const;

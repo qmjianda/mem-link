@@ -1,0 +1,28 @@
+{
+  "id": "psd",
+  "name": "Photoshop document",
+  "version": "1.0.0",
+  "category": "image",
+  "order": 258,
+  "summary": "Adobe Photoshop document",
+  "description": "Photoshop PSD/PSB: the file header and the four length-prefixed sections that follow it.",
+  "tags": [
+    "image",
+    "photoshop",
+    "layers",
+    "raster",
+    "adobe"
+  ],
+  "author": "Nybble",
+  "license": "Free use / redistribution (Nybble registry)",
+  "homepage": "https://www.adobe.com/devnet-apps/photoshop/fileformatashtml/",
+  "coverage": "partial",
+  "source": {
+    "provider": "nybble",
+    "id": "psd",
+    "format": "PSD",
+    "version": "1.0.0",
+    "url": "https://github.com/itsmajdbuilds/binary-explorer-registry/tree/main/formats/psd",
+    "license": "Nybble format registry"
+  }
+}

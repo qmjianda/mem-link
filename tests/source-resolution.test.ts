@@ -55,7 +55,7 @@ describe('字符串作为数据源（值依赖）', () => {
 
 describe('非字节端口作为数据源（来源依赖）', () => {
   it('来源线不引入值依赖环，调用方可反向提供计算值', () => {
-    const loaded = loadBlueprintPack(`const Dummy = struct('Dummy', 1, [u8('value', 0)]);
+    const loaded = loadBlueprintPack(`const Dummy = struct('Dummy', [u8('value')]);
     export default definePack({
       name: 'two-way',
       types: { Dummy },

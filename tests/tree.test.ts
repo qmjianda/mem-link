@@ -4,7 +4,7 @@ import { loadBlueprintPack } from '../src/bp/load';
 import { findRowPathByAddr, focusFromTruncation, StructTree } from '../src/bp/tree';
 import type { BlueprintPack, ListNodeDef } from '../src/bp/types';
 import { Memory } from '../src/core/mem';
-import { array, record, struct, u16, u32, u8 } from '../src/core/pack';
+import { array, ptr, record, struct, u16, u32, u8 } from '../src/core/pack';
 import { demoBinary } from './demo-bin';
 
 function loadDemo(): BlueprintPack {
@@ -120,12 +120,12 @@ describe('struct tree model', () => {
 });
 
 describe('struct tree nested decode', () => {
-  const Inner = struct('Inner', 4, [u16('a', 0), u16('b', 2)]);
-  const Outer = struct('Outer', 16, [
-    u8('kind', 0),
-    array('items', 4, 'Inner', 2),
-    record('one', 12, 'Inner'),
-  ]);
+  const Inner = struct('Inner', [u16('a'), u16('b')]);
+  const Outer = struct('Outer', [
+    u8('kind'),
+    array('items', Inner, 2, { at: 4 }),
+    record('one', Inner, { at: 12 }),
+  ], { size: 16 });
   const pack: BlueprintPack = {
     name: 'nested', endian: 'little', pointerSize: 4, constants: {},
     types: { Inner, Outer }, nodes: {},
@@ -187,10 +187,10 @@ describe('struct tree nested decode', () => {
 });
 
 describe('struct tree pointer follow', () => {
-  const Node = struct('Node', 8, [
-    u32('next', 0, { follow: 'self' }),
-    u32('value', 4),
-  ]);
+  const Node = struct('Node', [
+    u32('next', { format: 'hex' }),
+    u32('value'),
+  ], { size: 8 });
   const pack: BlueprintPack = {
     name: 'chain', endian: 'little', pointerSize: 4, constants: {},
     types: { Node }, nodes: {},
@@ -210,19 +210,16 @@ describe('struct tree pointer follow', () => {
   put32(0x114, 22);
   const mem = new Memory(bytes, 0x100);
 
-  it('follow 字段可以就地在树里展开目标结构', () => {
+  it('hex 指针字段只提供图上解析，不自动展开', () => {
     const tree = new StructTree({ kind: 'struct', pack, type: Node, mem, addr: 0x100 });
     const rows = tree.rows(new Set([tree.rootPath]), '');
     const next = rows.find((r) => r.label === 'next');
-    expect(next?.expandable).toBe(true);
+    expect(next?.expandable).toBe(false);
     expect(next?.ref?.addr).toBe(0x110);
-
-    const deeper = tree.rows(new Set([tree.rootPath, 'Node.next']), '');
-    expect(deeper.find((r) => r.path === 'Node.next>Node.value')?.valueText).toBe('22');
   });
 
-  it('没有 follow 的指针只提供图上解析，不展开', () => {
-    const Plain = struct('Plain', 4, [{ name: 'p', offset: 0, kind: 'ptr' as const }]);
+  it('ptr 字段同样只提供图上解析，不自动展开', () => {
+    const Plain = struct('Plain', [ptr('p')]);
     const p: BlueprintPack = { ...pack, types: { Plain } };
     const tree = new StructTree({ kind: 'struct', pack: p, type: Plain, mem, addr: 0x100 });
     const rows = tree.rows(new Set([tree.rootPath]), '');

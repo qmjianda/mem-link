@@ -1,0 +1,29 @@
+{
+  "id": "mp3",
+  "name": "MP3 (ID3v2 tag)",
+  "version": "1.0.0",
+  "category": "media",
+  "order": 247,
+  "summary": "MP3 audio with an ID3v2 tag (v2.2, v2.3 or v2.4)",
+  "description": "ID3v2 tag at the start of an MP3: header, syncsafe size and every frame, with the common text frames decoded.",
+  "tags": [
+    "audio",
+    "mp3",
+    "id3",
+    "metadata",
+    "mpeg"
+  ],
+  "author": "Nybble",
+  "license": "Free use / redistribution (Nybble registry)",
+  "homepage": "https://id3.org/id3v2.3.0",
+  "coverage": "partial",
+  "helpers": 52,
+  "source": {
+    "provider": "nybble",
+    "id": "mp3",
+    "format": "MP3",
+    "version": "1.0.0",
+    "url": "https://github.com/itsmajdbuilds/binary-explorer-registry/tree/main/formats/mp3",
+    "license": "Nybble format registry"
+  }
+}

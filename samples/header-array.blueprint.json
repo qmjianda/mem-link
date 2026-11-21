@@ -1,5 +1,5 @@
 {
-  "format": "memlink-blueprint/2",
+  "format": "memlink-blueprint/3",
   "packs": [],
   "layouts": [
     {
@@ -11,30 +11,29 @@
         {
           "id": "f1",
           "name": "tableOffset",
-          "offset": "0",
+          "at": "0",
           "kind": "u16",
           "role": "offset"
         },
         {
           "id": "f2",
           "name": "count",
-          "offset": "2",
+          "at": "2",
           "kind": "u8"
         },
         {
           "id": "f3",
           "name": "magic",
-          "offset": "3",
+          "at": "3",
           "kind": "u8"
         },
         {
           "id": "f4",
           "name": "crc32",
-          "offset": "4",
+          "at": "4",
           "kind": "u32"
         }
-      ],
-      "nextField": 5
+      ]
     },
     {
       "id": "entry",
@@ -45,17 +44,16 @@
         {
           "id": "f1",
           "name": "id",
-          "offset": "0",
+          "at": "0",
           "kind": "u16"
         },
         {
           "id": "f2",
           "name": "value",
-          "offset": "2",
+          "at": "2",
           "kind": "u16"
         }
-      ],
-      "nextField": 3
+      ]
     }
   ],
   "nodes": [
@@ -82,7 +80,7 @@
       "y": 0,
       "params": {
         "address": "0x1000",
-        "layoutId": "header"
+        "structureId": "layout/header"
       }
     },
     {
@@ -101,7 +99,7 @@
       "y": 0,
       "params": {
         "elementType": "record",
-        "layoutId": "entry"
+        "structureId": "layout/entry"
       }
     },
     {
@@ -169,7 +167,7 @@
       "id": "e2",
       "from": {
         "node": "header",
-        "port": "field:header:f1"
+        "port": "field:layout/header:f1"
       },
       "to": {
         "node": "offset",
@@ -191,7 +189,7 @@
       "id": "e4",
       "from": {
         "node": "header",
-        "port": "field:header:f2"
+        "port": "field:layout/header:f2"
       },
       "to": {
         "node": "array",
@@ -246,7 +244,7 @@
       "id": "e9",
       "from": {
         "node": "header",
-        "port": "field:header:f4"
+        "port": "field:layout/header:f4"
       },
       "to": {
         "node": "checksumOk",
@@ -257,7 +255,7 @@
       "id": "e10",
       "from": {
         "node": "header",
-        "port": "field:header:f3"
+        "port": "field:layout/header:f3"
       },
       "to": {
         "node": "magicOk",

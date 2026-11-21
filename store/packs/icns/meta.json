@@ -1,0 +1,28 @@
+{
+  "id": "icns",
+  "name": "Apple icon image",
+  "version": "1.0.0",
+  "category": "image",
+  "order": 230,
+  "summary": "Apple .icns icon family: the file header and its stream of icon elements.",
+  "description": "Apple .icns icon family: the file header and its stream of icon elements.",
+  "tags": [
+    "image",
+    "icon",
+    "apple",
+    "macos"
+  ],
+  "author": "Nybble",
+  "license": "Free use / redistribution (Nybble registry)",
+  "homepage": "https://en.wikipedia.org/wiki/Apple_Icon_Image_format",
+  "coverage": "partial",
+  "helpers": 2,
+  "source": {
+    "provider": "nybble",
+    "id": "icns",
+    "format": "ICNS",
+    "version": "1.0.0",
+    "url": "https://github.com/itsmajdbuilds/binary-explorer-registry/tree/main/formats/icns",
+    "license": "Nybble format registry"
+  }
+}

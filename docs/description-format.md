@@ -2,7 +2,7 @@
 
 mem-link 的 pack 是一个 TypeScript 文件：它定义**内存布局**（types）和**解析/计算节点**（nodes）。工具把 pack 里的节点变成左栏条目；用户把它们拖到画布上、填地址、连线。
 
-> 设计目标：解析规则属于 pack，而不是工具。链表、数组、结构体、下标换算、位域解释都写在 pack 里。
+> 设计目标：解析规则属于 pack，而不是工具。链表、数组、结构体、下标换算、位域解释都写在 pack 里。结构只描述**解析后的字节布局**，不模拟 C 编译器或宏展开。
 
 ## 1. 加载机制
 
@@ -13,18 +13,21 @@ export default definePack({ ... });
 - 文件必须是单文件、无 `import`；可以用文件内的 `const`、函数、闭包。
 - 工具用 Sucrase 去掉类型，再在 `new Function` 里注入 DSL 并执行。
 - 执行结果 `pack` 保留函数引用（transform、next、run 都是 live 闭包）。
-- 所以 pack 是**代码**：只加载可信文件；页面需要允许 `unsafe-eval`。
+- pack 是**代码**：只加载可信文件；页面需要允许 `unsafe-eval`。
+- 「Pack 商店」安装的 pack 与本地 `.bp.ts` 走同一条加载路径；商店的版本、
+  来源、SHA-256 与覆盖度只存在于 `meta.json`/文档的 `store` 元数据里，不进入
+  `definePack`。详见 [`pack-store.md`](pack-store.md)。
 
 最小示例：
 
 ```ts
 /// <reference path="../types/memlink-bp.d.ts" />
 
-const Header = struct('Header', 8, [
-  u16('magic', 0, { format: 'hex' }),
-  u16('head', 2),
-  u16('tail', 4),
-  u16('count', 6),
+const Header = struct('Header', [
+  u16('magic', { format: 'hex' }),
+  u16('head'),
+  u16('tail'),
+  u16('count'),
 ]);
 
 export default definePack({
@@ -53,61 +56,106 @@ definePack({
 
 - `types` 可以写成对象或数组；内部统一成按名字索引。
 - `nodes` 的 key 是节点定义的 id；画布上的实例只存 `packId + nodeId + 参数`。
-- `constants` 会出现在节点编辑器的 `ctx.consts` 里，也显示在左栏。
+- `constants` 会出现在节点编辑器的 `ctx.consts` 里，也显示在左栏；它不参与布局推导。
 
 ## 3. 类型与布局
 
-### 3.1 标量
+### 3.1 只有一套位置规则
+
+字段按声明顺序处理：
+
+- 不写 `at`：从当前游标开始，字段结束后游标推进到字段末尾。
+- 写 `at`：固定在指定字节偏移；如果结束位置超过游标，游标推进到结束位置。
+- `pad(n)`：在游标处增加 n 字节。
+- `align(n)`：把游标推进到 n 的整数倍。
+- 结构长度等于最终游标；可以用 `{ size }` 覆盖，但不能小于内容。
 
 ```ts
-u8(name, offset, opts?)
-u16 / u32 / u64
-i8 / i16 / i32 / i64
+const Header = struct('Header', [
+  u8('kind'),
+  align(4),
+  u32('flags'),
+  pad(2),
+]);
+
+const Anchored = struct('Anchored', [
+  u8('kind'),
+  u32('flags', { at: 16 }),
+  u16('tail'),
+], { size: 32 });
+```
+
+### 3.2 标量
+
+字段辅助函数统一为 `(name, opts?)`；`opts.at` 是字节偏移，`opts.size` 是可选覆盖。
+
+```ts
+u8(name, opts?)       i8 / u16 / i16 / u32 / i32 / u64 / i64
 f32 / f64
 bool / char / ptr
 ```
 
-`ptr` 的宽度由 pack 的 `pointerSize` 决定。字段的 `size` 默认由 kind 推导。
+`ptr` 的宽度由 pack 的 `pointerSize` 决定。
 
-### 3.2 字符串 / 字节 / 位域
+### 3.3 字符串 / 字节
 
 ```ts
-str('name', 8, 12)                  // 12 字节，UTF-8，读到 \0 截止
-bytes('blob', 16, 32)               // 32 字节，显示为 hex
-bits('kind', 0, 2, 0, 2)            // 偏移 0，容器 2 字节，从 bit0 起 2 位
-bits('active', 0, 2, 2, 1)          // 同一容器，bit2 起 1 位
+str('name', { size: 12 })       // 12 字节，UTF-8，读到 \0 截止
+bytes('blob', { size: 32 })     // 32 字节，显示为 hex
 ```
 
-位域按 `endian` 解释：小端从 LSB 数，大端从 MSB 数。
-
-### 3.3 嵌套 / 数组
+### 3.4 位域
 
 ```ts
-const Point = struct('Point', 8, [i32('x', 0), i32('y', 4)]);
+bits('kind', 2)                          // 自动加入当前位组
+bits('active', 1)                        // 下一位
+bits('mode', 3)                          // 再下 3 位
+bits('flag', 1, { unit: 2, bit: 6 })     // 新 2 字节单元，位偏移 6
+```
 
-const Shape = struct('Shape', 16, [
-  record('origin', 0, Point),
-  array('points', 8, Point, 1),  // 1 个 Point，从 offset 8 开始
+- 相邻、未写 `unit` 的位域共享一个存储单元；单元取能容纳整组的最小 1/2/4/8 字节。
+- `unit` 强制存储宽度；`bit` 是组内位偏移。
+- 位组结束后游标推进到单元末尾；超过单元或 64 位报错。
+- 位域按 `endian` 解释：小端从 LSB 数，大端从 MSB 数。
+
+### 3.5 嵌套 / 数组
+
+直接传类型对象；被引用的类型会自动登记，不必重复列进 `types`。
+
+```ts
+const Point = struct('Point', [i32('x'), i32('y')]);
+
+const Shape = struct('Shape', [
+  record('origin', Point),
+  array('points', Point, 4),
+  array('ids', 'u16', 8),
 ]);
 ```
 
-### 3.4 struct / union
+### 3.6 struct / union / 枚举
 
 ```ts
-struct(name, size, fields)
-union(name, size, fields)
+struct(name, fields, opts?)
+union(name, fields, opts?)
 ```
 
-- `size` 是显式字节数；字段偏移由你写死。
-- `struct` 的字段不能字节重叠（位域例外）；`union` 允许重叠。
-- 工具不解析 C，也不推断 padding；请按目标 ABI 算好。
-
-### 3.5 字段选项
+- `union` 的字段共享偏移，允许重叠；普通 `struct` 的字段重叠报错（位域除外）。
+- 枚举是整数字段加显示映射，不新增存储类型：
 
 ```ts
-u16('head', 2, {
+u16('state', { values: { 0: 'Idle', 1: 'Run' } })
+```
+
+原始值、端口值和下游计算仍是整数。
+
+### 3.7 字段选项
+
+```ts
+u16('head', {
+  at: 2,                         // 固定偏移；省略则自动
   endian: 'big',
   format: 'hex',                 // hex | bin | time | timeMs | char
+  values: { 1: 'Run' },
   transform: (v, ctx) => ...,    // 显示值 / 端口值
   label: '头下标',
 })
@@ -129,30 +177,42 @@ ctx = {
 
 `mem`：`u8/u16/u32/u64`、`i8..i64`、`f32/f64`、`bytes(addr,len)`、`str(addr,len)`、`cstr(addr,max)`、`inBounds(addr,len)`。
 
-> v3 不使用 `follow`。链表/数组由 `listNode` / `arrayNode` 定义，不再自动沿字段展开。
+## 4. 引用蓝图布局
 
-## 4. 节点
+```ts
+const Header = layoutType('layout/header');
+
+export default definePack({
+  types: { Header },
+  nodes: { header: structNode(Header) },
+});
+```
+
+- 布局 id 使用 `layout/<id>`。
+- 引用是 live 的：改布局字段后下一次求值生效，不需要重新导入 pack。
+- 布局缺失、被删除或成环时报错；不会退化成空结构。
+
+## 5. 节点
 
 节点定义放在 `definePack({ nodes: { ... } })` 里。工具会根据定义生成左栏条目和端口。
 
-### 4.1 `structNode(type)`
+### 5.1 `structNode(type)`
 
 ```ts
 structNode(Header, { label: 'Header 文件头' })
 ```
 
-- 输入：`buffer: buffer`（**可选数据源口**）、`address: number`
-- `buffer` 接 File 时直连该文件；不接则沿任意入边向上**逐级继承**上游节点的文件。它是上下文端口，不参与值计算。
-- 输出：类型的每个字段（端口类型由字段 kind 决定），以及 `array` / `record` 字段里每个成员各一个端口（`elem:字段:下标`）
-- 节点卡上直接显示字段的原始/转换值；选中后右栏显示字段表和字节。
+- 输入：`buffer: buffer`（可选数据源口）、`address: number`
+- `buffer` 接 File 时直连该文件；不接则沿任意入边向上**逐级继承**上游节点的文件。
+- 输出：类型的每个字段，以及 `array` / `record` 字段里每个成员各一个端口（`elem:字段:下标`）。
 
-### 4.2 `listNode(type, opts)`
+### 5.2 `listNode(type, opts)`
 
 ```ts
 listNode(Entry, {
   label: 'Entry 链表',
   next: (e) => {
-    const v = e.value.next;          // 默认是 transform 后的值
+    const v = e.value.next;
     return typeof v === 'number' ? v : null;
   },
   nulls: [-1],
@@ -160,164 +220,198 @@ listNode(Entry, {
 })
 ```
 
-- 输入：`buffer: buffer`（可选数据源口）、`address: number`
-- 输出：`list: list`、`count: number`，外加**每个元素一个** `elem:0`、`elem:1` … 端口（类型 `instance`，值带地址、字段和所属 buffer）
-- 遍历：从 `address` 开始，反复调用 `next(entry)`；返回 `null` 停止。
-- `next` 返回的是**下一个元素的地址**（不是下标），除非你的 pack 自己换算。
-- `nulls` 里的值也会停止；`max` 是安全上限（默认 4096）。
+- 输入：`buffer: buffer`、`address: number`
+- 输出：`list`、`count`，以及每个元素一个 `elem:0`、`elem:1` … 端口
+- `next` 返回**下一个元素的地址**；返回 `null` 停止；`nulls` 也会停止；`max` 默认 4096。
 
-`entry` 结构：
+`entry` 结构：`{ addr, index, type, raw, value, fields }`。
 
-```ts
-{
-  addr, index, type,
-  raw:   { [field]: unknown },   // 原始字段
-  value: { [field]: unknown },   // transform 后的字段
-  fields: FieldView[],
-}
-```
-
-### 4.3 `arrayNode(type, opts)`
+### 5.3 `arrayNode(type, opts)`
 
 ```ts
 arrayNode(Entry, { label: 'Entry 数组', count: 8, stride: 24 })
 ```
 
-- 输入：`buffer: buffer`（可选数据源口）、`address: number`、可选 `count: number`（没有 `opts.count` 时从端口取）
-- 输出：`list`、`count`，以及每个元素一个 `elem:i` 输出端口
 - 第 i 项地址：`address + i * stride`；`stride` 默认 `type.size`。
 
-### 4.4 `calcNode(opts)`
+### 5.4 `calcNode(opts)`
 
 ```ts
 calcNode({
   label: '下标 → 地址',
   inputs: { index: 'number' },
   outputs: { address: 'number' },
-  run: ({ index }, ctx) => ({ address: 0x100 + Number(index) * 24 }),
+  run: ({ index }) => ({ address: 0x100 + Number(index) * 24 }),
 })
 ```
 
-- `inputs` / `outputs` 是 `Record<string, PortType>`。
-- `PortType`：`number | string | bytes | boolean | instance | list | buffer`。
+- `PortType`：`number | integer | string | bytes | boolean | instance | list | buffer`。
 - `run(inputs, ctx)` 返回一个对象，key 对应 `outputs`。
-- `ctx` 里同样有 `mem`、`consts`、`pack`、`nodeId` 等。
 
-## 5. 内置节点
+## 6. 内置节点
 
 内置节点不依赖 pack，声明集中在 `src/bp/builtins.ts`；节点库分组、快速添加列表与求值器共用同一份定义。节点库按六组组织。
 
 | 分组 | 节点 | 用途 |
 | --- | --- | --- |
-| 数据源 | `file` 载入转储 | 只读数据源，输出 `buffer`、带来源的 `base`、`size` |
-| 数据源 | `slice` 字节范围 | 输出保留原始地址和资产身份的 `span`，不是基址归零的裸字节串 |
-| 读取 | `readint` 读数值 | 按 `scalar` 类型和字节序读取一个值，64 位整数不经浮点转换 |
-| 读取 | `text` 读字符串 | 定长或零终止，支持 ASCII、UTF-8、UTF-16LE/BE；长度以字节计 |
-| 读取 | `structread` 读结构 | 引用蓝图布局，输出记录与具名字段 |
-| 定位 | `address` 换算地址 | 基址加偏移，或基址加池下标乘字节步长；不读取 |
+| 数据源 | `file` 载入转储 | 只读数据源，输出 `buffer`、`base`、`size` |
+| 数据源 | `slice` 字节范围 | 输出保留原始地址和资产身份的 `span` |
+| 读取 | `readint` 读数值 | 按 `scalar` 类型和字节序读取一个值 |
+| 读取 | `text` 读字符串 | 定长或零终止，支持 ASCII、UTF-8、UTF-16LE/BE |
+| 读取 | `structread` 读结构 | 引用 `structureId`，输出记录与具名字段 |
+| 定位 | `address` 换算地址 | 基址加偏移，或基址加池下标乘步长；不读取 |
 | 定位 | `ptrwalk` 读指针 | 读取一个指针，区分空指针、读取失败和目标未映射 |
-| 集合 | `arrayread` 展开数组、`listread` 遍历链表 | 输出可取项的集合，保留原始地址及可定位的停止原因 |
-| 集合 | `item` 按下标取项、`element` 元素解析 | 分别从已读集合取项、展开 pack 类型字段 |
-| 校验 | `checksum` 算校验和、`assert` 断言 | 在完整范围上算值；单独判断相等或闭区间 |
-| 辅助 | `number`、`string`、`note`、`expr` | 共享常量、画布便签与数值表达式 |
+| 集合 | `arrayread` 展开数组、`listread` 遍历链表 | 输出可取项的集合 |
+| 集合 | `item` 按下标取项、`element` 元素解析 | 从集合取项、展开结构字段 |
+| 校验 | `checksum`、`assert` | 计算校验和、判断相等或闭区间 |
+| 辅助 | `number`、`string`、`note`、`expr` | 常量、便签与数值表达式 |
 
-宽度、字节序、编码和布局在检查器配置。字节试读、进制、时间、枚举和标志位只影响预览。内置映射地址与偏移/下标语义不同；`.bp.ts` 声明的 `ptr` 字段可作为绝对地址，脚本 `number` 地址仍只接受安全整数。
+**结构来源**：`structread` / `arrayread` / `listread` 的结构选择器同时列出本图布局和已启用 pack 的类型。`structureId` 是唯一参数：布局为 `layout/<id>`，pack 类型为 `pack/<encodedPackId>/<encodedTypeName>`。
 
-`Element` 的 `index` 可以接线，也可以内联填写。接了 `instance` 时忽略 `list`/`index`。
-
-**按地址解析**：只有「在此地址解析 → 元素解析」在**能推断出类型**时才会创建这种节点：`typeId` 随推断写入、`address` 自动接好并在该地址解码。类型不通过检查器手动指定——猜错类型会得到看似成功、实际字段全错的结果；推断不出来、或同一地址已有多种类型时，浮层里不会出现「元素解析」这一项。
-
-**端口跟随实际元素**：一旦接上 `instance` 或 `list`，`Element` 的字段端口就按解码出来的元素生成（类型来自该元素的 `typeName`，嵌套 `array`/`record` 成员也会展开成独立端口）；空节点不铺任何模板字段。接的是 `Entry` 就显示 `next`/`prev`/`name`/`ts`，不会凭空显示某个结构体的 `magic`/`head`。`packId`/`typeId` 只由跟随地址的推断写入，用于地址模式。
-
-元素端口（`instance`）可以直接接到 `number` 输入：这时用的是元素的地址，且下游节点沿继承链沿用同一份文件。例如「链表 #2 → 另一个 Struct 节点的 address」，就会在 #2 的地址上按另一种类型重新解析。任意输出也可以接到某个节点的 `buffer`（数据源）口，含义是「继承该上游节点的文件」。
-
-### 添加节点
-
-左栏节点库的每个条目都可以**拖到画布任意位置**：
-
-- 位移超过 5px 才算拖拽（几像素的抖动仍按单击处理），拖动时有跟随鼠标的卡片显示节点名，画布上出现虚线落点框并高亮边框；光标在画布外时卡片变灰并提示「拖到画布内」。
-- 松开即在落点创建：落点先用画布当前的平移/缩放换算成世界坐标，再让新节点水平居中于光标、光标落在标题栏上，因此缩放后位置依然精确。新建节点自动选中，可继续拖节点头微调。
-- 拖出画布释放或按 `Esc` 取消，不创建节点。取消状态保留到 `pointerup`，避免松开时补发的 `click` 又建一个节点。
-- **单击**仍是原来的快速添加：自动寻找预置空位。拖拽结束后的 `click` 会被抑制，两种方式不会重复创建。
-- 拖放提交在 window 层的 `pointerup` 完成（只用坐标、不依赖事件目标），因此触屏的隐式指针捕获把 `pointerup` 派发回节点库条目时也能正确放置。
-
-## 6. 图求值
+## 7. 图求值
 
 - 图是 DAG；每个节点的输出按需惰性计算，带记忆化。
-- 同一输入端口只允许一条边；重新连会替换旧边。点输入值旁的 `×` 可以断开，恢复手动输入。
-- 边的类型必须一致（`instance` 可以接到 `number`，取元素地址；任意输出可以接到 `buffer`，表示继承上游文件）；类型不匹配时不会建立连接。拖线时兼容端口高亮、不兼容端口变暗；输出 → 输入、输入 → 输出两个方向都能起线。
-- 环会被检测并报问题（不会无限递归）。
-- **未连接的输入使用节点内联参数；一旦连线，输入框自动变成上游传来的真实值**（地址按 `0x…` 显示），并带来源提示；断开后恢复原来手填的文本。
-- **数据源依次继承**：`File` 是数据源起点，每个解析节点有一个可选的 `buffer`（数据源）口。节点按以下优先级决定自己属于哪个文件：
-  1. 检查器里手动指定的 File（`params.sourceId`）；
-  2. `buffer` 口上的显式连线（可以来自 File，也可以来自任意上游值，含义是继承它的文件）；
-  3. 沿其它入边向上逐级继承：先问直接上游，上游再问它自己的上游，直到遇到 `File`；
-  4. 完全孤立且图里有文件时，用第一个已载入的 File。
+- 同一输入端口只允许一条边；重新连会替换旧边。
+- 边的类型必须一致（`instance` 可以接到 `number`，取元素地址；任意输出可以接到 `buffer`，表示继承上游文件）。
+- 环会被检测并报问题。
+- 未连接的输入使用节点内联参数；一旦连线，输入框显示上游真实值。
+- 数据源优先级：手动指定 File > 显式数据源连线 > 沿入边继承 > 唯一可用转储。
+- 链表/数组的每个元素、结构体与 `Element` 节点里 `array`/`record` 字段的每个成员都有独立输出端口；默认显示前 8 个。
+- 越界、未知类型、`next` 抛错等都会变成节点上的问题。
 
-  节点头部显示实际文件名与来源方式（直连 / 继承 / 手动 / 默认），检查器显示完整继承链。纯常量节点（`Number`）不携带文件上下文，不会把默认文件误传给下游造成假冲突。
-- 每个 `File` 节点的 buffer 独立；同一个图里可以放多个 File 节点，分别解析 A/B 文件。上游来自不同文件时会告警，可在检查器里手动指定。
-- 链表/数组的每个元素、结构体与 `Element` 节点里 `array`/`record` 字段的每个成员都有独立输出端口；默认显示前 8 个，点「展开全部」可以看到剩下的，已连线的端口始终可见。
-- 端口集合是运行时算出来的：`Element` 换了实际元素类型（或 pack 被移除）后，指向已消失端口的连线会报「连线端点已不存在」警告，重连一次即可。
-- 越界、未知类型、`next` 抛错等都会变成节点上的问题，不会让整张图崩掉。
+## 8. 图文件 v3
 
-## 7. 错误与校验
-
-加载时校验：
-
-- 类型名、size、字段 offset + size 是否越界；
-- struct 字段是否重叠（bits 除外）；
-- `record` / `array` 的 `of` 是否存在；
-- `str` / `bytes` 的 count；
-- 节点引用的 type 是否存在；
-- `next` / `run` 是否为函数；
-- 端口类型是否合法；
-- 未使用的类型/字段不会报错。
-
-加载失败时左栏「检查」显示错误，画布空状态，顶栏错误数同步。
-
-## 8. 图文件
-
-`导出`（`Ctrl+S`）生成：
+导出生成 `memlink-blueprint/3`：
 
 ```json
 {
-  "format": "memlink-blueprint/2",
+  "format": "memlink-blueprint/3",
   "packs": [{ "id": "p1", "name": "demo", "source": "..." }],
+  "layouts": [
+    {
+      "id": "header",
+      "name": "表头",
+      "endian": "little",
+      "fields": [
+        { "id": "f1", "name": "count", "kind": "u16" },
+        { "id": "f2", "name": "entries", "kind": "array", "of": "layout/entry", "count": "4" }
+      ]
+    }
+  ],
   "nodes": [
-    { "id": "f1", "packId": "", "nodeId": "file", "x": 0, "y": 56, "params": { "name": "a.bin" },
-      "source": { "name": "a.bin", "base": "0x0", "data": "base64..." } },
-    { "id": "n1", "packId": "p1", "nodeId": "header", "x": 350, "y": 30,
-      "params": { "address": "0x0" } },
-    { "id": "n2", "packId": "p1", "nodeId": "entryList", "x": 350, "y": 300,
-      "params": { "address": "" } }
+    { "id": "r1", "packId": "", "nodeId": "structread", "x": 0, "y": 0,
+      "params": { "structureId": "layout/header", "address": "0x1000" } }
   ],
   "edges": [
-    { "id": "e1", "from": { "node": "f1", "port": "buffer" }, "to": { "node": "n1", "port": "buffer" } },
-    { "id": "e2", "from": { "node": "n1", "port": "head" }, "to": { "node": "n2", "port": "address" } }
+    { "id": "e1", "from": { "node": "f1", "port": "buffer" }, "to": { "node": "r1", "port": "buffer" } }
   ]
 }
 ```
 
-`f1.buffer → n1.buffer` 是显式数据源连线；`n2` 没有 `buffer` 线，它沿 `n1.head` 继承同一个文件。`n2.address` 为空是因为值来自连线，画布上会显示上游的真实值。
+- 字段端口为 `field:<structureId>:<fieldId>`。
+- 布局字段：`at` 是可选字节偏移；`size` 是 bytes/string 长度；`count` 是数组数量；`of` 指向 `layout/<id>` 或标量 kind；位域用 `unit` / `bit` / `width`。
+- `union: true` 的布局允许字段共享偏移。
+- 旧版 v2 文档会被明确拒绝，不做迁移。
 
-`params.sourceId` 可选。来源优先级为「直连 > 手动指定 > 继承 > 唯一可用转储」；有多个候选时不选第一份。数据源连线是普通边，保存时原样写入 `edges`，打开时原样恢复；只有端点已不存在的悬空边会被丢弃。
+## 9. C 构造映射
 
-没有全局 `memory` 字段；每个转储节点把自己的 `source`（名称、精确基址、base64）带在图里。64 位基址使用十六进制或十进制字符串；JSON 数字只用于安全整数。旧版图不迁移；`.bp.ts` 仍可单独导入。
+结构定义描述**解析后的字节布局**，不执行 C 源码。
 
-可选的 `layouts` 保存无脚本结构。一个布局包含稳定的 `id`、名称、结构长度、字节序与字段定义；节点通过 `params.layoutId` 引用。字段端口 `field:<布局 id>:<字段 id>` 不含显示名，因此改名不影响连线。运行时结果不写入图。
+| C 构造 | pack 表示 | 布局表示 |
+| --- | --- | --- |
+| 命名嵌套结构 | `record(name, Type)` / `array(name, Type, count)` | `record` / `array` 引用另一布局 |
+| 匿名嵌套结构或联合 | 生成稳定类型名后引用 | 生成稳定布局名后引用 |
+| `union` | `union(name, fields)` | `union: true`，字段共享 `at` |
+| 枚举 | 整数字段 + `values` | 整数字段 + `values` |
+| 宏 / `#define` | 不展开；写成具体数字 | 不展开；粘贴前解析成具体数字 |
+| `#pragma pack` / 自然对齐 | 用 `at` / `align` / `pad` 显式写出 | 用字段 `at` 显式写出 |
+| 指针 | `ptr`；宽度由 `pointerSize` 决定 | 固定宽度整数 + `role: address` |
+| 位域 | `bits(name, width, { unit, bit })` | `unit` / `bit` / `width` |
 
-## 9. 安全边界
+## 10. 模板
 
-- pack 可以执行任意 JS（在页面上下文里）；只加载自己信任的文件。
-- 工具不发网络请求；但 pack 代码本身可以（如果你写了 `fetch`）。
-- 没有沙箱；不要加载来源不明的 `.bp.ts`。
-- 页面 CSP 需要允许 `unsafe-eval`，否则 Sucrase/`new Function` 无法工作。
+`samples/templates/` 提供可编译模板：
 
-## 10. 自检清单
+- `auto-layout.bp.ts` — 自动排布
+- `bitfields.bp.ts` — 位域
+- `nested-array.bp.ts` — 嵌套类型与标量数组
+- `pool-list.bp.ts` — 池下标链表
+- `layout-ref.bp.ts` — 引用蓝图布局
+
+模板随单元测试一起校验。
+
+## 11. 自检清单
 
 - [ ] `export default definePack(...)`，没有 `import` / 其它 `export`。
-- [ ] 每个 type 的 `size` 和字段 `offset+size` 匹配目标 ABI。
+- [ ] 自动字段的偏移符合目标 ABI；需要固定位置时写了 `at`。
+- [ ] 位域组没有超过存储单元或 64 位。
 - [ ] 链表 `next` 返回**地址**；负数/空值返回 `null`。
 - [ ] `listNode.max` 足够大，但不要超过 4096。
 - [ ] 节点端口类型和下游一致（`list` 接 `list`，`number` 接 `number`）。
-- [ ] 加载后看左栏「检查」：错误会阻止节点运行，警告需要确认。
+- [ ] 加载后看左栏「检查」：错误会阻止节点运行。
+
+## 12. 结构设计器（无脚本布局）
+
+无脚本布局在独立的全屏「结构设计器」中编辑；检查器只保留结构选择、摘要、`next` 字段和入口。文档格式不变，仍是 `memlink-blueprint/3`。
+
+### 12.1 打开与返回
+
+- **入口**：选中读结构 / 展开数组 / 遍历链表节点 → 检查器「打开结构设计器」。新建布局会直接进入设计器。
+- **URL**：`#design/<layoutId>`；嵌套布局为 `#design/<parent>/<child>`。浏览器后退/前进会在布局栈和蓝图之间导航。
+- **关闭**：顶栏「完成」或根布局按 Esc；回到原节点、原视口，焦点回到触发按钮。
+- **会话**：编辑立即进入文档历史；「撤销本次修改」整体回到打开设计器时的布局，本身也可撤销。
+
+### 12.2 字节视图
+
+- 每行 4/8/16/32 字节，显示字节标尺、行偏移、字段块、空白格。极长布局只渲染前一段画布并提示上限，其余字节用字段表或检查器定位。
+- 虚线 = 自动排布；实线 = 锚定。字段块显示偏移、长度、数组数量/元素布局、record 目标，位域组显示存储单元与成员色条。
+- **拖动字段主体**：锚定到落点；自动字段会从虚线变成实线。
+- **拖动重排手柄**（左上角 `⠿`）：只改变声明顺序，不写 `at`。
+- **拖右边缘**：只对 string / bytes 改长度；标量宽度由类型决定。
+- 非法落点（重叠、越界、非联合重叠）回弹并说明原因，不写历史。一次手势只提交一次。
+- 缩放 50%–200%，空格/中键拖动平移，`Ctrl/Cmd+滚轮` 缩放，「适应」按内容适配。
+
+### 12.3 位视图
+
+- 按 `at + unit` 分组；每个存储单元一条位标尺。LSB 在左 / MSB 在左只影响显示。
+- 拖动位域条移动 `bit`；拖左右把手改 `width`；位宽较窄时把手收窄，仍保留中间拖动区域；组头切换 1/2/4/8 字节单元。
+- 同一存储单元内位域区间不得重叠；重叠会回弹并在问题面板指出冲突。没有位域时显示空状态和创建入口。
+
+### 12.4 检查器与字段表
+
+- 右栏只编辑当前选中项；无选中时编辑布局名称、字节序、联合、长度覆盖和引用。
+- 字段属性包括名称、类型、自动/锚定、偏移、长度、数组数量/目标、字节序、数值语义、位域成员和显示映射（JSON：`{"0":"Idle"}`）。
+- 底部字段表按声明顺序显示偏移、大小/位宽、自动/锚定和错误；`↑/↓/Home/End/PageUp/PageDown` 移动，`F2` 内联改名，`Enter` 定位到画布。
+- 「问题」页签列出当前布局的错误与警告；点击问题会选中字段并切到合适视图。
+
+### 12.5 嵌套、引用与删除
+
+- record/array 可以进入子布局；子布局长度变化会立即更新父布局的自动偏移和长度，锚定字段保持原偏移。
+- 「被引用」显示父布局、图节点、连线和 pack；删除仍被引用的布局会被拒绝并列出这些来源。
+- 删除被节点/连线使用的字段会先列出受影响入口；确认后保留缺失连线，由求值器报告 `PORT_MISSING`，不会静默改接。
+- 选择嵌套目标时会阻止成环；pack 类型只读。
+
+### 12.6 声明导入、导出与模板
+
+- 设计器「导入」支持 `struct` / `union` / `typedef`、定长数组、位域、注释和同批布局引用；先预览诊断，失败不导入半份。
+- 「导出」把当前布局递归导出为 pack 类型源码（`struct` / `array` / `bits` 等），不执行代码。
+- 「模板」提供表头、位域、嵌套数组、池下标链表，只生成文档布局。
+- 宏、条件编译、未知类型和 C ABI 对齐仍不自动推断；需要固定位置时写 `at`。
+
+### 12.7 快捷键
+
+| 键 | 作用 |
+| --- | --- |
+| `Tab` / `Shift+Tab` | 在区域和字段间移动焦点 |
+| `Enter` | 选择字段；record/array 上进入子布局 |
+| `F2` | 聚焦名称输入 |
+| `Delete` / `Backspace` | 删除选中字段/位域（已接线时先确认） |
+| 方向键 | 移动字段/位域；`Shift` 加速 |
+| `Alt+方向键` | 调整 string/bytes 长度或位域宽度 |
+| `Ctrl/Cmd+Z` / `Ctrl/Cmd+Shift+Z` | 撤销 / 重做 |
+| `Ctrl/Cmd+C` / `V` / `D` | 复制 / 粘贴 / 重复 |
+| `Ctrl/Cmd+A` | 全选字段 |
+| `Esc` | 取消手势 → 关闭浮层 → 返回父布局 → 退出设计器 |
+| `+` / `-` / `0` | 放大 / 缩小 / 适应 |
+
+输入法组合期间的 Enter、方向键和 Esc 不会触发应用命令。

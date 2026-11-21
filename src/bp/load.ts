@@ -36,17 +36,19 @@ function validateType(name: string, type: TypeDef, pack: BlueprintPack): Problem
   if (type.name !== name) {
     out.push({ severity: 'warn', message: `类型键名 ${name} 与 name=${type.name} 不一致` });
   }
-  if (!Number.isFinite(type.size) || type.size <= 0) {
-    out.push({ severity: 'error', message: `类型 ${name} 的 size 必须是正数` });
-    return out;
-  }
+  if (type.ref) return out;
   if (!Array.isArray(type.fields)) {
     out.push({ severity: 'error', message: `类型 ${name} 缺少 fields` });
+    return out;
+  }
+  if (type.size <= 0 && !type.hasLayoutRef) {
+    out.push({ severity: 'error', message: `类型 ${name} 的 size 必须是正数` });
     return out;
   }
 
   const compat = { pointerSize: pack.pointerSize, types: Object.values(pack.types) };
   const seen = new Set<string>();
+  const spans: Array<{ name: string; start: number; end: number; bits: boolean }> = [];
   for (const f of type.fields) {
     const tag = `${name}.${f?.name}`;
     if (!f || typeof f.name !== 'string' || !f.name) {
@@ -55,28 +57,40 @@ function validateType(name: string, type: TypeDef, pack: BlueprintPack): Problem
     }
     if (seen.has(f.name)) out.push({ severity: 'error', message: `字段重名 ${tag}` });
     seen.add(f.name);
-    if (!Number.isFinite(f.offset) || f.offset < 0) {
+    if (!Number.isFinite(f.offset) || (f.offset ?? -1) < 0) {
       out.push({ severity: 'error', message: `${tag} 的 offset 非法` });
       continue;
     }
-    if (f.kind === 'bits' && (!f.bits || f.bits.width <= 0 || f.bits.offset < 0)) {
+    if (f.kind === 'bits' && (!f.bits || f.bits.width <= 0 || (f.bits.offset ?? 0) < 0 || (f.bits.unit != null && ![1, 2, 4, 8].includes(f.bits.unit)))) {
       out.push({ severity: 'error', message: `${tag} 的位域参数非法` });
     }
     if (f.kind === 'record' || f.kind === 'array') {
-      const target = f.of;
-      if (!target || !pack.types[target]) {
-        out.push({ severity: 'error', message: `${tag} 引用了不存在的类型 ${target ?? '?'}` });
+      const target = f.ofType ?? (f.of ? pack.types[f.of] : undefined);
+      const scalarArray = f.kind === 'array' && !!f.of && !f.ofType && /^(?:[ui]\d+|f\d+|bool|char|ptr)$/.test(f.of);
+      if (!target && !scalarArray) {
+        out.push({ severity: 'error', message: `${tag} 引用了不存在的类型 ${f.of ?? '?'}` });
       }
     }
     const size = fieldSize(f, compat);
-    if (!Number.isFinite(size) || size <= 0) {
+    if (!Number.isFinite(size) || size < 0 || (size === 0 && f.kind !== 'record')) {
       out.push({ severity: 'error', message: `${tag} 的大小非法（${size}）` });
-    } else if (f.offset + size > type.size) {
+      continue;
+    }
+    if (!type.hasLayoutRef && type.size > 0 && (f.offset ?? 0) + size > type.size) {
       out.push({
         severity: 'error',
         message: `${tag} 越界`,
         detail: `offset ${f.offset} + size ${size} > ${type.size}`,
       });
+    }
+    spans.push({ name: tag, start: f.offset ?? 0, end: (f.offset ?? 0) + size, bits: f.kind === 'bits' });
+  }
+  if (!type.union && !type.hasLayoutRef) {
+    const ordered = [...spans].filter((s) => !s.bits).sort((a, b) => a.start - b.start || a.end - b.end);
+    for (let i = 1; i < ordered.length; i += 1) {
+      if (ordered[i].start < ordered[i - 1].end) {
+        out.push({ severity: 'error', message: `字段重叠 ${ordered[i - 1].name} / ${ordered[i].name}` });
+      }
     }
   }
   return out;
@@ -106,7 +120,7 @@ function validateNode(key: string, def: NodeDef, pack: BlueprintPack): Problem[]
     return out;
   }
 
-  if (!def.type || !pack.types[def.type.name]) {
+  if (!def.type || (!def.type.ref && !pack.types[def.type.name])) {
     out.push({ severity: 'error', message: `节点 ${key} 引用的类型 ${def.type?.name ?? '?'} 不在 types 里` });
   }
   if (def.kind === 'list') {

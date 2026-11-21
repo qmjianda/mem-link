@@ -1,0 +1,31 @@
+{
+  "id": "gba",
+  "name": "Game Boy Advance ROM",
+  "version": "1.0.0",
+  "category": "game",
+  "order": 223,
+  "summary": "Game Boy Advance cartridge ROM",
+  "description": "GBA cartridge header: entry branch, Nintendo logo, game and maker codes, and the header checksum.",
+  "tags": [
+    "game",
+    "rom",
+    "cartridge",
+    "nintendo",
+    "gba",
+    "arm",
+    "emulation",
+    "retro"
+  ],
+  "author": "Nybble",
+  "license": "Free use / redistribution (Nybble registry)",
+  "homepage": "https://problemkaputt.de/gbatek.htm#gbacartridgeheader",
+  "coverage": "complete",
+  "source": {
+    "provider": "nybble",
+    "id": "gba",
+    "format": "GBA",
+    "version": "1.0.0",
+    "url": "https://github.com/itsmajdbuilds/binary-explorer-registry/tree/main/formats/gba",
+    "license": "Nybble format registry"
+  }
+}

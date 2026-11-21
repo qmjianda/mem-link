@@ -629,23 +629,44 @@ async function main() {
   await send('Input.insertText', { text: '0x1100' });
   await chord('Enter', 'Enter', 13);
   await sleep(200);
-  const firstRow = await evaluate(`document.querySelector('.hexview .hex-addr')?.textContent`);
-  check('跳转 0x1100 后 hex 从该行开始显示', firstRow === '00001100', String(firstRow));
+  const jumpState = await evaluate(`(() => {
+    const h = document.querySelector('.hexview.virtual');
+    return {
+      top: h?.scrollTop ?? 0,
+      sel: !!document.querySelector('.hb.sel'),
+      range: document.querySelector('.bp-hex-range')?.textContent.trim() ?? '',
+      bar: document.querySelector('.bp-field-addr .bp-field-addr-text')?.textContent ?? '',
+    };
+  })()`);
+  check('跳转 0x1100 后滚动到目标并显示选中位点',
+    jumpState.top > 0 && jumpState.sel && /0x1100/.test(jumpState.bar),
+    JSON.stringify(jumpState));
 
   const byte = await evaluate(`(() => {
-    const el = document.querySelector('.hexview .hb');
+    const host = document.querySelector('.hexview.virtual');
+    const hr = host.getBoundingClientRect();
+    // 跳过视口上方的 overscan 行，点真正可见的字节
+    const el = [...host.querySelectorAll('.hb')].find((b) => {
+      const r = b.getBoundingClientRect();
+      return r.top >= hr.top + 24 && r.bottom <= hr.bottom - 8;
+    });
+    if (!el) return null;
     const r = el.getBoundingClientRect();
-    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    return { addr: el.dataset.addr, x: r.left + r.width / 2, y: r.top + r.height / 2 };
   })()`);
-  await mouse('mousePressed', byte.x, byte.y);
-  await mouse('mouseReleased', byte.x, byte.y);
+  if (byte) {
+    await mouse('mousePressed', byte.x, byte.y);
+    await mouse('mouseReleased', byte.x, byte.y);
+  }
   await sleep(160);
   const pickedInfo = await evaluate(`(() => ({
     sel: !!document.querySelector('.hb.sel'),
     bar: document.querySelector('.bp-field-addr .bp-field-addr-text')?.textContent ?? '',
   }))()`);
+  const expectedHex = `0x${(0x1000 + Number(byte?.addr ?? -0x1000)).toString(16)}`;
   check('点击字节即选中并在缓冲区中定位',
-    pickedInfo.sel && /选中 0x1100/.test(pickedInfo.bar), JSON.stringify(pickedInfo));
+    !!byte && pickedInfo.sel && pickedInfo.bar.toLowerCase().includes(expectedHex),
+    JSON.stringify({ expectedHex, pickedInfo }));
 
   const followBtn = await evaluate(`(() => {
     const el = [...document.querySelectorAll('.bp-field-addr .bp-ft-btn.go')].at(-1);
@@ -658,11 +679,127 @@ async function main() {
     await mouse('mouseReleased', followBtn.x, followBtn.y);
     await sleep(160);
     const followText = await evaluate(`document.querySelector('.bp-follow')?.textContent ?? ''`);
-    check('hex 点选字节可直接跟随解析', /在此地址解析/.test(followText) && /0x1100/.test(followText),
+    check('hex 点选字节可直接跟随解析',
+      /在此地址解析/.test(followText) && followText.toLowerCase().includes(expectedHex),
       String(followText).slice(0, 60));
     await chord('Escape', 'Escape', 27);
     await sleep(110);
   }
+
+  /* ------------------------------------- 6m. 检查器缓冲区：滚动 / 跳转 / 展开 */
+  const selectNode = (id) => evaluate(`(() => {
+    const n = document.querySelector('[data-node-id="${id}"]');
+    if (!n) return false;
+    const h = n.querySelector('.bp-node-head') ?? n;
+    const r = h.getBoundingClientRect();
+    const opts = { bubbles: true, clientX: r.left + 20, clientY: r.top + 10 };
+    h.dispatchEvent(new PointerEvent('pointerdown', opts));
+    h.dispatchEvent(new PointerEvent('pointerup', opts));
+    return true;
+  })()`);
+  await selectNode('n_file');
+  await sleep(450);
+  const hexBox = await evaluate(`(() => {
+    const h = document.querySelector('.bp-insp-body .hexview.virtual');
+    if (!h) return null;
+    const r = h.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2,
+      clientH: h.clientHeight, scrollH: h.scrollHeight,
+      rows: h.querySelectorAll('.hex-row').length,
+      range: document.querySelector('.bp-hex-range')?.textContent.trim() ?? '' };
+  })()`);
+  check('缓冲区覆盖整份转储且可滚动',
+    !!hexBox && hexBox.scrollH > hexBox.clientH + 200 && hexBox.rows < 60
+      && /共 4096 B/.test(hexBox.range),
+    JSON.stringify(hexBox));
+  if (hexBox) {
+    const topBefore = await evaluate(`document.querySelector('.bp-hex-range')?.textContent ?? ''`);
+    await mouse('mouseWheel', hexBox.x, hexBox.y, { deltaX: 0, deltaY: 480, button: 'none', buttons: 0, clickCount: 0 });
+    await sleep(260);
+    const scrolled = await evaluate(`(() => {
+      const h = document.querySelector('.bp-insp-body .hexview.virtual');
+      return { top: h?.scrollTop ?? 0, rows: h?.querySelectorAll('.hex-row').length ?? 0,
+        range: document.querySelector('.bp-hex-range')?.textContent.trim() ?? '',
+        first: h?.querySelector('.hex-row .hex-addr')?.textContent ?? '' };
+    })()`);
+    check('滚轮滚动缓冲区并同步顶部地址',
+      scrolled.top > 0 && scrolled.rows < 60 && scrolled.range !== topBefore,
+      JSON.stringify({ topBefore, scrolled }));
+
+    await evaluate(`(() => {
+      const i = document.querySelector('input[aria-label="跳转到缓冲区地址"]');
+      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      set.call(i, '0x11F0');
+      i.dispatchEvent(new Event('input', { bubbles: true }));
+      [...document.querySelectorAll('.bp-insp-body button')].find((b) => b.textContent.trim() === '跳转')?.click();
+    })()`);
+    await sleep(300);
+    const jumped = await evaluate(`(() => {
+      const host = document.querySelector('.bp-insp-body .hexview.virtual');
+      const sel = host?.querySelector('.hb.sel');
+      const hr = host?.getBoundingClientRect();
+      const sr = sel?.getBoundingClientRect();
+      return {
+        top: host?.scrollTop ?? 0,
+        picked: document.querySelector('.bp-field-addr-text')?.textContent.trim() ?? '',
+        sel: !!sel,
+        visible: !!hr && !!sr && sr.top >= hr.top + 20 && sr.bottom <= hr.bottom,
+      };
+    })()`);
+    check('跳转滚动到目标并保留试读位点',
+      jumped.top > 0 && /0x11f0/i.test(jumped.picked) && jumped.sel && jumped.visible,
+      JSON.stringify(jumped));
+
+    const box2 = await evaluate(`(() => {
+      const h = document.querySelector('.bp-insp-body .hexview.virtual');
+      const r = h.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2, top: h.scrollTop };
+    })()`);
+    await evaluate(`[...document.querySelectorAll('.bp-insp-body button')].find((b) => b.textContent.trim() === '展开')?.click()`);
+    await sleep(320);
+    const expanded = await evaluate(`(() => {
+      const o = document.querySelector('.bp-hex-expanded');
+      const h = o?.querySelector('.hexview.virtual');
+      const p = document.querySelector('.bp-inspector')?.getBoundingClientRect();
+      const r = o?.getBoundingClientRect();
+      return { open: !!o, fill: !!r && !!p && Math.abs(r.height - p.height) < 4,
+        hexH: h?.clientHeight ?? 0, scrollTop: h?.scrollTop ?? 0 };
+    })()`);
+    check('展开缓冲区占满检查器并保持阅读位置',
+      expanded.open && expanded.fill && expanded.hexH > 300
+        && Math.abs(expanded.scrollTop - box2.top) < 40,
+      JSON.stringify({ box2, expanded }));
+    await key('keyDown', 'Escape', 'Escape', 27);
+    await key('keyUp', 'Escape', 'Escape', 27);
+    await sleep(260);
+    const collapsed = await evaluate(`(() => ({
+      closed: !document.querySelector('.bp-hex-expanded'),
+      top: document.querySelector('.bp-insp-body .hexview.virtual')?.scrollTop ?? 0,
+    }))()`);
+    check('Esc 收起缓冲区并保留位置',
+      collapsed.closed && Math.abs(collapsed.top - expanded.scrollTop) < 40,
+      JSON.stringify({ expandedTop: expanded.scrollTop, collapsed }));
+  }
+
+  /* -------------------------------- 6n. 结构体 → 来源文件的完整缓冲区 */
+  await selectNode('n_sqe');
+  await sleep(450);
+  const openLink = await evaluate(`(() => {
+    const b = document.querySelector('.bp-hex-open');
+    if (!b) return false;
+    b.click();
+    return true;
+  })()`);
+  await sleep(450);
+  const linked = await evaluate(`(() => ({
+    title: document.querySelector('.bp-node.on .bp-node-title')?.textContent ?? '',
+    picked: document.querySelector('.bp-field-addr-text')?.textContent.trim() ?? '',
+    sel: !!document.querySelector('.bp-insp-body .hb.sel'),
+    hex: !!document.querySelector('.bp-insp-body .hexview.virtual'),
+  }))()`);
+  check('结构体「在缓冲区打开」选中来源文件并定位',
+    openLink && linked.title.includes('载入转储') && /0x1000/.test(linked.picked) && linked.sel && linked.hex,
+    JSON.stringify(linked));
 
   /* ------------------------------------------- 6k. 一键自动布局 */
   const layoutBtn = await evaluate(`(() => {

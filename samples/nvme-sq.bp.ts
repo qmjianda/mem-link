@@ -11,41 +11,41 @@ const DATA_MAGIC = 0x454d564e; // "NVME"
 
 // NVMe 1.4 提交队列项，64 B。CDW0 低 8 位为 OPC，高 16 位为 CID；
 // CDW12 低 16 位为 NLB（0-based 块数）。
-const Sqe = struct('Sqe', 64, [
-  u32('cdw0', 0, { label: 'CDW0', format: 'hex' }),
-  bits('opc', 0, 1, 0, 8, { label: 'OPC 操作码', format: 'hex' }),
-  bits('fuse', 0, 2, 8, 2, { label: 'FUSE' }),
-  bits('psdt', 0, 2, 14, 2, { label: 'PSDT' }),
-  bits('cid', 0, 4, 16, 16, { label: 'CID 命令标识' }),
-  u32('nsid', 4, { label: 'NSID 命名空间' }),
-  u32('reserved0', 8, { label: '保留 [8]' }),
-  u32('reserved1', 12, { label: '保留 [12]' }),
-  u64('mptr', 16, { label: 'MPTR 元数据指针', format: 'hex' }),
-  ptr('prp1', 24, { label: 'PRP1 首数据页', format: 'hex' }),
-  ptr('prp2', 32, { label: 'PRP2 / 列表指针', format: 'hex' }),
-  u32('cdw10', 40, { label: 'SLBA 低 32 位', format: 'hex' }),
-  u32('cdw11', 44, { label: 'SLBA 高 32 位', format: 'hex' }),
-  u32('cdw12', 48, { label: 'CDW12', format: 'hex' }),
-  bits('nlb', 48, 2, 0, 16, { label: 'NLB 块数 − 1' }),
-  u32('cdw13', 52, { label: 'CDW13', format: 'hex' }),
-  u32('cdw14', 56, { label: 'CDW14', format: 'hex' }),
-  u32('cdw15', 60, { label: 'CDW15', format: 'hex' }),
-]);
+const Sqe = struct('Sqe', [
+  u32('cdw0', { at: 0, label: 'CDW0', format: 'hex' }),
+  bits('opc', 8, { at: 0, bit: 0, unit: 4, label: 'OPC 操作码', format: 'hex' }),
+  bits('fuse', 2, { bit: 8, label: 'FUSE' }),
+  bits('psdt', 2, { bit: 14, label: 'PSDT' }),
+  bits('cid', 16, { bit: 16, label: 'CID 命令标识' }),
+  u32('nsid', { at: 4, label: 'NSID 命名空间' }),
+  u32('reserved0', { at: 8, label: '保留 [8]' }),
+  u32('reserved1', { at: 12, label: '保留 [12]' }),
+  u64('mptr', { at: 16, label: 'MPTR 元数据指针', format: 'hex' }),
+  ptr('prp1', { at: 24, label: 'PRP1 首数据页', format: 'hex' }),
+  ptr('prp2', { at: 32, label: 'PRP2 / 列表指针', format: 'hex' }),
+  u32('cdw10', { at: 40, label: 'SLBA 低 32 位', format: 'hex' }),
+  u32('cdw11', { at: 44, label: 'SLBA 高 32 位', format: 'hex' }),
+  u32('cdw12', { at: 48, label: 'CDW12', format: 'hex' }),
+  bits('nlb', 16, { at: 48, bit: 0, unit: 4, label: 'NLB 块数 − 1' }),
+  u32('cdw13', { at: 52, label: 'CDW13', format: 'hex' }),
+  u32('cdw14', { at: 56, label: 'CDW14', format: 'hex' }),
+  u32('cdw15', { at: 60, label: 'CDW15', format: 'hex' }),
+], { size: SQE_SIZE });
 
 // PRP 表项：低 12 位是页内偏移，其余为页基址。
-const PrpEntry = struct('PrpEntry', 8, [
-  u64('addr', 0, { label: '数据页地址', format: 'hex' }),
-  bits('pageOffset', 0, 2, 0, 12, { label: '页内偏移' }),
-]);
+const PrpEntry = struct('PrpEntry', [
+  u64('addr', { at: 0, label: '数据页地址', format: 'hex' }),
+  bits('pageOffset', 12, { at: 0, bit: 0, unit: 2, label: '页内偏移' }),
+], { size: 8 });
 
 // 每个数据页带一个便于阅读的头，随后是 LBA 载荷。
-const DataBlock = struct('DataBlock', LBA_SIZE, [
-  u32('magic', 0, { label: 'Magic', format: 'hex' }),
-  u32('lba', 4, { label: 'LBA' }),
-  u32('seq', 8, { label: '序号' }),
-  u32('crc32', 12, { label: '载荷校验', format: 'hex' }),
-  str('payload', 16, LBA_SIZE - 16, { label: '数据' }),
-]);
+const DataBlock = struct('DataBlock', [
+  u32('magic', { at: 0, label: 'Magic', format: 'hex' }),
+  u32('lba', { at: 4, label: 'LBA' }),
+  u32('seq', { at: 8, label: '序号' }),
+  u32('crc32', { at: 12, label: '载荷校验', format: 'hex' }),
+  str('payload', { at: 16, size: LBA_SIZE - 16, label: '数据' }),
+], { size: LBA_SIZE });
 
 export default definePack({
   name: 'nvme-sq',

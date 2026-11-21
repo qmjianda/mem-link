@@ -1,0 +1,87 @@
+{
+  "format": "memlink-blueprint/3",
+  "packs": [
+    {
+      "id": "p1",
+      "name": "structure-reuse",
+      "source": "/// <reference path=\"../types/memlink-bp.d.ts\" />\n\nconst Entry = struct('Entry', [u16('value')]);\n\nexport default definePack({\n  name: 'structure-reuse',\n  endian: 'little',\n  pointerSize: 4,\n  types: { Entry },\n  nodes: { entry: structNode(Entry, { label: 'Entry' }) },\n});\n"
+    }
+  ],
+  "layouts": [
+    {
+      "id": "entry",
+      "name": "Entry（布局）",
+      "endian": "little",
+      "fields": [
+        {
+          "id": "f1",
+          "name": "value",
+          "kind": "u16"
+        }
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "id": "f",
+      "packId": "",
+      "nodeId": "file",
+      "x": 0,
+      "y": 0,
+      "params": {
+        "name": "reuse.bin"
+      },
+      "source": {
+        "name": "reuse.bin",
+        "base": "0x2000",
+        "data": "KgA="
+      }
+    },
+    {
+      "id": "l",
+      "packId": "",
+      "nodeId": "structread",
+      "x": 300,
+      "y": 0,
+      "params": {
+        "structureId": "layout/entry",
+        "address": "0x2000"
+      }
+    },
+    {
+      "id": "p",
+      "packId": "",
+      "nodeId": "structread",
+      "x": 300,
+      "y": 180,
+      "params": {
+        "structureId": "pack/p1/Entry",
+        "address": "0x2000"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "from": {
+        "node": "f",
+        "port": "buffer"
+      },
+      "to": {
+        "node": "l",
+        "port": "buffer"
+      }
+    },
+    {
+      "id": "e2",
+      "from": {
+        "node": "f",
+        "port": "buffer"
+      },
+      "to": {
+        "node": "p",
+        "port": "buffer"
+      }
+    }
+  ]
+}

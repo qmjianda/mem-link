@@ -124,7 +124,7 @@ describe('当前图文档无需重新载入转储', () => {
   it('当前缓存内联的 base64 在载入后自动登记为资产', () => {
     const bytes = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
     const node = fileNode('f1', 'old.bin', 0, bytes);
-    const raw = JSON.stringify({ version: 2, savedAt: 0, packs: [], nodes: [node], edges: [] });
+    const raw = JSON.stringify({ version: 3, savedAt: 0, packs: [], nodes: [node], edges: [] });
     const loaded = deserialize(raw);
     expect(loaded.code).toBe('OK');
     const r = evaluateGraph(loaded.doc!.nodes, loaded.doc!.edges, new Map());

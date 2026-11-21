@@ -7,7 +7,8 @@ export const UI_VERSION = 1;
 /** 折叠后固定留出的竖排条宽度 */
 export const COLLAPSED_W = 36;
 export interface LayoutState { leftWidth: number; rightWidth: number; leftCollapsed: boolean; rightCollapsed: boolean }
-export interface UiPrefs { layout: LayoutState; groups: GroupState; minimap: boolean }
+export interface DesignerPrefs { rowBytes: 4 | 8 | 16 | 32; bitOrder: 'lsb' | 'msb'; tableOpen: boolean }
+export interface UiPrefs { layout: LayoutState; groups: GroupState; minimap: boolean; designer?: DesignerPrefs }
 /** 分组折叠表：key 为 `builtin` 或 pack id，true 表示折叠 */
 export type GroupState = Record<string, boolean>;
 /** 宽度上下限：左 240–480，右 320–640 */
@@ -34,7 +35,7 @@ export function autoCollapse(viewportWidth: number): Partial<LayoutState> {
   return {};
 }
 export function defaultPrefs(): UiPrefs {
-  return { layout: { ...LAYOUT_DEFAULT }, groups: {}, minimap: true };
+  return { layout: { ...LAYOUT_DEFAULT }, groups: {}, minimap: true, designer: { rowBytes: 4, bitOrder: 'lsb', tableOpen: true } };
 }
 function num(v: unknown, d: number): number { return typeof v === 'number' && Number.isFinite(v) ? v : d; }
 function bool(v: unknown, d: boolean): boolean { return typeof v === 'boolean' ? v : d; }
@@ -60,6 +61,15 @@ export function readPrefs(): UiPrefs {
       },
       groups,
       minimap: bool((env.data as { minimap?: unknown }).minimap, true),
+      designer: (() => {
+        const d = (env.data as { designer?: Partial<DesignerPrefs> }).designer;
+        const rowBytes = d?.rowBytes;
+        return {
+          rowBytes: rowBytes === 4 || rowBytes === 8 || rowBytes === 16 || rowBytes === 32 ? rowBytes : 4,
+          bitOrder: d?.bitOrder === 'msb' ? 'msb' : 'lsb',
+          tableOpen: typeof d?.tableOpen === 'boolean' ? d.tableOpen : true,
+        };
+      })(),
     };
   } catch {
     return base;
@@ -68,7 +78,11 @@ export function readPrefs(): UiPrefs {
 /** 写入 UI 偏好：存储不可用时只保留内存态，不抛错。 */
 export function writePrefs(prefs: UiPrefs): void {
   try {
-    const env = { version: UI_VERSION, savedAt: Date.now(), data: prefs };
+    const current = readPrefs();
+    const env = {
+      version: UI_VERSION, savedAt: Date.now(),
+      data: { ...prefs, designer: prefs.designer ?? current.designer },
+    };
     window.localStorage.setItem(KEY_UI, JSON.stringify(env));
   } catch {
     /* 隐私模式 / 配额满：静默降级，布局仍在本会话内存中生效 */

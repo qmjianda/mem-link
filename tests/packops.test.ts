@@ -5,7 +5,7 @@ import { deserialize, GRAPH_VERSION, serialize } from '../src/bp/persist';
 import { isPackEnabled, type DocState, type LoadedPack } from '../src/bp/docstate';
 import {
   addPack, cleanupPackNodes, disabledPackIds, enabledPackMap, packImpact,
-  removePackAtomic, renamePack, setPackEnabled, uniquePackName,
+  removePackAtomic, renamePack, setPackEnabled, uniquePackName, updatePackSource,
 } from '../src/bp/packops';
 import type { BPNode } from '../src/bp/types';
 
@@ -200,5 +200,35 @@ describe('persist：enabled', () => {
     expect(r.doc!.packs[1].enabled).toBe(false);
     const payload = JSON.parse(serialize(doc));
     expect(payload.packs[1]).toMatchObject({ id: 'p2', enabled: false });
+  });
+});
+
+
+describe('updatePackSource', () => {
+  it('保留本地 id/name/enabled 与节点，只替换源码、编译产物和商店来源', () => {
+    const doc = setPackEnabled(sampleDoc(), 'p1', false);
+    const r = loadBlueprintPack(demoSource);
+    const store = {
+      url: 'https://example.com/index.json',
+      packId: 'demo',
+      version: '2.0.0',
+      sha256: 'b'.repeat(64),
+      coverage: 'partial' as const,
+    };
+    const next = updatePackSource(doc, 'p1', `${demoSource}\n// v2`, r.pack!, store);
+    const p = next.packs[0];
+    expect(p.id).toBe('p1');
+    expect(p.name).toBe('Alpha');
+    expect(isPackEnabled(p)).toBe(false);
+    expect(p.store).toEqual(store);
+    expect(p.source).toContain('// v2');
+    expect(next.nodes).toBe(doc.nodes);
+    expect(next.edges).toBe(doc.edges);
+  });
+
+  it('pack 不存在时原样返回', () => {
+    const doc = sampleDoc();
+    const r = loadBlueprintPack(demoSource);
+    expect(updatePackSource(doc, 'nope', demoSource, r.pack!)).toBe(doc);
   });
 });

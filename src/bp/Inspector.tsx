@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Memory } from '../core/mem';
 import type { BlueprintPack, BPEdge, BPNode, BPResult, BufferValue, ByteOrigin } from './types';
 import { builtinLabel, displayTitle, type InstanceView } from './types';
@@ -10,7 +10,9 @@ import { IconAlert, IconFile, IconX } from '../ui/icons';
 import { addressHex, addressInteger, exactInteger, isExactPort, isMappedAddress, MAX_ADDRESS, offsetIn, type AddressInt } from './precision';
 import { isByteSpan } from './binary-read';
 import { displayField, type BinaryLayout } from './layouts';
-import LayoutEditor from './LayoutEditor';
+import type { StructureRegistry } from './structure';
+import type { LayoutUsageIndex } from './designer/usage';
+import StructureSummary from './StructureSummary';
 import InterpretValue, { ByteProbe } from './InterpretValue';
 
 interface Props {
@@ -29,9 +31,11 @@ interface Props {
   onHex: (id: string, text: string) => string | undefined;
   onBase: (id: string, n: string) => void;
   layouts?: BinaryLayout[];
+  structures?: StructureRegistry;
+  usage?: LayoutUsageIndex;
   onCreateLayout: (nodeId: string) => void;
-  onEditLayout: (layout: BinaryLayout, field?: string) => void;
-  onSelectLayout: (nodeId: string, layoutId: string) => void;
+  onSelectLayout: (nodeId: string, structureId: string) => void;
+  onOpenDesigner?: (structureId: string) => void;
   /** 折叠整个检查器为 36px 竖排条 */
   onCollapse: () => void;
   /** 当前选择的规模：多选时顶部显示「已选 N 个对象」 */
@@ -48,6 +52,10 @@ interface Props {
   onCopy?: (text: string, label: string) => void;
   onFollow?: (addr: AddressInt, description: string, nodeId?: string) => void;
   onAddRead?: (nodeId: string, cfg: { address: bigint; kind: string; endian: 'little' | 'big' }) => void;
+  /** 结构体「在缓冲区打开」：选中来源 File 节点并定位到绝对地址 */
+  onOpenBuffer?: (fileId: string, addr: bigint) => void;
+  /** 父级要求 File 节点缓冲区定位到的地址（只消费一次） */
+  bufferFocus?: { nodeId: string; addr: bigint } | null;
   /** 全屏结构树：struct / list / array 节点可用 */
   onOpenNode?: (nodeId: string) => void;
 }
@@ -112,10 +120,12 @@ export interface FieldTools {
   onFollow: (addr: AddressInt, description: string, nodeId?: string) => void;
   /** 把一次试读保存成读数值节点（来源、地址、类型、字节序与预览一致） */
   onAddRead?: (nodeId: string, cfg: { address: bigint; kind: string; endian: 'little' | 'big' }) => void;
+  /** 选中来源 File 节点并把缓冲区滚到该绝对地址 */
+  onOpenBuffer?: (fileId: string, addr: bigint) => void;
 }
 
-export function FieldTable({ inst, name, tools }: {
-  inst: InstanceView; name?: string; tools?: FieldTools;
+export function FieldTable({ inst, name, tools, fileId }: {
+  inst: InstanceView; name?: string; tools?: FieldTools; fileId?: string;
 }) {
   const [hover, setHover] = useState<string | null>(null);
   const [pinned, setPinned] = useState<string | null>(null);
@@ -230,6 +240,16 @@ export function FieldTable({ inst, name, tools }: {
               if (f) { setPinned(f.name); setHover(f.name); }
             }}
           />
+          {fileId && tools?.onOpenBuffer && (
+            <button
+              type="button"
+              className="bp-ft-btn go bp-hex-open"
+              title="在来源文件的完整缓冲区中查看"
+              onClick={() => tools.onOpenBuffer?.(fileId, abs)}
+            >
+              在缓冲区打开 →
+            </button>
+          )}
         </>
       )}
     </>
@@ -237,7 +257,7 @@ export function FieldTable({ inst, name, tools }: {
 }
 
 function FileEditor({
-  node, buffer, onFile, onHex, onBase, tools,
+  node, buffer, onFile, onHex, onBase, tools, initialAddr,
 }: {
   node: BPNode;
   buffer?: BufferValue;
@@ -245,6 +265,8 @@ function FileEditor({
   onHex: (id: string, text: string) => string | undefined;
   onBase: (id: string, n: string) => void;
   tools?: FieldTools;
+  /** 从结构体「在缓冲区打开」跳进来的绝对地址 */
+  initialAddr?: bigint;
 }) {
   const [hex, setHex] = useState('');
   const mem = useMemo(
@@ -252,15 +274,33 @@ function FileEditor({
     [buffer],
   );
   const fileBase = addressInteger(node.source?.base) ?? 0n;
+  const initialOffset = initialAddr === undefined ? null : Number(initialAddr - fileBase);
   const [base, setBase] = useState<string | null>(null);
   const [baseBad, setBaseBad] = useState(false);
-  // 缓冲区视图：起始地址（由跳转框控制）与点选的字节（hex → 画布的入口）
-  const [viewAddr, setViewAddr] = useState<number | null>(null);
+  // 视口顶部与点选的字节（hex → 画布的入口）
+  const [viewTop, setViewTop] = useState(0);
   const [go, setGo] = useState('');
   const [goBad, setGoBad] = useState(false);
-  const [picked, setPicked] = useState<number | null>(null);
+  const [picked, setPicked] = useState<number | null>(() => (
+    initialOffset !== null && Number.isFinite(initialOffset) && initialOffset >= 0
+      && !!mem && initialOffset < mem.size ? initialOffset : null
+  ));
+  const [revealTick, setRevealTick] = useState(initialOffset !== null ? 1 : 0);
+  const [expanded, setExpanded] = useState(false);
   const [loadError, setLoadError] = useState('');
-  const start = viewAddr ?? 0;
+
+  // 展开是面板内的沉浸视图：Esc 只收起它，不触发全局选择/连线快捷键。
+  useEffect(() => {
+    if (!expanded) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopPropagation();
+      setExpanded(false);
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
+  }, [expanded]);
 
   /** 支持 `0x1200`、十进制，以及相对文件基址的 `+0x100` / `-0x40`。 */
   const applyGo = () => {
@@ -268,9 +308,9 @@ function FileEditor({
     const offset = v === undefined ? undefined : /^[+-]/.test(go.trim()) ? v : v - fileBase;
     if (offset === undefined || offset < 0n || !mem || offset >= BigInt(mem.size)) { setGoBad(true); return; }
     setGoBad(false);
-    setViewAddr(Number(offset));
     // 跳转和点选共用同一个位点：键盘跳转后也能立刻试读
     setPicked(Number(offset));
+    setRevealTick((t) => t + 1);
   };
 
   const submitHex = () => {
@@ -278,6 +318,91 @@ function FileEditor({
     setLoadError(error ?? '');
     if (!error) setHex('');
   };
+
+  const bufferUi = mem && mem.size > 0 ? (
+    <>
+      <div className="bp-hex-go">
+        <input
+          className={`in mono${goBad ? ' bad' : ''}`}
+          placeholder="跳转 0x1200 / +0x100"
+          aria-label="跳转到缓冲区地址"
+          aria-invalid={goBad}
+          title={goBad ? '请输入转储内的地址（十进制、十六进制或相对基址）' : undefined}
+          spellCheck={false}
+          value={go}
+          onChange={(e) => { setGo(e.target.value); setGoBad(false); }}
+          onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); applyGo(); } }}
+        />
+        <button type="button" className="bp-ft-btn" onClick={applyGo}>跳转</button>
+        {!expanded && (
+          <button
+            type="button"
+            className="bp-ft-btn"
+            title="在检查器内展开缓冲区（Esc 收起）"
+            aria-label="展开缓冲区"
+            onClick={() => setExpanded(true)}
+          >展开</button>
+        )}
+      </div>
+      <div className="bp-hex-range">
+        顶部 {addressHex(fileBase + BigInt(Math.min(viewTop, Math.max(0, mem.size - 1))))} · 共 {mem.size} B
+      </div>
+      <HexView
+        mem={mem}
+        addr={0}
+        len={mem.size}
+        virtual
+        compact
+        initialTop={viewTop}
+        focusAddr={picked}
+        revealAddr={picked}
+        revealTick={revealTick}
+        displayBase={fileBase}
+        onPickByte={(a) => setPicked(a)}
+        onViewAddr={setViewTop}
+      />
+      {picked != null && (
+        <div className="bp-field-addr">
+          <div className="bp-field-addr-text mono" title="点选的字节地址">
+             选中 {addressHex(fileBase + BigInt(picked))} · 点击其它字节可切换
+          </div>
+          <div className="bp-field-tools">
+            <button type="button" className="bp-ft-btn" title="复制地址"
+               onClick={() => tools?.onCopy(addressHex(fileBase + BigInt(picked)), '已复制地址')}>地址</button>
+            <button type="button" className="bp-ft-btn go" title="以该地址为起点跟随解析"
+               onClick={() => tools?.onFollow(fileBase + BigInt(picked), `${node.source?.name ?? '缓冲区'} 点选字节`, node.id)}>在此解析 →</button>
+          </div>
+        </div>
+      )}
+      {picked !== null && (
+        <ByteProbe
+          bytes={mem.buf}
+          offset={picked}
+          baseAddress={fileBase}
+          sourceNodeId={node.id}
+          onAddRead={tools?.onAddRead}
+        />
+      )}
+    </>
+  ) : <div className="bp-empty">没有载入字节</div>;
+
+  if (expanded && mem && mem.size > 0) {
+    return (
+      <div
+        className="bp-hex-expanded"
+        role="region"
+        aria-label="缓冲区"
+        onKeyDown={(e) => { if (e.key !== 'Escape') e.stopPropagation(); }}
+      >
+        <div className="bp-hex-expanded-head">
+          <b>{node.source?.name ?? '缓冲区'}</b>
+          <span className="dim mono">{mem.size} B · 基址 {addressHex(fileBase)}</span>
+          <button type="button" className="bp-ft-btn" onClick={() => setExpanded(false)}>收起 · Esc</button>
+        </div>
+        {bufferUi}
+      </div>
+    );
+  }
 
   return (
     <>
@@ -340,57 +465,8 @@ function FileEditor({
         />
       </label>
 
-      {mem && mem.size > 0 && (
-        <>
-          <div className="bp-sub">缓冲区</div>
-          <div className="bp-hex-go">
-            <input
-              className={`in mono${goBad ? ' bad' : ''}`}
-              placeholder="跳转 0x1200 / +0x100"
-              aria-label="跳转到缓冲区地址"
-              aria-invalid={goBad}
-              title={goBad ? '请输入转储内的地址（十进制、十六进制或相对基址）' : undefined}
-              spellCheck={false}
-              value={go}
-              onChange={(e) => { setGo(e.target.value); setGoBad(false); }}
-              onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); applyGo(); } }}
-            />
-            <button type="button" className="bp-ft-btn" onClick={applyGo}>跳转</button>
-          </div>
-          <HexView
-            mem={mem}
-            addr={start}
-            len={256}
-            compact
-            maxRows={14}
-            focusAddr={picked ?? viewAddr}
-            displayBase={fileBase}
-            onPickByte={(a) => setPicked(a)}
-          />
-          {picked != null && (
-            <div className="bp-field-addr">
-              <div className="bp-field-addr-text mono" title="点选的字节地址">
-                 选中 {addressHex(fileBase + BigInt(picked))} · 点击其它字节可切换
-              </div>
-              <div className="bp-field-tools">
-                <button type="button" className="bp-ft-btn" title="复制地址"
-                   onClick={() => tools?.onCopy(addressHex(fileBase + BigInt(picked)), '已复制地址')}>地址</button>
-                <button type="button" className="bp-ft-btn go" title="以该地址为起点跟随解析"
-                   onClick={() => tools?.onFollow(fileBase + BigInt(picked), `${node.source?.name ?? '缓冲区'} 点选字节`, node.id)}>在此解析 →</button>
-              </div>
-            </div>
-          )}
-          {picked !== null && (
-            <ByteProbe
-              bytes={mem.buf}
-              offset={picked}
-              baseAddress={fileBase}
-              sourceNodeId={node.id}
-              onAddRead={tools?.onAddRead}
-            />
-          )}
-        </>
-      )}
+      <div className="bp-sub">缓冲区</div>
+      {bufferUi}
     </>
   );
 }
@@ -409,7 +485,7 @@ function OriginPreview({ origin }: { origin: ByteOrigin }) {
 }
 
 function NodeBody({
-  node, result, onSelect, onFile, onHex, onBase, tools, onParam,
+  node, result, onSelect, onFile, onHex, onBase, tools, onParam, bufferFocus,
 }: {
   node: BPNode;
   result: BPResult;
@@ -419,6 +495,7 @@ function NodeBody({
   onBase: (id: string, n: string) => void;
   tools?: FieldTools;
   onParam?: (id: string, key: string, value: string) => void;
+  bufferFocus?: { nodeId: string; addr: bigint } | null;
 }) {
   const view = result.views.get(node.id);
   if (!view) return <div className="bp-empty">没有求值结果</div>;
@@ -445,7 +522,13 @@ function NodeBody({
   if (view.kind === 'file') {
     return <>
       {view.error && node.source?.data && <div className="bp-banner">{view.error}</div>}
-      <FileEditor key={node.id} node={node} buffer={result.sources.get(node.id)?.buffer} onFile={onFile} onHex={onHex} onBase={onBase} tools={tools} />
+      <FileEditor
+        key={node.id}
+        node={node}
+        buffer={result.sources.get(node.id)?.buffer}
+        onFile={onFile} onHex={onHex} onBase={onBase} tools={tools}
+        initialAddr={bufferFocus?.nodeId === node.id ? bufferFocus.addr : undefined}
+      />
     </>;
   }
   if (view.kind === 'number') {
@@ -477,7 +560,7 @@ function NodeBody({
   if (view.kind === 'struct' || view.kind === 'element') {
     if (view.error) return <div className="bp-banner">{view.error}</div>;
     if (!view.inst) return <div className="bp-empty">没有实例</div>;
-    return <FieldTable inst={view.inst} tools={tools} />;
+    return <FieldTable inst={view.inst} tools={tools} fileId={result.sources.get(node.id)?.fileId} />;
   }
   if (view.kind === 'list' || view.kind === 'array') {
     return (
@@ -516,10 +599,12 @@ export default function Inspector({
   packs, packNames, nodes, edges, result, selection, onSelect, onParam, onMode,
   onDisconnect, onDeleteEdge, onFile, onHex, onBase, onCollapse, multi,
   renameId, onRenameDone, onCopy, onFollow, onAddRead, tab, onTab, onFocusProblem, onOpenNode,
-  layouts = [], onCreateLayout, onEditLayout, onSelectLayout,
+  layouts = [], structures, usage, onCreateLayout, onSelectLayout, onOpenDesigner, onOpenBuffer, bufferFocus,
 }: Props) {
   const problemListRef = useRef<HTMLDivElement>(null);
-  const tools: FieldTools | undefined = onCopy && onFollow ? { onCopy, onFollow, onAddRead } : undefined;
+  const tools: FieldTools | undefined = onCopy && onFollow
+    ? { onCopy, onFollow, onAddRead, onOpenBuffer }
+    : undefined;
   const node = selection?.kind === 'node'
     ? nodes.find((n) => n.id === selection.id)
     : selection?.kind === 'entry'
@@ -815,13 +900,15 @@ export default function Inspector({
 
               {!node.packId && (node.nodeId === 'structread' || node.nodeId === 'listread'
                 || (node.nodeId === 'arrayread' && node.params.elementType === 'record')) && (
-                <LayoutEditor node={node} layouts={layouts} onCreate={() => onCreateLayout(node.id)}
-                  onEdit={onEditLayout} onSelect={id => onSelectLayout(node.id, id)}
+                <StructureSummary node={node} layouts={layouts} structures={structures?.list()} usage={usage}
+                  onCreate={() => onCreateLayout(node.id)}
+                  onSelect={id => onSelectLayout(node.id, id)}
+                  onOpen={(id) => onOpenDesigner?.(id)}
                   onParam={(key, value) => onParam(node.id, key, value)} />
               )}
 
               {(() => {
-                const items = portsFor(node, packs, undefined, layouts).inputs.filter((p) => !p.context);
+                const items = portsFor(node, packs, undefined, layouts, structures).inputs.filter((p) => !p.context);
                 if (!items.length) return null;
                 return (
                   <>
@@ -869,12 +956,17 @@ export default function Inspector({
                 </div>
               )}
 
-              <NodeBody node={node} result={result} onSelect={onSelect} onFile={onFile} onHex={onHex} onBase={onBase} tools={tools} onParam={onParam} />
+              <NodeBody node={node} result={result} onSelect={onSelect} onFile={onFile} onHex={onHex} onBase={onBase} tools={tools} onParam={onParam} bufferFocus={bufferFocus} />
 
               {entry && (
                 <>
                   <div className="bp-sub">选中的元素</div>
-                  <FieldTable inst={entry} name={`${entry.typeName} #${entry.index ?? 0}`} tools={tools} />
+                  <FieldTable
+                    inst={entry}
+                    name={`${entry.typeName} #${entry.index ?? 0}`}
+                    tools={tools}
+                    fileId={result.sources.get(node.id)?.fileId}
+                  />
                 </>
               )}
             </>
@@ -883,7 +975,7 @@ export default function Inspector({
           {!node && entry && (
             <>
               <div className="bp-insp-head"><span>元素</span><span className="mono">{entry.typeName}</span></div>
-              <FieldTable inst={entry} tools={tools} />
+              <FieldTable inst={entry} tools={tools} fileId={result.sources.get(selection?.kind === 'entry' ? selection.nodeId : '')?.fileId} />
             </>
           )}
 

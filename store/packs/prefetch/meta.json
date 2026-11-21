@@ -1,0 +1,29 @@
+{
+  "id": "prefetch",
+  "name": "Windows Prefetch",
+  "version": "1.0.0",
+  "category": "system",
+  "order": 257,
+  "summary": "Windows Prefetch file (SCCA)",
+  "description": "Windows Prefetch (SCCA) header and the version-specific file information block: last run times and run count.",
+  "tags": [
+    "system",
+    "windows",
+    "forensics",
+    "dfir",
+    "execution",
+    "malware"
+  ],
+  "author": "Nybble",
+  "license": "Free use / redistribution (Nybble registry)",
+  "homepage": "https://github.com/libyal/libscca/blob/main/documentation/Windows%20Prefetch%20File%20(PF)%20format.asciidoc",
+  "coverage": "partial",
+  "source": {
+    "provider": "nybble",
+    "id": "prefetch",
+    "format": "Prefetch",
+    "version": "1.0.0",
+    "url": "https://github.com/itsmajdbuilds/binary-explorer-registry/tree/main/formats/prefetch",
+    "license": "Nybble format registry"
+  }
+}

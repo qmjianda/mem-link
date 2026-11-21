@@ -24,7 +24,7 @@ function makeFixture() {
   // 5000 * 24 B 的 Entry，再留出地址 0x100 前的空间；全零内容足够验证分页与定位。
   const bytes = Buffer.alloc(0x20000);
   return {
-    version: 2,
+    version: 3,
     savedAt: Date.now(),
     packs: [{ ...sourceDoc.packs[0], source, enabled: true }],
     nodes: [
@@ -95,7 +95,7 @@ async function main() {
   await send('Page.enable');
 
   const fixture = makeFixture();
-  await evaluate(`localStorage.setItem('memlink:graph:v2', ${JSON.stringify(JSON.stringify(fixture))})`);
+  await evaluate(`localStorage.setItem('memlink:graph:v3', ${JSON.stringify(JSON.stringify(fixture))})`);
   await send('Page.reload', { ignoreCache: true });
   for (let i = 0; i < 100; i++) {
     if (await evaluate(`document.querySelectorAll('.bp-node').length === 2`)) break;
@@ -121,7 +121,7 @@ async function main() {
   await sleep(950);
   check('截断后的元素没有画布地址端口，生成节点连到原文件',
     await evaluate(`(() => {
-      const doc = JSON.parse(localStorage.getItem('memlink:graph:v2'));
+      const doc = JSON.parse(localStorage.getItem('memlink:graph:v3'));
       const edge = doc?.edges.at(-1);
       const node = doc?.nodes.at(-1);
       return node?.nodeId === 'element' && node.params.address === '0x18100'

@@ -1,6 +1,6 @@
 /** Save/load a blueprint document (pack sources + graph + optional buffer). */
 
-import { BLUEPRINT_FORMAT, type BPEdge, type BPDoc, type BPNode } from './types';
+import { BLUEPRINT_FORMAT, type BPEdge, type BPDoc, type BPNode, type PackStoreRef } from './types';
 import { addressInteger } from './precision';
 import { validLayoutDocument, type BinaryLayout } from './layouts';
 
@@ -21,7 +21,7 @@ export function base64ToBytes(b64: string): Uint8Array {
 }
 
 export function makeDoc(
-  packs: { id: string; name: string; source: string }[],
+  packs: { id: string; name: string; source: string; store?: PackStoreRef }[],
   nodes: BPNode[],
   edges: BPEdge[],
   layouts?: BinaryLayout[],
@@ -47,6 +47,12 @@ export function parseDoc(text: string): { doc?: BPDoc; error?: string } {
   for (const p of d.packs) {
     if (!p || typeof p.id !== 'string' || typeof p.source !== 'string') {
       return { error: 'pack 条目缺少 id/source' };
+    }
+    if (p.store !== undefined) {
+      const s = p.store as Partial<PackStoreRef> | null;
+      if (!s || typeof s !== 'object' || typeof s.url !== 'string' || typeof s.packId !== 'string' || typeof s.version !== 'string') {
+        return { error: `pack ${p.id} 的商店来源信息非法` };
+      }
     }
   }
   for (const n of d.nodes) {

@@ -1,0 +1,27 @@
+{
+  "id": "woff",
+  "name": "WOFF web font",
+  "version": "1.0.0",
+  "category": "media",
+  "order": 279,
+  "summary": "Web Open Font Format header",
+  "description": "Web Open Font Format wrapper header (WOFF 1.0).",
+  "tags": [
+    "font",
+    "web",
+    "sfnt",
+    "woff"
+  ],
+  "author": "Nybble",
+  "license": "Free use / redistribution (Nybble registry)",
+  "homepage": "https://www.w3.org/TR/WOFF/",
+  "coverage": "complete",
+  "source": {
+    "provider": "nybble",
+    "id": "woff",
+    "format": "WOFF",
+    "version": "1.0.0",
+    "url": "https://github.com/itsmajdbuilds/binary-explorer-registry/tree/main/formats/woff",
+    "license": "Nybble format registry"
+  }
+}

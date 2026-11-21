@@ -131,3 +131,26 @@ export function disabledPackIds(packs: LoadedPack[]): Set<string> {
   for (const p of packs) if (!isPackEnabled(p)) out.add(p.id);
   return out;
 }
+
+/**
+ * 从商店更新已安装 pack：保留本地 id、显示名与启用态，只替换源码/编译产物/来源。
+ * 节点与连线保持原样；若 pack 的节点 id 变了，求值器会按既有规则报问题。
+ */
+export function updatePackSource(
+  doc: DocState,
+  packId: string,
+  source: string,
+  pack: LoadedPack['pack'],
+  store?: LoadedPack['store'],
+): DocState {
+  const idx = doc.packs.findIndex((p) => p.id === packId);
+  if (idx < 0) return doc;
+  const packs = doc.packs.slice();
+  packs[idx] = {
+    ...packs[idx],
+    source,
+    pack,
+    ...(store ? { store } : {}),
+  };
+  return { ...doc, packs };
+}

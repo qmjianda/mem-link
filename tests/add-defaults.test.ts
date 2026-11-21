@@ -18,7 +18,7 @@ function file(id: string, base: number, value: number): BPNode {
   };
 }
 
-const Entry = struct('Entry', 1, [u8('value', 0)]);
+const Entry = struct('Entry', [u8('value')]);
 const packs = new Map([['p', definePack({ types: { Entry }, nodes: { entry: structNode(Entry) } })]]);
 const first = file('first', 0x1000, 1);
 const second = file('second', 0x1000, 2);

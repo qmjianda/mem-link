@@ -1,5 +1,5 @@
 import { addOffset, integerInput, ReadIssue } from './binary-read';
-import { compileLayout, fieldPort, MAX_FIELD_BYTES, readLayout, readScalarItem, type BinaryLayout } from './layouts';
+import { compileLayout, fieldPort, MAX_FIELD_BYTES, readLayout, readScalarItem, type BinaryLayout, type LayoutResolver } from './layouts';
 import { addressHex, MAX_ADDRESS, offsetIn } from './precision';
 import type { Endian } from '../core/types';
 import type { BufferValue, InstanceView, Truncation } from './types';
@@ -24,14 +24,14 @@ function invalid(items: InstanceView[], err: unknown): WalkResult {
 }
 
 export function expandArray(
-  src: BufferValue, start: bigint, count: bigint, stride: bigint | undefined, kind: string, endian: Endian, layout?: BinaryLayout,
+  src: BufferValue, start: bigint, count: bigint, stride: bigint | undefined, kind: string, endian: Endian, layout?: BinaryLayout, resolve?: LayoutResolver,
 ): WalkResult {
-  const compiled = layout && compileLayout(layout);
+  const compiled = layout && compileLayout(layout, resolve);
   const width = compiled?.size ?? Number(kind.slice(1)) / 8;
   if (!Number.isSafeInteger(width) || width < 1) throw new ReadIssue('BAD_INPUT', '元素需要固定宽度');
   const step = stride ?? BigInt(width);
   const items: InstanceView[] = [];
-  const limit = itemBudget(compiled ? Math.max(width, compiled.fields.reduce((n, f) => n + f.width, 0)) : width);
+  const limit = itemBudget(compiled ? Math.max(width, compiled.type.fields.reduce((n, f) => n + (f.size ?? 0), 0)) : width);
   let i = 0;
   try {
     for (; i < limit && BigInt(i) < count; i++) {
@@ -54,19 +54,19 @@ export function walkList(
   src: BufferValue, layout: BinaryLayout | undefined, config: {
     start: bigint; nextField: string; stopValue: bigint; max: number;
     pool?: { base: bigint; stride: bigint };
-  },
+  }, resolve?: LayoutResolver,
 ): WalkResult {
-  const compiled = compileLayout(layout);
-  const def = compiled.fields.find(({ f }) => f.id === config.nextField);
-  if (!def || !/^(?:[ui]\d+|bits)$/.test(def.f.kind)) {
+  const compiled = compileLayout(layout, resolve);
+  const def = compiled.type.fields.find((f) => f.name === config.nextField);
+  if (!def || !/^(?:[ui]\d+|bits)$/.test(def.kind)) {
     throw new ReadIssue('INVALID_LAYOUT', 'next 必须绑定布局中的整数字段');
   }
-  if (def.f.role && def.f.role !== (config.pool ? 'index' : 'address')) {
+  if (def.role && def.role !== (config.pool ? 'index' : 'address')) {
     throw new ReadIssue('INVALID_LAYOUT', 'next 字段语义与推进方式不一致');
   }
   const items: InstanceView[] = [];
   const visited = new Set<bigint>();
-  const limit = itemBudget(Math.max(compiled.size, compiled.fields.reduce((n, f) => n + f.width, 0)), config.max);
+  const limit = itemBudget(Math.max(compiled.size, compiled.type.fields.reduce((n, f) => n + (f.size ?? 0), 0)), config.max);
   let at = config.start;
   try {
     for (;;) {
@@ -81,7 +81,7 @@ export function walkList(
       visited.add(at);
       const item = readLayout(src, at, compiled, items.length);
       items.push(item);
-      const field = item.fields.find(f => f.name === fieldPort(compiled.layout.id, config.nextField))!;
+      const field = item.fields.find(f => f.name === fieldPort(`layout/${compiled.layout.id}`, config.nextField))!;
       const next = integerInput(field.raw, 'next');
       if (next === config.stopValue) return { items, stop: 'complete' };
       try {

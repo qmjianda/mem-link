@@ -1,0 +1,28 @@
+{
+  "id": "lnk",
+  "name": "Windows shortcut",
+  "version": "1.0.0",
+  "category": "system",
+  "order": 237,
+  "summary": "Windows shell link (shortcut) header",
+  "description": "Windows .lnk ShellLinkHeader: timestamps, target attributes and link flags.",
+  "tags": [
+    "windows",
+    "forensics",
+    "shortcut",
+    "dfir",
+    "malware"
+  ],
+  "author": "Nybble",
+  "license": "Free use / redistribution (Nybble registry)",
+  "homepage": "https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-shllink/",
+  "coverage": "complete",
+  "source": {
+    "provider": "nybble",
+    "id": "lnk",
+    "format": "LNK",
+    "version": "1.0.0",
+    "url": "https://github.com/itsmajdbuilds/binary-explorer-registry/tree/main/formats/lnk",
+    "license": "Nybble format registry"
+  }
+}

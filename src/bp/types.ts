@@ -148,11 +148,25 @@ export interface StoredMemory {
   data: string;
 }
 
-export const BLUEPRINT_FORMAT = 'memlink-blueprint/2';
+export const BLUEPRINT_FORMAT = 'memlink-blueprint/3';
+
+/** 商店安装来源：用于显示版本、检查更新与重新安装 */
+export interface PackStoreRef {
+  /** 商店 index.json 的规范化地址 */
+  url: string;
+  /** 商店内唯一 id（不等于 LoadedPack.id） */
+  packId: string;
+  version: string;
+  sha256?: string;
+  path?: string;
+  provider?: string;
+  coverage?: 'complete' | 'partial';
+  helpers?: number;
+}
 
 export interface BPDoc {
   format: typeof BLUEPRINT_FORMAT;
-  packs: { id: string; name: string; source: string }[];
+  packs: { id: string; name: string; source: string; store?: PackStoreRef }[];
   /** file nodes embed their own buffer in `source` */
   nodes: BPNode[];
   edges: BPEdge[];

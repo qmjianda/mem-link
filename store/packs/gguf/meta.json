@@ -1,0 +1,31 @@
+{
+  "id": "gguf",
+  "name": "GGUF model",
+  "version": "1.0.0",
+  "category": "data",
+  "order": 224,
+  "summary": "GGUF model file (llama.cpp / GGML), version 2 or 3",
+  "description": "GGUF, the llama.cpp model file: metadata key/value pairs and the tensor directory.",
+  "tags": [
+    "ml",
+    "llm",
+    "model",
+    "llama.cpp",
+    "ggml",
+    "quantization",
+    "tensor"
+  ],
+  "author": "Nybble",
+  "license": "Free use / redistribution (Nybble registry)",
+  "homepage": "https://github.com/ggml-org/ggml/blob/master/docs/gguf.md",
+  "coverage": "partial",
+  "helpers": 5,
+  "source": {
+    "provider": "nybble",
+    "id": "gguf",
+    "format": "GGUF",
+    "version": "1.0.0",
+    "url": "https://github.com/itsmajdbuilds/binary-explorer-registry/tree/main/formats/gguf",
+    "license": "Nybble format registry"
+  }
+}

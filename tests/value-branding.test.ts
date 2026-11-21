@@ -17,7 +17,7 @@ export default definePack({
   name: 'brand-test',
   endian: 'little',
   pointerSize: 4,
-  types: { T: struct('T', 4, [u8('x', 0)]) },
+  types: { T: struct('T', [u8('x')]) },
   nodes: {
     fake: calcNode({
       label: '伪元素',

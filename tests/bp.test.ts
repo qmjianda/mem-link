@@ -272,7 +272,7 @@ describe('implicit source tracing', () => {
 
   it('keeps source wires verbatim when opening a saved graph', () => {
     const doc = {
-      format: 'memlink-blueprint/2',
+      format: 'memlink-blueprint/3',
       packs: [],
       nodes: [fileNode(), node('h', 'p', 'header', { address: '0x0' })],
       edges: [edge('e0', ['f', 'buffer'], ['h', 'buffer'])],
@@ -399,8 +399,8 @@ describe('element output ports', () => {
 
   it('expands nested members for an element that has array/record fields', () => {
     const source = `
-      const Inner = struct('Inner', 2, [u16('x', 0)]);
-      const Outer = struct('Outer', 8, [array('vals', 0, 'Inner', 3), record('sub', 6, 'Inner')]);
+      const Inner = struct('Inner', [u16('x')]);
+      const Outer = struct('Outer', [array('vals', Inner, 3, { at: 0 }), record('sub', Inner, { at: 6 })], { size: 8 });
       export default definePack({
         name: 'nested-array', types: { Inner, Outer },
         nodes: { outerArr: arrayNode(Outer, { count: 1 }) },
@@ -430,8 +430,8 @@ describe('element output ports', () => {
 
   it('exposes every nested array/record member of a struct as its own port', () => {
     const source = `
-      const Inner = struct('Inner', 2, [u16('x', 0)]);
-      const Outer = struct('Outer', 8, [array('vals', 0, 'Inner', 3), record('sub', 6, 'Inner')]);
+      const Inner = struct('Inner', [u16('x')]);
+      const Outer = struct('Outer', [array('vals', Inner, 3, { at: 0 }), record('sub', Inner, { at: 6 })], { size: 8 });
       export default definePack({
         name: 'nested', types: { Inner, Outer },
         nodes: { outer: structNode(Outer) },
@@ -520,7 +520,7 @@ describe('file source inheritance', () => {
     const h1 = node('h1', 'p', 'header', { address: '0x0' });
     const h2 = node('h2', 'p', 'header', { address: '0x0' });
     const loaded = loadBlueprintPack(`export default definePack({
-      name: 'two', types: { T: struct('T', 2, [u16('x', 0)]) },
+      name: 'two', types: { T: struct('T', [u16('x')]) },
       nodes: { both: calcNode({ inputs: { a: 'number', b: 'number' }, outputs: { sum: 'number' },
         run: ({ a, b }) => ({ sum: Number(a) + Number(b) }) }) } });`);
     expect(loaded.error).toBeUndefined();

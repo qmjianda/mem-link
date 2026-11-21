@@ -1,22 +1,42 @@
 /**
- * Ambient types for `.bp.ts` blueprints. Reference this file at the top of a
- * pack (`/// <reference path="../types/memlink-bp.d.ts" />`) to get editor
+ * Ambient types for `.bp.ts` packs. Reference this file at the top of a pack
+ * (`/// <reference path="../types/memlink-bp.d.ts" />`) to get editor
  * completion. The runtime injects these functions as globals.
+ *
+ * One geometry rule: fields are placed in declaration order. `at` anchors a
+ * byte offset; omit it to continue at the current cursor. `pad` / `align` are
+ * layout instructions inside the fields array.
  */
 
 type BPEndian = 'little' | 'big';
 type BPPortType = 'number' | 'string' | 'bytes' | 'boolean' | 'instance' | 'list' | 'buffer';
 
+type BPFieldKind =
+  | 'u8' | 'u16' | 'u32' | 'u64'
+  | 'i8' | 'i16' | 'i32' | 'i64'
+  | 'f32' | 'f64'
+  | 'bool' | 'char' | 'ptr'
+  | 'string' | 'bytes' | 'bits' | 'record' | 'array';
+
 interface BPFieldOpts {
+  /** byte offset anchor; omitted = current cursor */
+  at?: number;
+  /** byte length for string / bytes, optional override for other kinds */
   size?: number;
-  count?: number;
-  of?: string;
-  bits?: { offset: number; width: number; signed?: boolean };
   endian?: BPEndian;
   format?: string;
   label?: string;
+  /** numeric value → display label; display only */
+  values?: Record<string, string>;
   signed?: boolean;
   transform?: (v: unknown, ctx: BPTransformCtx) => unknown;
+}
+
+interface BPBitOpts extends BPFieldOpts {
+  /** bit offset inside the storage unit */
+  bit?: number;
+  /** storage unit bytes: 1, 2, 4 or 8 */
+  unit?: 1 | 2 | 4 | 8;
 }
 
 interface BPTransformCtx {
@@ -48,25 +68,37 @@ interface BPMemApi {
 
 interface BPFieldDef {
   name: string;
-  offset: number;
-  kind: string;
+  kind: BPFieldKind;
+  offset?: number;
+  anchored?: boolean;
   size?: number;
   count?: number;
   of?: string;
-  bits?: { offset: number; width: number; signed?: boolean };
+  ofType?: BPTypeDef;
+  bits?: { offset?: number; width: number; unit?: number; unitExplicit?: boolean; signed?: boolean };
   endian?: BPEndian;
   format?: string;
   label?: string;
-  follow?: string;
+  values?: Record<string, string>;
+  role?: 'address' | 'offset' | 'index';
   transform?: (v: unknown, ctx: BPTransformCtx) => unknown;
+  signed?: boolean;
 }
 
 interface BPTypeDef {
   name: string;
   size: number;
   union?: boolean;
+  auto?: boolean;
   fields: BPFieldDef[];
+  ref?: { kind: 'layout'; id: string };
+  hasLayoutRef?: boolean;
+  sizeExplicit?: number;
 }
+
+type BPLayoutOp =
+  | { __op: 'pad'; n: number }
+  | { __op: 'align'; n: number };
 
 interface BPEntryView {
   addr: number;
@@ -86,26 +118,29 @@ interface BPEvalCtx {
   read(type: BPTypeDef, addr: number): BPEntryView;
 }
 
-declare function struct(name: string, size: number, fields: BPFieldDef[]): BPTypeDef;
-declare function union(name: string, size: number, fields: BPFieldDef[]): BPTypeDef;
-declare function u8(name: string, offset: number, opts?: BPFieldOpts): BPFieldDef;
-declare function u16(name: string, offset: number, opts?: BPFieldOpts): BPFieldDef;
-declare function u32(name: string, offset: number, opts?: BPFieldOpts): BPFieldDef;
-declare function u64(name: string, offset: number, opts?: BPFieldOpts): BPFieldDef;
-declare function i8(name: string, offset: number, opts?: BPFieldOpts): BPFieldDef;
-declare function i16(name: string, offset: number, opts?: BPFieldOpts): BPFieldDef;
-declare function i32(name: string, offset: number, opts?: BPFieldOpts): BPFieldDef;
-declare function i64(name: string, offset: number, opts?: BPFieldOpts): BPFieldDef;
-declare function f32(name: string, offset: number, opts?: BPFieldOpts): BPFieldDef;
-declare function f64(name: string, offset: number, opts?: BPFieldOpts): BPFieldDef;
-declare function bool(name: string, offset: number, opts?: BPFieldOpts): BPFieldDef;
-declare function char(name: string, offset: number, opts?: BPFieldOpts): BPFieldDef;
-declare function ptr(name: string, offset: number, opts?: BPFieldOpts): BPFieldDef;
-declare function str(name: string, offset: number, count: number, opts?: BPFieldOpts): BPFieldDef;
-declare function bytes(name: string, offset: number, count: number, opts?: BPFieldOpts): BPFieldDef;
-declare function bits(name: string, offset: number, size: number, bitOffset: number, width: number, opts?: BPFieldOpts): BPFieldDef;
-declare function record(name: string, offset: number, of: string, opts?: BPFieldOpts): BPFieldDef;
-declare function array(name: string, offset: number, of: string, count: number, opts?: BPFieldOpts): BPFieldDef;
+declare function struct(name: string, fields: Array<BPFieldDef | BPLayoutOp>, opts?: { size?: number }): BPTypeDef;
+declare function union(name: string, fields: Array<BPFieldDef | BPLayoutOp>, opts?: { size?: number }): BPTypeDef;
+declare function u8(name: string, opts?: BPFieldOpts): BPFieldDef;
+declare function u16(name: string, opts?: BPFieldOpts): BPFieldDef;
+declare function u32(name: string, opts?: BPFieldOpts): BPFieldDef;
+declare function u64(name: string, opts?: BPFieldOpts): BPFieldDef;
+declare function i8(name: string, opts?: BPFieldOpts): BPFieldDef;
+declare function i16(name: string, opts?: BPFieldOpts): BPFieldDef;
+declare function i32(name: string, opts?: BPFieldOpts): BPFieldDef;
+declare function i64(name: string, opts?: BPFieldOpts): BPFieldDef;
+declare function f32(name: string, opts?: BPFieldOpts): BPFieldDef;
+declare function f64(name: string, opts?: BPFieldOpts): BPFieldDef;
+declare function bool(name: string, opts?: BPFieldOpts): BPFieldDef;
+declare function char(name: string, opts?: BPFieldOpts): BPFieldDef;
+declare function ptr(name: string, opts?: BPFieldOpts): BPFieldDef;
+declare function str(name: string, opts: BPFieldOpts & { size: number }): BPFieldDef;
+declare function bytes(name: string, opts: BPFieldOpts & { size: number }): BPFieldDef;
+declare function bits(name: string, width: number, opts?: BPBitOpts): BPFieldDef;
+declare function record(name: string, type: BPTypeDef, opts?: BPFieldOpts): BPFieldDef;
+declare function array(name: string, type: BPTypeDef | BPFieldKind, count: number, opts?: BPFieldOpts): BPFieldDef;
+declare function pad(n: number): BPLayoutOp;
+declare function align(n: number): BPLayoutOp;
+declare function layoutType(id: string): BPTypeDef;
 
 declare function structNode(type: BPTypeDef, opts?: { label?: string; description?: string }): unknown;
 declare function listNode(type: BPTypeDef, opts: {

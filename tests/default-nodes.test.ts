@@ -26,32 +26,32 @@ const run = (nodes: BPNode[], edges: BPEdge[] = []) => evaluateGraph(nodes, edge
 
 describe('无 pack 的结构布局和集合', () => {
   const header: BinaryLayout = {
-    id: 'header', name: '文件头', size: '4', endian: 'little', nextField: 4,
+    id: 'header', name: '文件头', size: '4', endian: 'little',
     fields: [
-      { id: 'offset', name: 'tableOffset', offset: '0', kind: 'u16', role: 'offset' },
-      { id: 'count', name: 'count', offset: '2', kind: 'u8' },
-      { id: 'flag', name: 'enabled', offset: '3', kind: 'bits', size: '1', bitOffset: '1', bitWidth: '1' },
+      { id: 'offset', name: 'tableOffset', at: '0', kind: 'u16', role: 'offset' },
+      { id: 'count', name: 'count', at: '2', kind: 'u8' },
+      { id: 'flag', name: 'enabled', at: '3', kind: 'bits', unit: '1', bit: '1', width: '1' },
     ],
   };
   const record: BinaryLayout = {
-    id: 'entry', name: '记录', size: '4', endian: 'little', nextField: 3,
+    id: 'entry', name: '记录', size: '4', endian: 'little',
     fields: [
-      { id: 'next', name: 'next', offset: '0', kind: 'i16', role: 'index' },
-      { id: 'val', name: 'value', offset: '2', kind: 'u16', endian: 'big' },
+      { id: 'next', name: 'next', at: '0', kind: 'i16', role: 'index' },
+      { id: 'val', name: 'value', at: '2', kind: 'u16', endian: 'big' },
     ],
   };
   const arrNodes = [f(`0x${high.toString(16)}`, [4, 0, 2, 2, 1, 0, 0, 11, 255, 255, 0, 22]),
-    n('h', 'structread', { layoutId: header.id }), n('a', 'address'), n('arr', 'arrayread', { elementType: 'record', layoutId: record.id }),
+    n('h', 'structread', { structureId: `layout/${header.id}` }), n('a', 'address'), n('arr', 'arrayread', { elementType: 'record', structureId: `layout/${record.id}` }),
     n('i', 'item', { index: '1' })];
-  const arrWires = [wire('f', 'base', 'h', 'address'), wire('h', fieldPort(header.id, 'offset'), 'a', 'offset'),
-    wire('a', 'address', 'arr', 'address'), wire('h', fieldPort(header.id, 'count'), 'arr', 'count'), wire('arr', 'list', 'i', 'list')];
+  const arrWires = [wire('f', 'base', 'h', 'address'), wire('h', fieldPort(`layout/${header.id}`, 'offset'), 'a', 'offset'),
+    wire('a', 'address', 'arr', 'address'), wire('h', fieldPort(`layout/${header.id}`, 'count'), 'arr', 'count'), wire('arr', 'list', 'i', 'list')];
 
   it('表头驱动数组，按下标取真实值和原地址，不重新读', () => {
     const r = evaluateGraph(arrNodes, arrWires, new Map(), { layouts: [header, record] });
     expect(r.problems).toEqual([]);
-    expect(r.outputs.get('h')?.[fieldPort(header.id, 'flag')]).toBe(1n);
+    expect(r.outputs.get('h')?.[fieldPort(`layout/${header.id}`, 'flag')]).toBe(1n);
     expect(r.outputs.get('arr')?.count).toBe(2n);
-    expect(r.outputs.get('i')?.[fieldPort(record.id, 'val')]).toBe(22n);
+    expect(r.outputs.get('i')?.[fieldPort(`layout/${record.id}`, 'val')]).toBe(22n);
     expect(r.outputs.get('i')?.address).toMatchObject({ value: high + 8n });
     const items = r.outputs.get('arr')?.list as unknown[];
     expect(r.outputs.get('i')?.instance).toBe(items[1]);
@@ -78,7 +78,7 @@ describe('无 pack 的结构布局和集合', () => {
   });
 
   it('共享布局重命名不改端口，并能通过历史、导出与缓存恢复', () => {
-    const nodes = [...arrNodes, n('h2', 'structread', { layoutId: header.id })];
+    const nodes = [...arrNodes, n('h2', 'structread', { structureId: `layout/${header.id}` })];
     const edges = [...arrWires, wire('f', 'base', 'h2', 'address')];
     const before = { packs: [], nodes, edges, layouts: [header, record] };
     const renamed = { ...header, name: '共享表头', fields: header.fields.map(f => f.id !== 'count' ? f : { ...f, name: '记录项数' }) };
@@ -88,7 +88,7 @@ describe('无 pack 的结构布局和集合', () => {
     const doc = parseDoc(JSON.stringify(makeDoc([], nodes, edges, after.layouts))).doc!;
     const cache = deserialize(serialize({ ...doc, packs: [] })).doc!;
     const result = evaluateGraph(cache.nodes, cache.edges, new Map(), { layouts: cache.layouts });
-    const countPort = result.ports.get('h')?.outputs.find(p => p.name === fieldPort(header.id, 'count'));
+    const countPort = result.ports.get('h')?.outputs.find(p => p.name === fieldPort(`layout/${header.id}`, 'count'));
     expect(countPort?.label).toBe('记录项数');
     expect(result.ports.get('h2')?.outputs.find(p => p.name === countPort?.name)?.label).toBe('记录项数');
     expect(result.outputs.get('arr')?.count).toBe(2n);
@@ -103,7 +103,7 @@ describe('无 pack 的结构布局和集合', () => {
   });
 
   it('布局有效但结构跨越限定字节范围时不发布半条记录', () => {
-    const nodes = [f(0, [1, 2, 3, 4]), n('range', 'slice', { length: '2' }), n('h', 'structread', { layoutId: header.id })];
+    const nodes = [f(0, [1, 2, 3, 4]), n('range', 'slice', { length: '2' }), n('h', 'structread', { structureId: `layout/${header.id}` })];
     const result = evaluateGraph(nodes, [wire('range', 'span', 'h', 'buffer')], new Map(), { layouts: [header] });
     expect(result.problems).toContainEqual(expect.objectContaining({ nodeKey: 'h', code: 'OUT_OF_BOUNDS' }));
     expect(result.outputs.get('h')?.instance).toBeUndefined();
@@ -130,7 +130,7 @@ describe('无 pack 的结构布局和集合', () => {
     [2, 0, '2', '达到上限', 'TRUNCATED'],
   ])('池下标链表停止状态：%s %s', (lo, hi, limit, stop, code) => {
     const file = f(0x1000, [lo, hi, 0, 10, 0, 0, 0, 20, 255, 255, 0, 30]); // 下标 1 -> 0
-    const list = n('list', 'listread', { layoutId: record.id, address: '0x1004', mode: 'index', limit, nextField: 'next', stopValue: '-1' });
+    const list = n('list', 'listread', { structureId: `layout/${record.id}`, address: '0x1004', mode: 'index', limit, nextField: 'next', stopValue: '-1' });
     const r = evaluateGraph([file, list], [], new Map(), { layouts: [record] });
     expect(r.views.get('list')).toMatchObject({ stop, count: 2, truncated: code === 'TRUNCATED' });
     expect(r.problems.find(p => p.nodeKey === 'list')?.code).toBe(code);
@@ -140,7 +140,7 @@ describe('无 pack 的结构布局和集合', () => {
   it('绝对地址链表先判定定制结束值，即使结束值不是一个合法地址', () => {
     const layout = { ...record, fields: [{ ...record.fields[0], role: 'address' as const }, record.fields[1]] };
     const file = f(0x1000, [4, 16, 0, 10, 255, 255, 0, 20]);
-    const list = n('list', 'listread', { layoutId: layout.id, address: '0x1000', nextField: 'next', stopValue: '-1' });
+    const list = n('list', 'listread', { structureId: `layout/${layout.id}`, address: '0x1000', nextField: 'next', stopValue: '-1' });
     const result = evaluateGraph([file, list], [], new Map(), { layouts: [layout] });
     expect(result.views.get('list')).toMatchObject({ count: 2, stop: '自然结束' });
     expect(result.problems).toEqual([]);
@@ -360,10 +360,10 @@ it('两个随附示例无需 pack 即可打开和求值', () => {
     return r;
   };
   const table = demo(tableExample);
-  expect(table.outputs.get('item')?.['field:entry:f2']).toBe(20n);
+  expect(table.outputs.get('item')?.['field:layout/entry:f2']).toBe(20n);
   expect(table.outputs.get('checksumOk')?.status).toBe('通过');
   expect(table.outputs.get('magicOk')?.status).toBe('通过');
   const pool = demo(poolExample);
   expect(pool.views.get('list')).toMatchObject({ count: 3, stop: '自然结束' });
-  expect(pool.outputs.get('last')?.['field:entry:f2']).toBe(10n);
+  expect(pool.outputs.get('last')?.['field:layout/entry:f2']).toBe(10n);
 });

@@ -335,7 +335,7 @@ export class StructTree {
     parent: string, type: TypeDef, addr: number, f: FieldDef, raw: Record<string, unknown>, depth: number,
   ): TreeRow {
     const mem = this.root.mem;
-    const at = addr + f.offset;
+    const at = addr + (f.offset ?? 0);
     const path = `${parent}.${f.name}`;
     const size = fieldSize(f, this.compat);
     const typeText = f.kind === 'record' || f.kind === 'array' ? (f.of ?? f.kind) : f.kind;
@@ -396,12 +396,7 @@ export class StructTree {
     let refAddr: number | undefined;
     let refTypeName: string | undefined;
     if (typeof value === 'number' && Number.isFinite(value)) {
-      const followName = f.follow === 'self' ? type.name : f.follow;
-      const followType = followName ? this.root.pack.types[followName] : undefined;
-      if (followType && mem.contains(value, Math.max(1, followType.size))) {
-        refAddr = value;
-        refTypeName = followType.name;
-      } else if ((f.kind === 'ptr' || f.format === 'hex') && mem.contains(value, 1)) {
+      if ((f.kind === 'ptr' || f.format === 'hex') && mem.contains(value, 1)) {
         refAddr = value;
       }
     }

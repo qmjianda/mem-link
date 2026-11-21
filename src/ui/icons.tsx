@@ -65,6 +65,12 @@ export const IconCopy = (p: IconProps) => (
 export const IconZap = (p: IconProps) => (
   <I {...p}><path d="M13 2.5 4.5 13.5H11l-1 8 8.5-11H12z" /></I>
 );
+export const IconStore = (p: IconProps) => (
+  <I {...p}><path d="M4 9.5V20h16V9.5" /><path d="M3 9.5 5 4h14l2 5.5" /><path d="M3 9.5a3 3 0 0 0 6 0 3 3 0 0 0 6 0 3 3 0 0 0 6 0" /><path d="M9 20v-5h6v5" /></I>
+);
+export const IconExternal = (p: IconProps) => (
+  <I {...p}><path d="M14 4h6v6" /><path d="M20 4 11 13" /><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5" /></I>
+);
 
 /** Brand mark: two nodes joined by an indexed link. */
 export function Logo({ size = 26, style }: { size?: number; style?: CSSProperties }) {

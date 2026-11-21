@@ -16,6 +16,7 @@ import {
 } from './binary-read';
 import { compileLayout, layoutPorts, readLayout, type BinaryLayout } from './layouts';
 import { expandArray, walkList, type WalkResult } from './collections';
+import { compileFor, emptyStructureRegistry, expandEntryArray, readStructureEntry, structurePorts, walkEntryList, type StructureEntry, type StructureRegistry } from './structure';
 import { assertNumeric, checksum } from './validation';
 
 export const BUILTIN_IDS = [
@@ -49,7 +50,7 @@ export interface BuiltinCtx {
   endian: 'little' | 'big';
   /** Why the buffer is missing, when the node does have a source instruction. */
   sourceNote?: string;
-  layouts: readonly BinaryLayout[];
+  structures: StructureRegistry;
   report?: (issue: ReadIssue, warning?: boolean, origin?: ByteOrigin) => void;
   inputOrigin?: (port: string) => ByteOrigin | undefined;
   publishOrigin?: (port: string, origin: ByteOrigin) => void;
@@ -70,7 +71,7 @@ export interface BuiltinDef {
   acceptMissing?: boolean;
   /** A selector inherits the context of the selected value, not of its index. */
   inheritSourceFrom?: string;
-  ports?: (params: Record<string, string>, layouts: readonly BinaryLayout[], view?: NodeView) => { inputs: PortSpec[]; outputs: PortSpec[] };
+  ports?: (params: Record<string, string>, structures: StructureRegistry, view?: NodeView) => { inputs: PortSpec[]; outputs: PortSpec[] };
   defaults?: Record<string, string>;
   options?: BuiltinOption[];
   run?: (v: Record<string, unknown>, ctx: BuiltinCtx) => Record<string, unknown>;
@@ -232,7 +233,7 @@ function optionDefaults(def: BuiltinDef): Record<string, string> {
 const collectionOutputs = () => [typed('list', 'list', '集合'), intPort('count', '已读项数')];
 const arrayInputs = () => [ctxPort(), addrPort(), intPort('count', '项数'), intPort('stride', '字节步长（默认类型长度）')];
 const recordOutputs = () => [typed('instance', 'instance', '记录'), addrPort()];
-const layoutOf = (ctx: BuiltinCtx) => ctx.layouts.find(l => l.id === ctx.params.layoutId);
+const structureOf = (ctx: BuiltinCtx): StructureEntry | undefined => ctx.structures.get(ctx.params.structureId);
 const walkView = (kind: 'list' | 'array', result: WalkResult): NodeView => ({
   kind, items: result.items, count: result.items.length, local: true,
   stop: ({ complete: '自然结束', limit: '达到上限', cycle: '发现环', unreadable: '遇到不可读记录' })[result.stop],
@@ -353,15 +354,20 @@ export const BUILTIN_DEFS: BuiltinDef[] = [
     followPort: 'address',
     precise: true,
     inputs: [ctxPort(), addrPort()], outputs: recordOutputs(),
-    ports: (params, layouts) => ({
-      inputs: [ctxPort(), addrPort()],
-      outputs: [...recordOutputs(), ...layoutPorts(layouts.find(l => l.id === params.layoutId))],
-    }),
+    ports: (params, structures) => {
+      const entry = structures.get(params.structureId);
+      return {
+        inputs: [ctxPort(), addrPort()],
+        outputs: [...recordOutputs(), ...(entry ? structurePorts(entry) : [])],
+      };
+    },
     defaults: { address: '0x0' },
     run: (v, ctx) => {
-      const layout = compileLayout(layoutOf(ctx));
+      const entry = structureOf(ctx);
+      if (!entry) throw new ReadIssue('INVALID_LAYOUT', '请选择有效的结构');
+      if (entry.error) throw new ReadIssue('INVALID_LAYOUT', entry.error);
       const src = requireSource(ctx.buffer, ctx.sourceNote);
-      const instance = readLayout(src, addressIn(v.address, src), layout);
+      const instance = readStructureEntry(entry, ctx.structures, src, addressIn(v.address, src));
       return { instance, address: instance.location, ...Object.fromEntries(instance.fields.map(f => [f.name, f.value])) };
     },
     view: ({ instance }) => ({ kind: 'struct', inst: isInstanceView(instance) ? instance : undefined }),
@@ -374,10 +380,13 @@ export const BUILTIN_DEFS: BuiltinDef[] = [
     options: [select('elementType', '元素类型', [['scalar', '标量'], ['record', '结构布局']], 'scalar'), SCALAR_OPTION, ENDIAN_OPTION],
     run: (v, ctx) => {
       const src = requireSource(ctx.buffer, ctx.sourceNote);
-      const layout = ctx.params.elementType === 'record' ? layoutOf(ctx) : undefined;
-      if (ctx.params.elementType === 'record' && !layout) throw new ReadIssue('INVALID_LAYOUT', '请选择有效的元素布局');
-      const walk = expandArray(src, addressIn(v.address, src), integerInput(v.count, '项数', 0n),
-        v.stride === undefined ? undefined : integerInput(v.stride, '步长', 1n), ctx.params.scalar ?? 'u32', ctx.endian, layout);
+      const entry = ctx.params.elementType === 'record' ? structureOf(ctx) : undefined;
+      if (ctx.params.elementType === 'record' && !entry) throw new ReadIssue('INVALID_LAYOUT', '请选择有效的元素结构');
+      const walk = entry
+        ? expandEntryArray(src, addressIn(v.address, src), integerInput(v.count, '项数', 0n),
+          v.stride === undefined ? undefined : integerInput(v.stride, '步长', 1n), entry, ctx.structures)
+        : expandArray(src, addressIn(v.address, src), integerInput(v.count, '项数', 0n),
+          v.stride === undefined ? undefined : integerInput(v.stride, '步长', 1n), ctx.params.scalar ?? 'u32', ctx.endian);
       if (walk.notice) ctx.report?.(walk.notice, walk.stop === 'limit');
       return { list: walk.items, count: BigInt(walk.items.length), walk };
     },
@@ -400,16 +409,21 @@ export const BUILTIN_DEFS: BuiltinDef[] = [
     ],
     run: (v, ctx) => {
       const src = requireSource(ctx.buffer, ctx.sourceNote);
-      const layout = layoutOf(ctx);
+      const entry = structureOf(ctx);
+      if (!entry) throw new ReadIssue('INVALID_LAYOUT', '请选择有效的结构');
+      if (entry.error) throw new ReadIssue('INVALID_LAYOUT', entry.error);
       const pool = ctx.params.mode === 'index' ? {
         base: addressIn(v.poolBase ?? BigInt(src.base), src),
-        stride: v.stride === undefined ? BigInt(compileLayout(layout).size) : integerInput(v.stride, '步长', 1n),
+        stride: v.stride === undefined ? BigInt(entry.size) : integerInput(v.stride, '步长', 1n),
       } : undefined;
-      const walk = walkList(src, layout, {
+      const config = {
         start: addressIn(v.address, src), nextField: ctx.params.nextField ?? '',
         stopValue: integerInput(ctx.params.stopValue ?? '0', '结束值'), max: Number(integerInput(v.limit, '最多项数', 1n, 0xffffffffn)),
         pool,
-      });
+      };
+      const walk = entry.layout
+        ? walkList(src, entry.layout, config, (id) => ctx.structures.layout(id))
+        : walkEntryList(src, entry, ctx.structures, config);
       if (walk.notice) ctx.report?.(walk.notice, walk.stop === 'limit' || walk.stop === 'cycle');
       return { list: walk.items, count: BigInt(walk.items.length), walk };
     },
@@ -602,7 +616,7 @@ export function makeBuiltinCtx(
   buffer: BufferValue | undefined,
   params: Record<string, string> = {},
   sourceNote?: string,
-  layouts: readonly BinaryLayout[] = [],
+  structures: StructureRegistry = emptyStructureRegistry(),
   report?: BuiltinCtx['report'],
   inputOrigin?: BuiltinCtx['inputOrigin'],
   publishOrigin?: BuiltinCtx['publishOrigin'],
@@ -612,7 +626,7 @@ export function makeBuiltinCtx(
     params,
     endian: params.endian === 'big' ? 'big' : 'little',
     sourceNote,
-    layouts,
+    structures,
     report,
     inputOrigin,
     publishOrigin,

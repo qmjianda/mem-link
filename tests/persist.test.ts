@@ -150,7 +150,7 @@ describe('persist: 容量与降级', () => {
   });
 
   it('新版与旧缓存使用不同的键', () => {
-    expect(KEY_GRAPH).toBe('memlink:graph:v2');
+    expect(KEY_GRAPH).toBe('memlink:graph:v3');
   });
 });
 
@@ -158,4 +158,28 @@ it('旧蓝图明确报版本不支持，旧缓存不迁移', () => {
   const graph = { packs: [], nodes: [], edges: [] };
   expect(parseDoc(JSON.stringify({ ...graph, format: 'memlink-blueprint/1' })).error).toContain('不支持此蓝图版本');
   expect(deserialize(JSON.stringify({ ...graph, version: 1, savedAt: 0 })).code).toBe('VERSION');
+});
+
+describe('persist: 商店来源', () => {
+  it('store 元数据随缓存往返', () => {
+    const doc = sampleDoc();
+    doc.packs[0].store = {
+      url: 'https://example.com/index.json',
+      packId: 'demo',
+      version: '1.2.3',
+      sha256: 'a'.repeat(64),
+      coverage: 'partial',
+    };
+    const r = deserialize(serialize(doc));
+    expect(r.code).toBe('OK');
+    expect(r.doc!.packs[0].store).toEqual(doc.packs[0].store);
+  });
+
+  it('非法 store 字段不阻止 pack 加载，只丢掉来源', () => {
+    const env = JSON.parse(serialize(sampleDoc()));
+    env.packs[0].store = { url: 1 };
+    const r = deserialize(JSON.stringify(env));
+    expect(r.code).toBe('OK');
+    expect(r.doc!.packs[0].store).toBeUndefined();
+  });
 });

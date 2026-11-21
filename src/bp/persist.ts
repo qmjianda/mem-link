@@ -7,18 +7,24 @@
 
 import type { Problem } from '../core/types';
 import type { BPEdge, BPNode } from './types';
-import type { DocState, LoadedPack } from './docstate';
+import type { DocState, LoadedPack, PackStoreRef } from './docstate';
 import { isPackEnabled } from './docstate';
 import { loadBlueprintPack } from './load';
 import { addressInteger } from './precision';
 import { validLayoutDocument, type BinaryLayout } from './layouts';
 
-export const GRAPH_VERSION = 2;
+export const GRAPH_VERSION = 3;
 export const KEY_GRAPH = `memlink:graph:v${GRAPH_VERSION}`;
 /** 单次写入上限：2MB */
 export const MAX_WRITE_BYTES = 2 * 1024 * 1024;
 
-export interface StoredPack { id: string; name: string; source: string; enabled: boolean }
+export interface StoredPack {
+  id: string;
+  name: string;
+  source: string;
+  enabled: boolean;
+  store?: PackStoreRef;
+}
 
 export interface GraphPayload {
   version: number;
@@ -60,6 +66,7 @@ export function payloadOf(doc: DocState, savedAt = Date.now()): GraphPayload {
       source: p.source,
       // 显式写出启用态；旧缓存没有这个字段，读回时按 true 处理
       enabled: isPackEnabled(p),
+      ...(p.store ? { store: p.store } : {}),
     })),
     nodes: doc.nodes,
     edges: doc.edges,
@@ -105,6 +112,15 @@ export function trimForQuota(
 /** 待写入的 JSON（已按容量裁剪） */
 export function serialize(doc: DocState, limit = MAX_WRITE_BYTES): string {
   return JSON.stringify(payloadOf(trimForQuota(doc, limit).doc));
+}
+
+function isStoreRef(v: unknown): v is PackStoreRef {
+  const s = v as Partial<PackStoreRef>;
+  return !!s && typeof s.url === 'string' && typeof s.packId === 'string' && typeof s.version === 'string'
+    && (s.sha256 === undefined || typeof s.sha256 === 'string')
+    && (s.path === undefined || typeof s.path === 'string')
+    && (s.coverage === undefined || s.coverage === 'complete' || s.coverage === 'partial')
+    && (s.helpers === undefined || (typeof s.helpers === 'number' && s.helpers >= 0));
 }
 
 function isNode(v: unknown): v is BPNode {
@@ -158,13 +174,14 @@ export function deserialize(raw: string | null | undefined): LoadResult {
       continue;
     }
     // 旧缓存没有 enabled 字段：缺省视为启用
-    const stored = p as { enabled?: boolean };
+    const stored = p as { enabled?: boolean; store?: unknown };
     packs.push({
       id: p.id,
       name: p.name,
       source: p.source,
       pack: r.pack,
       enabled: stored.enabled !== false,
+      ...(isStoreRef(stored.store) ? { store: stored.store } : {}),
     });
   }
 
