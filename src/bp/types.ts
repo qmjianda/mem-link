@@ -144,7 +144,7 @@ export interface StoredMemory {
   name: string;
   /** Exact literals are saved as text; numeric bases must be safe integers. */
   base: string | number;
-  /** base64 */
+  /** base64；大文件在会话内可以为空，原始字节见 doc.ts 的 sessionBytes */
   data: string;
 }
 

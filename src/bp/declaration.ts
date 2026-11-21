@@ -270,7 +270,7 @@ class Parser {
   private parseEnum(): void {
     this.take(); // enum
     const t = this.peek();
-    let name = t?.kind === 'id' ? this.take().value : `Enum${this.enums.size + 1}`;
+    const name = t?.kind === 'id' ? this.take().value : `Enum${this.enums.size + 1}`;
     let kind: LayoutKind = 'i32';
     if (this.is(':')) {
       this.take();

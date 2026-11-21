@@ -12,6 +12,7 @@ import { isPackEnabled } from './docstate';
 import { loadBlueprintPack } from './load';
 import { addressInteger } from './precision';
 import { validLayoutDocument, type BinaryLayout } from './layouts';
+import { sessionBytesOf } from './doc';
 
 export const GRAPH_VERSION = 3;
 export const KEY_GRAPH = `memlink:graph:v${GRAPH_VERSION}`;
@@ -74,39 +75,65 @@ export function payloadOf(doc: DocState, savedAt = Date.now()): GraphPayload {
   };
 }
 
+/** 去掉内联 buffer 后的文档：只复制 File 节点，其余节点按引用复用。 */
+function withoutBuffers(doc: DocState): DocState {
+  let changed = false;
+  const nodes = doc.nodes.map((n) => {
+    if (!n.source?.data) return n;
+    changed = true;
+    return { ...n, source: { ...n.source, data: '' } };
+  });
+  return changed ? { ...doc, nodes } : doc;
+}
+
 /**
  * 容量裁剪：序列化超过 `limit` 时按字节数从大到小丢掉 File 节点的 buffer
  * （保留 name/base），直到能写进缓存或没有可丢的内容。只丢必要的部分，
  * 避免一个超大转储把同一张图里其它小转储一起清空。
+ *
+ * 不要把整份文档（含 100 MB 级 base64）`JSON.stringify` 一遍再判断超限：
+ * 64 MB 转储每次自动缓存都会因此停 0.4 s。这里先用「元数据 JSON + 各
+ * base64 字符串长度」精确算大小，只对最终要写入的小文档做一次序列化。
  */
 export function trimForQuota(
   doc: DocState,
   limit = MAX_WRITE_BYTES,
 ): { doc: DocState; dropped: DroppedBuffer[]; bytes: number } {
-  const full = JSON.stringify(payloadOf(doc));
-  const fullBytes = bytesOf(full);
-  if (fullBytes <= limit) return { doc, dropped: [], bytes: fullBytes };
+  // 大文件只活在会话内（data 为空）：JSON 里本来就没有它们，写入缓存后
+  // 需要重新载入，一并列进 dropped 让状态栏与提示说清楚。
+  const sessionOnly: DroppedBuffer[] = [];
+  for (const n of doc.nodes) {
+    const bytes = n.source && !n.source.data ? sessionBytesOf(n.source) : undefined;
+    if (bytes?.length) sessionOnly.push({ nodeId: n.id, name: n.source!.name, bytes: bytes.length });
+  }
 
   const candidates = doc.nodes
     .filter((n) => n.source?.data)
     .map((n) => ({ node: n, size: n.source!.data!.length }))
     .sort((a, b) => b.size - a.size);
-  if (!candidates.length) return { doc, dropped: [], bytes: fullBytes };
+  if (!candidates.length) {
+    return { doc, dropped: sessionOnly, bytes: bytesOf(JSON.stringify(payloadOf(doc))) };
+  }
+
+  // 先按「元数据 + base64 字符串长度」估算。本应用写出的 base64 只含
+  // A-Za-z0-9+/=，JSON.stringify 不会转义；外部图若塞入需要转义的字符，
+  // 估算会略小，但 saveDoc 在真正写入前还会做一次精确字节检查。
+  const metaBytes = bytesOf(JSON.stringify(payloadOf(withoutBuffers(doc))));
+  const totalBytes = metaBytes + candidates.reduce((sum, c) => sum + c.size, 0);
+  if (totalBytes <= limit) return { doc, dropped: sessionOnly, bytes: totalBytes };
 
   const dropped: DroppedBuffer[] = [];
-  const emptied = new Set<string>();
-  let nodes = doc.nodes;
-  let bytes = fullBytes;
-  for (const { node } of candidates) {
-    emptied.add(node.id);
-    dropped.push({ nodeId: node.id, name: node.source!.name, bytes: node.source!.data!.length });
-    nodes = nodes.map((n) => (emptied.has(n.id) && n.source
-      ? { ...n, source: { ...n.source, data: '' } }
-      : n));
-    bytes = bytesOf(JSON.stringify(payloadOf({ ...doc, nodes })));
+  let bytes = totalBytes;
+  for (const { node, size } of candidates) {
+    dropped.push({ nodeId: node.id, name: node.source!.name, bytes: size });
+    bytes -= size;
     if (bytes <= limit) break;
   }
-  return { doc: { ...doc, nodes }, dropped, bytes };
+  const emptied = new Set(dropped.map((d) => d.nodeId));
+  const nodes = doc.nodes.map((n) => (emptied.has(n.id) && n.source
+    ? { ...n, source: { ...n.source, data: '' } }
+    : n));
+  return { doc: { ...doc, nodes }, dropped: [...dropped, ...sessionOnly], bytes };
 }
 
 /** 待写入的 JSON（已按容量裁剪） */
@@ -215,6 +242,13 @@ export function loadStored(): LoadResult {
 /** 写入缓存：超限不写、抛错不抛异常，只回报原因（D1） */
 export function saveDoc(doc: DocState, limit = MAX_WRITE_BYTES): PersistResult {
   const trim = trimForQuota(doc, limit);
+  // 超限时不再为「确认超限」序列化一遍大文档；裁剪结果已经算好了字节数。
+  if (trim.bytes > limit) {
+    return {
+      ok: false, code: 'TOO_LARGE', bytes: trim.bytes,
+      droppedBuffers: trim.dropped.length, dropped: trim.dropped,
+    };
+  }
   let json: string;
   try {
     json = JSON.stringify(payloadOf(trim.doc));

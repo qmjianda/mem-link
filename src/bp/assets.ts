@@ -41,6 +41,31 @@ export function assetIdOf(bytes: Uint8Array): string {
   return ASSET_PREFIX + fnv1a64(bytes);
 }
 
+/**
+ * 内容哈希缓存：按底层 buffer + 范围缓存。
+ *
+ * 求值每次都会为 File 节点建资产表；如果每次都重算 FNV，64 MB 转储的
+ * 一次图编辑就要约 400 ms。文件字节在本应用里是不可变的（没有写回路径），
+ * 因而同一个 buffer 范围内的哈希可以跨求值复用；`subarray` 产生的字节范围
+ * 与父缓冲区共享 ArrayBuffer，也会命中同一份缓存。
+ */
+const contentIdCache = new WeakMap<ArrayBufferLike, Map<string, string>>();
+
+export function cachedAssetIdOf(bytes: Uint8Array): string {
+  const buffer = bytes.buffer;
+  let ranges = contentIdCache.get(buffer);
+  if (!ranges) {
+    ranges = new Map();
+    contentIdCache.set(buffer, ranges);
+  }
+  const key = `${bytes.byteOffset}:${bytes.byteLength}`;
+  const hit = ranges.get(key);
+  if (hit !== undefined) return hit;
+  const id = assetIdOf(bytes);
+  ranges.set(key, id);
+  return id;
+}
+
 export interface Asset {
   id: string;
   /** 全图共享的同一份字节；相同内容不会解码出第二个 Uint8Array */
@@ -60,7 +85,7 @@ export function createAssetTable(): AssetTable {
   const map = new Map<string, Asset>();
   return {
     ensure(bytes: Uint8Array): Asset {
-      const id = assetIdOf(bytes);
+      const id = cachedAssetIdOf(bytes);
       const hit = map.get(id);
       if (hit) return hit;
       const asset: Asset = { id, bytes, size: bytes.length };

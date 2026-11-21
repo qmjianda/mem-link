@@ -5,8 +5,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import demoDoc from '../samples/demo.blueprint.json';
-import { assetIdOf, createAssetTable, fnv1a64 } from '../src/bp/assets';
-import { bytesToBase64, parseDoc } from '../src/bp/doc';
+import { assetIdOf, cachedAssetIdOf, createAssetTable, fnv1a64 } from '../src/bp/assets';
+import { bytesToBase64, parseDoc, rebaseStored, withSessionBytes } from '../src/bp/doc';
 import { deserialize } from '../src/bp/persist';
 import { evaluateGraph } from '../src/bp/eval';
 import { loadBlueprintPack } from '../src/bp/load';
@@ -49,6 +49,19 @@ describe('FNV-1a 64', () => {
 
   it('分块载入的不同前缀不会得到同一个 id', () => {
     expect(assetIdOf(new Uint8Array([1, 2, 3]))).not.toBe(assetIdOf(new Uint8Array([1, 2, 3, 4])));
+  });
+});
+
+describe('内容哈希缓存', () => {
+  it('同一 buffer 与范围复用同一个 id', () => {
+    const bytes = Uint8Array.from({ length: 4096 }, (_, i) => (i * 17) & 0xff);
+    expect(cachedAssetIdOf(bytes)).toBe(assetIdOf(bytes));
+    expect(cachedAssetIdOf(bytes)).toBe(cachedAssetIdOf(bytes));
+    const range = bytes.subarray(100, 900);
+    expect(cachedAssetIdOf(range)).toBe(assetIdOf(range));
+    // 共享 ArrayBuffer 的另一个 view 命中同一范围缓存
+    expect(cachedAssetIdOf(bytes.subarray(100, 900))).toBe(cachedAssetIdOf(range));
+    expect(cachedAssetIdOf(bytes.subarray(100, 901))).not.toBe(cachedAssetIdOf(range));
   });
 });
 
@@ -117,6 +130,36 @@ describe('求值中的资产身份', () => {
     expect(file).toBeTruthy();
     expect(r.sources.get('n_header')?.assetId).toBe(file);
     expect(r.sources.get('n_list')?.assetId).toBe(file);
+  });
+});
+
+describe('会话内大文件', () => {
+  it('没有 base64 时直接使用会话字节求值，改基址后复用', () => {
+    const bytes = Uint8Array.from({ length: 1024 }, (_, i) => (i * 13) & 0xff);
+    const source = withSessionBytes({ name: 'big.sqlite', base: 0, data: '' }, bytes);
+    const node: BPNode = { id: 'f', packId: '', nodeId: 'file', x: 0, y: 0, params: {}, source };
+    const first = evalFiles([node]);
+    expect(first.sources.get('f')?.assetId).toBe(assetIdOf(bytes));
+    expect(first.outputs.get('f')?.buffer).toMatchObject({ name: 'big.sqlite', base: 0 });
+    expect((first.outputs.get('f')?.buffer as { bytes: Uint8Array }).bytes).toBe(bytes);
+
+    const rebased: BPNode = { ...node, source: rebaseStored(source, 0x1000) };
+    const second = evalFiles([rebased]);
+    expect(second.sources.get('f')?.assetId).toBe(assetIdOf(bytes));
+    expect(second.sources.get('f')?.buffer?.base).toBe(0x1000);
+    expect((second.outputs.get('f')?.buffer as { bytes: Uint8Array }).bytes).toBe(bytes);
+  });
+
+  it('重复求值不再重算整份内容哈希', () => {
+    const bytes = new Uint8Array(8 * 1024 * 1024);
+    for (let i = 0; i < bytes.length; i += 4096) bytes[i] = i & 0xff;
+    const source = withSessionBytes({ name: 'big.bin', base: 0, data: '' }, bytes);
+    const node: BPNode = { id: 'f', packId: '', nodeId: 'file', x: 0, y: 0, params: {}, source };
+    // 第一次求值做一次完整哈希（8 MB 约几十毫秒），第二次应命中缓存。
+    evalFiles([node]);
+    const t = performance.now();
+    evalFiles([node]);
+    expect(performance.now() - t).toBeLessThan(20);
   });
 });
 

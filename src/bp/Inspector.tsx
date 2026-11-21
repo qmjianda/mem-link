@@ -3,6 +3,7 @@ import { Memory } from '../core/mem';
 import type { BlueprintPack, BPEdge, BPNode, BPResult, BufferValue, ByteOrigin } from './types';
 import { builtinLabel, displayTitle, type InstanceView } from './types';
 import { getBuiltin } from './builtins';
+import { hasStoredBytes } from './doc';
 import { portsFor } from './eval';
 import type { BPSelection } from './selection';
 import HexView from '../ui/HexView';
@@ -409,7 +410,7 @@ function FileEditor({
       <div className="bp-kv"><span>文件</span><b className="mono">{node.source?.name ?? '未载入'}</b></div>
       <div className="bp-kv"><span>大小</span><b className="mono">{mem?.size ?? 0} B</b></div>
       {/* 超出 2MB 写入预算时缓存里只留文件名与基址，缓冲区需重新载入 */}
-      {node.source?.name && !node.source.data && (
+      {node.source?.name && !hasStoredBytes(node.source) && (
         <div className="bp-banner">需重新载入文件</div>
       )}
 
@@ -521,7 +522,7 @@ function NodeBody({
   }
   if (view.kind === 'file') {
     return <>
-      {view.error && node.source?.data && <div className="bp-banner">{view.error}</div>}
+      {view.error && hasStoredBytes(node.source) && <div className="bp-banner">{view.error}</div>}
       <FileEditor
         key={node.id}
         node={node}

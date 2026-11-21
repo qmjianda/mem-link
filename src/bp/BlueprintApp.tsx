@@ -17,7 +17,9 @@ import {
 import { adjacency, autoLayout } from './autolayout';
 import { boundsOf } from './viewport';
 import { bufferIssue, buildFollowItems, elementFollowItem, followAddress, followHint, followTypeIssue, inferFollowType, knownTypesAt } from './follow';
-import { bytesToBase64, makeDoc, parseDoc } from './doc';
+import {
+  bytesToBase64, hasStoredBytes, makeDoc, parseDoc, rebaseStored, sessionBytesOf, withSessionBytes,
+} from './doc';
 import type { DocState, LoadedPack } from './docstate';
 import { isPackEnabled, maxIdSeq } from './docstate';
 import {
@@ -105,6 +107,13 @@ function cloneLayouts(layouts: readonly BinaryLayout[] | undefined): BinaryLayou
 function readFile(f: File): Promise<Uint8Array> {
   return f.arrayBuffer().then((b) => new Uint8Array(b));
 }
+
+/**
+ * 超过这个原始大小的文件不生成 base64：编码后必然超过 localStorage 的
+ * 2 MB 写入预算，最后也会被裁掉。字节留在会话内存里，求值、检查器、
+ * 结构树照常工作；导出时按需临时编码，页面重载后仍需重新选择文件。
+ */
+const SESSION_ONLY_BYTES = Math.floor((MAX_WRITE_BYTES * 3) / 4);
 
 function hhmm(at: number): string {
   const d = new Date(at);
@@ -1429,13 +1438,14 @@ export default function BlueprintApp() {
       } else {
         bytes = await readFile(f);
       }
-      const data = bytesToBase64(bytes);
+      const data = bytes.length <= SESSION_ONLY_BYTES ? bytesToBase64(bytes) : '';
       commit((d) => ({
         ...d,
         nodes: d.nodes.map((n) => {
           if (n.id !== id) return n;
           const base = n.source?.base ?? '0x0';
-          return { ...n, params: { ...n.params, name: f.name }, source: { name: f.name, base, data } };
+          const source = withSessionBytes({ name: f.name, base, data }, bytes);
+          return { ...n, params: { ...n.params, name: f.name }, source };
         }),
       }), '载入文件');
       say(`文件：${f.name} · ${bytes.length} B`);
@@ -1448,13 +1458,14 @@ export default function BlueprintApp() {
   const onFileHex = (id: string, text: string): string | undefined => {
     const parsed = parseHexText(text);
     if (parsed.error) return parsed.error;
-    const data = bytesToBase64(parsed.bytes);
+    const data = parsed.bytes.length <= SESSION_ONLY_BYTES ? bytesToBase64(parsed.bytes) : '';
     commit((d) => ({
       ...d,
       nodes: d.nodes.map((n) => {
         if (n.id !== id) return n;
         const base = n.source?.base ?? '0x0';
-        return { ...n, params: { ...n.params, name: 'pasted.hex' }, source: { name: 'pasted.hex', base, data } };
+        const source = withSessionBytes({ name: 'pasted.hex', base, data }, parsed.bytes);
+        return { ...n, params: { ...n.params, name: 'pasted.hex' }, source };
       }),
     }), '载入 HEX');
     say(`HEX：${parsed.bytes.length} B`);
@@ -1465,7 +1476,14 @@ export default function BlueprintApp() {
   const onFileBase = (id: string, base: string) => {
     commit((d) => ({
       ...d,
-      nodes: d.nodes.map((n) => (n.id === id ? { ...n, source: { name: n.source?.name ?? '未载入', data: n.source?.data ?? '', base } } : n)),
+      nodes: d.nodes.map((n) => (n.id === id
+        ? {
+          ...n,
+          source: n.source
+            ? rebaseStored(n.source, base)
+            : { name: '未载入', data: '', base },
+        }
+        : n)),
     }), '改基址', `base:${id}`);
   };
 
@@ -1678,14 +1696,19 @@ export default function BlueprintApp() {
       id: p.id, name: p.name, source: p.source, enabled: isPackEnabled(p),
       ...(p.store ? { store: p.store } : {}),
     }));
-    const out = makeDoc(packEntries, d.nodes, d.edges, d.layouts);
+    // 大文件平时只留会话字节；导出是显式操作，这里再补 base64 保持单文件可交付。
+    const nodes = d.nodes.map((n) => {
+      const bytes = n.source && !n.source.data ? sessionBytesOf(n.source) : undefined;
+      return bytes ? { ...n, source: { ...n.source!, data: bytesToBase64(bytes) } } : n;
+    });
+    const out = makeDoc(packEntries, nodes, d.edges, d.layouts);
     downloadBlob(new TextEncoder().encode(JSON.stringify(out, null, 2)), 'blueprint.json', 'application/json');
     setExportAt(Date.now());
     say('已发起导出：blueprint.json');
   };
 
   const onSaveDoc = (warnMissing = true) => {
-    const missing = docRef.current.nodes.filter((n) => n.source?.name && !n.source.data);
+    const missing = docRef.current.nodes.filter((n) => n.source?.name && !hasStoredBytes(n.source));
     if (warnMissing && missing.length) {
       const names = [...new Set(missing.map((n) => n.source!.name))];
       void askConfirm({
@@ -2260,7 +2283,7 @@ export default function BlueprintApp() {
       : dirty
         ? '有未缓存的改动（Ctrl+S 导出蓝图；自动缓存仍在后台运行）'
         : trimmed
-          ? `草稿已缓存，但以下转储的字节未写入：${[...new Set(dropped.map((d) => d.name))].join('、')}。重新载入后可完整导出。`
+          ? `草稿已缓存，但以下转储的字节未写入：${[...new Set(dropped.map((d) => d.name))].join('、')}。页面重载后需重新载入才能完整导出。`
           : '当前文档已写入浏览器草稿缓存';
 
   // 栅格轨道由 CSS 变量驱动，作用域限定在 .bp-app 内。

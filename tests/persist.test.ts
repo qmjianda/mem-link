@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import demoSource from '../samples/demo.bp.ts?raw';
 import { loadBlueprintPack } from '../src/bp/load';
-import { bytesToBase64, parseDoc } from '../src/bp/doc';
+import { bytesToBase64, parseDoc, withSessionBytes } from '../src/bp/doc';
 import { docJson, type DocState, type LoadedPack } from '../src/bp/docstate';
 import {
-  GRAPH_VERSION, KEY_GRAPH, MAX_WRITE_BYTES, clearStored, deserialize, loadStored, saveDoc, serialize,
-  storageAvailable, trimForQuota,
+  GRAPH_VERSION, KEY_GRAPH, MAX_WRITE_BYTES, bytesOf, clearStored, deserialize, loadStored, payloadOf,
+  saveDoc, serialize, storageAvailable, trimForQuota,
 } from '../src/bp/persist';
 import type { BPNode } from '../src/bp/types';
 import { demoBinary } from './demo-bin';
@@ -106,6 +106,8 @@ describe('persist: 容量与降级', () => {
     expect(trim.dropped).toEqual([]);
     expect(trim.doc.nodes[0].source?.data.length).toBeGreaterThan(0);
     expect(trim.bytes).toBeLessThan(MAX_WRITE_BYTES);
+    // 报告的字节数就是真实序列化大小（base64 不会被 JSON 转义）
+    expect(trim.bytes).toBe(bytesOf(JSON.stringify(payloadOf(trim.doc))));
   });
 
   it('超过 2MB 时先裁掉 buffer，只保留文件名与基址', () => {
@@ -119,6 +121,7 @@ describe('persist: 容量与降级', () => {
     expect(trim.doc.nodes[0].source?.name).toBe('demo.bin');
     expect(trim.doc.nodes[0].source?.base).toBe(0x1000);
     expect(trim.bytes).toBeLessThan(MAX_WRITE_BYTES);
+    expect(trim.bytes).toBe(bytesOf(JSON.stringify(payloadOf(trim.doc))));
     // 其余节点不受影响
     expect(trim.doc.nodes[1]).toBe(doc.nodes[1]);
   });
@@ -133,6 +136,22 @@ describe('persist: 容量与降级', () => {
     expect(r.ok).toBe(false);
     expect(r.code).toBe('TOO_LARGE');
     expect(r.bytes).toBeGreaterThan(MAX_WRITE_BYTES);
+  });
+
+  it('会话内大文件不进 JSON，但在 dropped 里提示需要重新载入', () => {
+    const bytes = new Uint8Array(3 * 1024 * 1024);
+    const node: BPNode = {
+      ...fileNode(),
+      source: withSessionBytes({ name: 'big.sqlite', base: 0, data: '' }, bytes),
+    };
+    const doc: DocState = { packs: [], nodes: [node], edges: [] };
+    const trim = trimForQuota(doc);
+    expect(trim.dropped).toEqual([{ nodeId: 'f', name: 'big.sqlite', bytes: bytes.length }]);
+    expect(trim.doc.nodes[0]).toBe(node);
+    expect(trim.bytes).toBeLessThan(MAX_WRITE_BYTES);
+    const json = serialize(doc);
+    expect(json.length).toBeLessThan(4096);
+    expect(deserialize(json).doc!.nodes[0].source?.data).toBe('');
   });
 
   it('无 localStorage 时 saveDoc 不抛错并回报 NO_STORAGE', () => {

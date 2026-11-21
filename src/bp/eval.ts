@@ -35,9 +35,9 @@ import type {
   SourceInfo, StoredMemory, Truncation,
 } from './types';
 import { canConnect, fieldPortType, fieldPorts, builtinLabel, displayTitle, isInstanceView, brandInstance, looksLikeInstance } from './types';
-import { createAssetTable, assetIdOf } from './assets';
+import { createAssetTable, cachedAssetIdOf } from './assets';
 import { getBuiltin, makeBuiltinCtx } from './builtins';
-import { base64ToBytes } from './doc';
+import { base64ToBytes, sessionBytesOf } from './doc';
 import {
   addressHex, addressInteger, exactInteger, isExactPort, isMappedAddress, mappedAddress, MAX_ADDRESS, packMemory, safeNumber, sameMapping,
 } from './precision';
@@ -103,10 +103,10 @@ export function valueAsBuffer(v: unknown): BufferValue | undefined {
   if (isByteSpan(v)) return v.buffer;
   if (typeof v === 'string') {
     const bytes = new TextEncoder().encode(v);
-    return { assetId: assetIdOf(bytes), name: `字符串 ${v.length} 字符`, base: 0, bytes };
+    return { assetId: cachedAssetIdOf(bytes), name: `字符串 ${v.length} 字符`, base: 0, bytes };
   }
   if (v instanceof Uint8Array) {
-    return { assetId: assetIdOf(v), name: `字节 ${v.length} B`, base: 0, bytes: v };
+    return { assetId: cachedAssetIdOf(v), name: `字节 ${v.length} B`, base: 0, bytes: v };
   }
   // 整块缓冲区（File 的 buffer 输出）不在这里接管：它要沿文件来源路径
   // 走，才能保留 fileId 与「上游冲突」的判断。
@@ -308,13 +308,34 @@ export function portsFor(
 
 /* ------------------------------------------------------------------ decode */
 
-const decodedBuffers = new WeakMap<StoredMemory, Uint8Array>();
+/**
+ * base64 → 字节的会话缓存。按 base64 原文做键而不是按 source 对象：
+ * 改基址会生成新的 source 对象，但字节没变，不该重新解码、重新哈希。
+ * 只保留最近 128 MB，避免切换文件后旧转储一直被这个缓存钉住。
+ */
+const decodedBuffers = new Map<string, Uint8Array>();
+const MAX_DECODED_CACHE_BYTES = 128 * 1024 * 1024;
 
 function decodeBuffer(src: StoredMemory): Uint8Array {
-  const hit = decodedBuffers.get(src);
-  if (hit) return hit;
+  // 大文件载入时直接把原始字节留在会话里，不需要 base64 往返。
+  const session = sessionBytesOf(src);
+  if (session) return session;
+  const hit = decodedBuffers.get(src.data);
+  if (hit) {
+    // 触碰即刷新 LRU 顺序
+    decodedBuffers.delete(src.data);
+    decodedBuffers.set(src.data, hit);
+    return hit;
+  }
   const bytes = base64ToBytes(src.data);
-  decodedBuffers.set(src, bytes);
+  decodedBuffers.set(src.data, bytes);
+  let total = 0;
+  for (const b of decodedBuffers.values()) total += b.byteLength;
+  while (total > MAX_DECODED_CACHE_BYTES && decodedBuffers.size > 1) {
+    const oldest = decodedBuffers.keys().next().value as string;
+    total -= decodedBuffers.get(oldest)!.byteLength;
+    decodedBuffers.delete(oldest);
+  }
   return bytes;
 }
 
@@ -536,7 +557,7 @@ export function evaluateGraph(
   const fileBuffers = new Map<string, BufferValue>();
   const fileErrors = new Map<string, string>();
   const bufferOfFile = (n: BPNode): BufferValue | undefined => {
-    if (!n.source?.data) return undefined;
+    if (!n.source || (!n.source.data && !sessionBytesOf(n.source))) return undefined;
     const hit = fileBuffers.get(n.id);
     if (hit) return hit;
     // 同内容只保留一份字节：第二次解码的数组被资产表里的第一份替换掉
