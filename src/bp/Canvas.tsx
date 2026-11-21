@@ -152,7 +152,7 @@ const OUT_H = 23;
 const ITEM_H = 21;
 const NODE_W = NODE_WIDTH;
 /** element ports shown before the "expand" button */
-const VISIBLE_ELEMENTS = 8;
+const VISIBLE_ELEMENTS = 4;
 const EXPAND_H = 20;
 
 interface PortPos {
@@ -237,6 +237,9 @@ function metaFor(
     name: p.name, type: p.type, label: p.label ?? p.name,
     y: HEADER + i * INPUT_H + INPUT_H / 2, context: p.context,
   }));
+  const view = result.views.get(node.id);
+  const structLike = view?.kind === 'struct' || view?.kind === 'element';
+  const defaultVisible = structLike ? 0 : VISIBLE_ELEMENTS;
   const statics = all.outputs.filter((p) => !p.dynamic);
   const dyn = all.outputs.filter((p) => p.dynamic);
   const outTop = HEADER + elementInputs.length * INPUT_H;
@@ -248,7 +251,7 @@ function metaFor(
   // A wired element port always stays visible, even when the list is collapsed.
   const visibleDyn = expanded
     ? dyn
-    : dyn.filter((p, i) => i < VISIBLE_ELEMENTS || connected?.has(p.name));
+    : dyn.filter((p, i) => i < defaultVisible || connected?.has(p.name));
   const elements: PortPos[] = visibleDyn.map((p, i) => ({
     name: p.name,
     type: p.type,
@@ -260,11 +263,10 @@ function metaFor(
   }));
   outputRows.push(...elements);
 
-  const expandable = dyn.length > VISIBLE_ELEMENTS;
+  const expandable = dyn.length > defaultVisible;
   const expandTop = dynTop + elements.length * ITEM_H;
   const footerTop = expandTop + (expandable ? EXPAND_H : 0);
 
-  const view = result.views.get(node.id);
   const containerView = view?.kind === 'list' || view?.kind === 'array' ? view : undefined;
   const isContainer = !!containerView;
   let footer = '';
@@ -1523,7 +1525,7 @@ export default function Canvas({
                       className={`bp-port out${portHint(p, 'out', node.id)}`}
                       data-port={p.name}
                       data-side="out"
-                      title={`输出 ${p.label}（${p.type}）· 双击跟随地址`}
+                      title={`输出 ${p.label}（${p.type}）${p.type === 'instance' ? ' · 对象：接元素解析，或展开下方嵌套字段' : ' · 双击跟随地址'}`}
                       style={{ background: typeColor(p.type) }}
                       onPointerDown={(e) => { e.stopPropagation(); portDown(node, p, 'out', e.clientX, e.clientY); }}
                       onDoubleClick={followPort(node, p.name)}
@@ -1566,7 +1568,9 @@ export default function Canvas({
                   style={{ top: m.expandTop }}
                   onPointerDown={(e) => { e.stopPropagation(); toggleExpand(node.id); }}
                 >
-                  {isExpanded ? '收起元素' : `展开全部 ${m.elementCount} 个元素端口`}
+                  {isExpanded ? '收起' : viewNode?.kind === 'struct' || viewNode?.kind === 'element'
+                    ? `展开嵌套字段 ${m.elementCount} 个`
+                    : `展开全部 ${m.elementCount} 个元素端口`}
                 </button>
               )}
 

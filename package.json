@@ -18,6 +18,7 @@
     "verify:tree": "node scripts/cdp-verify-tree.mjs",
     "verify:tree:trunc": "node scripts/cdp-verify-tree-truncation.mjs",
     "verify:add-defaults": "node scripts/cdp-verify-add-defaults.mjs",
+    "verify:autoparse": "node scripts/cdp-verify-autoparse.mjs",
     "verify:default-nodes": "node scripts/cdp-verify-default-nodes.mjs",
     "packs:references": "node store/scripts/build-references.mjs --root store",
     "packs:index": "node store/scripts/build-references.mjs --root store && node store/scripts/build-index.mjs store",

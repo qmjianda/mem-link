@@ -55,6 +55,8 @@ interface Props {
   onAddRead?: (nodeId: string, cfg: { address: bigint; kind: string; endian: 'little' | 'big' }) => void;
   /** 结构体「在缓冲区打开」：选中来源 File 节点并定位到绝对地址 */
   onOpenBuffer?: (fileId: string, addr: bigint) => void;
+  /** 识别 File 节点内容并自动创建解析链 */
+  onAutoParse?: (fileId: string) => void;
   /** 父级要求 File 节点缓冲区定位到的地址（只消费一次） */
   bufferFocus?: { nodeId: string; addr: bigint } | null;
   /** 全屏结构树：struct / list / array 节点可用 */
@@ -260,7 +262,7 @@ export function FieldTable({ inst, name, tools, fileId }: {
 }
 
 function FileEditor({
-  node, buffer, onFile, onHex, onBase, tools, initialAddr,
+  node, buffer, onFile, onHex, onBase, tools, initialAddr, onAutoParse,
 }: {
   node: BPNode;
   buffer?: BufferValue;
@@ -270,6 +272,7 @@ function FileEditor({
   tools?: FieldTools;
   /** 从结构体「在缓冲区打开」跳进来的绝对地址 */
   initialAddr?: bigint;
+  onAutoParse?: (fileId: string) => void;
 }) {
   const [hex, setHex] = useState('');
   const mem = useMemo(
@@ -416,6 +419,13 @@ function FileEditor({
         <div className="bp-banner">需重新载入文件</div>
       )}
 
+      {onAutoParse && mem && mem.size > 0 && (
+        <button type="button" className="bp-autoparse-btn" onClick={() => onAutoParse(node.id)}>
+          <b>一键解析</b>
+          <span>识别文件头并创建解析链（目前支持 ELF）</span>
+        </button>
+      )}
+
       <label className="bp-file-btn wide">
         <IconFile size={13} /> 选择 .bin / .hex
         <input
@@ -488,7 +498,7 @@ function OriginPreview({ origin }: { origin: ByteOrigin }) {
 }
 
 function NodeBody({
-  node, result, onSelect, onFile, onHex, onBase, tools, onParam, bufferFocus,
+  node, result, onSelect, onFile, onHex, onBase, tools, onParam, bufferFocus, onAutoParse,
 }: {
   node: BPNode;
   result: BPResult;
@@ -499,6 +509,7 @@ function NodeBody({
   tools?: FieldTools;
   onParam?: (id: string, key: string, value: string) => void;
   bufferFocus?: { nodeId: string; addr: bigint } | null;
+  onAutoParse?: (fileId: string) => void;
 }) {
   const view = result.views.get(node.id);
   if (!view) return <div className="bp-empty">没有求值结果</div>;
@@ -530,6 +541,7 @@ function NodeBody({
         node={node}
         buffer={result.sources.get(node.id)?.buffer}
         onFile={onFile} onHex={onHex} onBase={onBase} tools={tools}
+        onAutoParse={onAutoParse}
         initialAddr={bufferFocus?.nodeId === node.id ? bufferFocus.addr : undefined}
       />
     </>;
@@ -602,7 +614,7 @@ export default function Inspector({
   packs, packNames, nodes, edges, result, selection, onSelect, onParam, onMode,
   onDisconnect, onDeleteEdge, onFile, onHex, onBase, onCollapse, multi,
   renameId, onRenameDone, onCopy, onFollow, onAddRead, tab, onTab, onFocusProblem, onOpenNode,
-  layouts = [], structures, usage, onCreateLayout, onSelectLayout, onOpenDesigner, onOpenBuffer, bufferFocus,
+  layouts = [], structures, usage, onCreateLayout, onSelectLayout, onOpenDesigner, onOpenBuffer, onAutoParse, bufferFocus,
   onHelp,
 }: Props) {
   const problemListRef = useRef<HTMLDivElement>(null);
@@ -971,7 +983,7 @@ export default function Inspector({
                 </div>
               )}
 
-              <NodeBody node={node} result={result} onSelect={onSelect} onFile={onFile} onHex={onHex} onBase={onBase} tools={tools} onParam={onParam} bufferFocus={bufferFocus} />
+              <NodeBody node={node} result={result} onSelect={onSelect} onFile={onFile} onHex={onHex} onBase={onBase} tools={tools} onParam={onParam} bufferFocus={bufferFocus} onAutoParse={onAutoParse} />
 
               {entry && (
                 <>

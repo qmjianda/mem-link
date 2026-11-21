@@ -270,6 +270,16 @@ calcNode({
 
 **结构来源**：`structread` / `arrayread` / `listread` 的结构选择器同时列出本图布局和已启用 pack 的类型。`structureId` 是唯一参数：布局为 `layout/<id>`，pack 类型为 `pack/<encodedPackId>/<encodedTypeName>`。
 
+## 6.1 一键解析（ELF）
+
+选中载入字节的 File 节点后，检查器提供「一键解析」。它读取文件头并一次提交：
+
+- 文件 → ELF64 / ELF32 文件头；
+- 文件头 `phoff` / `phnum` → 程序头表；
+- 文件头 `shoff` / `shnum` → 节头表。
+
+表节点可以是 ELF pack 提供的 `programHeaders64/32`、`sectionHeaders64/32`，也可以在旧 pack 下自动回退为内置 `arrayread`（位置来源=文件偏移，结构来源为对应 pack 类型）。节点卡默认折叠嵌套字段，避免 `ident.magic` 等端口占满画布。
+
 ## 7. 图求值
 
 - 图是 DAG；每个节点的输出按需惰性计算，带记忆化。

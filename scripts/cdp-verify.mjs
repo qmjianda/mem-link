@@ -671,6 +671,7 @@ async function main() {
   const followBtn = await evaluate(`(() => {
     const el = [...document.querySelectorAll('.bp-field-addr .bp-ft-btn.go')].at(-1);
     if (!el) return null;
+    el.scrollIntoView({ block: 'center' });
     const r = el.getBoundingClientRect();
     return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
   })()`);

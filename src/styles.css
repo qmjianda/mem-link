@@ -1429,3 +1429,23 @@ button.bp-hist.bp-nav { font-size: 17px; line-height: 1; }
 @media (max-width: 760px) {
   .bp-help-grid { grid-template-columns: 1fr; }
 }
+
+/* File inspector: one-click parse chain */
+.bp-autoparse-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  margin: 8px 0 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(78, 216, 192, 0.45);
+  border-radius: 7px;
+  background: rgba(78, 216, 192, 0.08);
+  color: var(--accent);
+  text-align: left;
+  cursor: pointer;
+}
+.bp-autoparse-btn:hover { border-color: var(--accent); background: rgba(78, 216, 192, 0.13); }
+.bp-autoparse-btn b { font-size: 11px; font-weight: 650; }
+.bp-autoparse-btn span { color: var(--dim); font-size: 9px; line-height: 1.4; }

@@ -156,6 +156,18 @@ ImHex 派生 pack 为 **GPL-2.0-only**（与仓库根目录的专有许可分开
 
 这一节描述的是 ImHex / 010 Editor / Ghidra 那类**软件逆向**工具的日常工作方式，mem-link 把它做成了图上的四个动作。
 
+### 一键解析（ELF）
+
+载入 `.bin` / `.elf` 后选中 File 节点，检查器的「一键解析」会读取文件头并一次创建：
+
+```text
+File → ELF64/ELF32 文件头 → 程序头表 + 节头表
+```
+
+程序头表自动接 `phoff` / `phnum`，节头表自动接 `shoff` / `shnum`；表节点直接输出 `list` / `count` / `elem:N`。节点卡默认折叠 `ident.magic` 这类嵌套字段，点「展开嵌套字段」即可接线。
+
+需要已安装并启用 ELF pack（Pack 商店 → ELF）。其他格式会提示「未识别」；后续可按同一入口扩展 PE 等格式。
+
 ### 跟随地址（Follow pointer）
 
 看到一个指针值，想知道它指向什么：

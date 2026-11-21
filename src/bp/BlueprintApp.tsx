@@ -7,6 +7,7 @@ import Canvas, { type CanvasApi, type DragPreview } from './Canvas';
 import Inspector from './Inspector';
 import { evaluateGraph, SOURCE_PORT, valueAsBuffer } from './eval';
 import { loadBlueprintPack } from './load';
+import { detectAutoParse } from './autoparse';
 import { BLUEPRINT_FORMAT, canConnect, displayTitle, dropPosition, isInstanceView, NODE_WIDTH, type BPEdge, type BPNode, type BlueprintPack, type BPResult, type BufferValue, type PortType } from './types';
 import { uniqueBuffers } from './assets';
 import { builtinDefaults, getBuiltin, inheritOptions } from './builtins';
@@ -1566,6 +1567,83 @@ export default function BlueprintApp() {
     return id;
   };
 
+  /** 一键识别文件头并创建解析链；目前识别 ELF，其他格式返回可行动的提示。 */
+  const autoParseFile = (fileId: string) => {
+    const file = docRef.current.nodes.find((n) => n.id === fileId);
+    if (!file) return;
+    const buffer = (fullResult.outputs.get(fileId)?.buffer ?? fullResult.sources.get(fileId)?.buffer) as BufferValue | undefined;
+    if (!buffer) { say('先给 File 节点载入 .bin / .hex'); return; }
+    const detected = detectAutoParse(buffer, packsMap);
+    if (!detected.ok) {
+      say(detected.reason);
+      if (detected.needsPack) setStoreOpen(true);
+      return;
+    }
+    const plan = detected.plan;
+    const current = docRef.current;
+    const linked = current.nodes.find((n) => n.packId === plan.packId && n.nodeId === plan.headerNodeId
+      && current.edges.some((e) => e.from.node === fileId && e.from.port === SOURCE_PORT
+        && e.to.node === n.id && e.to.port === SOURCE_PORT));
+    const base = addressInteger(file.source?.base ?? '0x0') ?? 0n;
+    if (safeNumber(base) === undefined) { say('文件基址超出 pack 可解析的安全整数范围'); return; }
+
+    const headerId = linked?.id ?? `n${++seq.current}`;
+    const added: BPNode[] = linked ? [] : [{
+      id: headerId, packId: plan.packId, nodeId: plan.headerNodeId,
+      x: file.x + 360, y: file.y,
+      params: { address: addressHex(base) },
+    }];
+    const addedEdges: BPEdge[] = linked ? [] : [{
+      id: `e${++seq.current}`,
+      from: { node: fileId, port: SOURCE_PORT },
+      to: { node: headerId, port: SOURCE_PORT },
+    }];
+    plan.tables.forEach((table, i) => {
+      const existing = current.nodes.find((n) => {
+        if (n.id === headerId) return false;
+        const matches = table.nodeId
+          ? n.packId === plan.packId && n.nodeId === table.nodeId
+          : n.packId === '' && n.nodeId === 'arrayread' && n.params.structureId === table.structureId;
+        if (!matches) return false;
+        return current.edges.some((e) => e.from.node === headerId && e.from.port === table.offsetPort
+          && e.to.node === n.id && e.to.port === 'offset')
+          && current.edges.some((e) => e.from.node === headerId && e.from.port === table.countPort
+            && e.to.node === n.id && e.to.port === 'count');
+      });
+      if (existing) return;
+      const id = `n${++seq.current}`;
+      const params: Record<string, string> = table.nodeId
+        ? { offset: '0', count: '0' }
+        : {
+          elementType: 'record', structureId: table.structureId!,
+          addressMode: 'offset', offset: '0', count: '0', __title: table.label,
+        };
+      added.push({
+        id, packId: table.nodeId ? plan.packId : '', nodeId: table.nodeId ?? 'arrayread',
+        x: file.x + 720 + (i % 2) * 360,
+        y: file.y + Math.floor(i / 2) * 360,
+        params,
+      });
+      addedEdges.push(
+        { id: `e${++seq.current}`, from: { node: fileId, port: SOURCE_PORT }, to: { node: id, port: SOURCE_PORT } },
+        { id: `e${++seq.current}`, from: { node: headerId, port: table.offsetPort }, to: { node: id, port: 'offset' } },
+        { id: `e${++seq.current}`, from: { node: headerId, port: table.countPort }, to: { node: id, port: 'count' } },
+      );
+    });
+
+    if (!added.length && !addedEdges.length) {
+      setSelection(selectOnlyNode(headerId));
+      setRightTab('inspect');
+      say(`已存在完整的 ${plan.label} 解析链`);
+      return;
+    }
+    commit((d) => ({ ...d, nodes: [...d.nodes, ...added], edges: [...d.edges, ...addedEdges] }), `自动解析 ${plan.label}`);
+    setSelection(selectOnlyNode(headerId));
+    setRightTab('inspect');
+    say(`${linked ? '已补充' : '已创建'} ${plan.label} 解析链${plan.warning ? `；${plan.warning}` : ''}`);
+    window.setTimeout(() => canvasApi.current?.fitAll(), 0);
+  };
+
   const applyDesignerLayouts = (next: BinaryLayout[], label: string): DesignerApplyResult => {
     if (!validLayoutDocument(next)) {
       return { ok: false, message: '布局超出文档限制（数量、id、字段数或字段类型无效）' };
@@ -2622,6 +2700,7 @@ export default function BlueprintApp() {
             onBase={onFileBase}
             onAddRead={onAddRead}
             onOpenBuffer={openBuffer}
+            onAutoParse={autoParseFile}
             bufferFocus={bufferFocus}
             layouts={doc.layouts}
             structures={structures}

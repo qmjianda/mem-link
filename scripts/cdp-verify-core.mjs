@@ -225,6 +225,9 @@ async function main() {
   check('设置地址 0x100', addrSet);
   await sleep(500);
 
+  // 节点卡默认只展示前 4 个元素端口；展开后检查完整 8 项。
+  await evaluate(`document.querySelector('[data-node-id="${arrayId}"] .bp-expand')?.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}))`);
+  await sleep(200);
   const arrayRows = await evaluate(`document.querySelector('[data-node-id="${arrayId}"]')?.querySelectorAll('.bp-element-row').length ?? 0`);
   check('0x100 解析出 8 个 Entry', arrayRows === 8, `${arrayRows} 行`);
 
