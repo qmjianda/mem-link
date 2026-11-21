@@ -1492,10 +1492,14 @@ export default function Canvas({
                   ? viewNode.inst?.fields.find((f) => f.name === p.name)
                   : undefined;
                 const val = field ? (node.portMode === 'raw' ? field.rawDisplay : field.display) : undefined;
+                const nonValue = p.type === 'instance' || p.type === 'list';
+                const showType = nonValue && !(p.type === 'list' && /列表|集合/.test(p.label));
                 return (
                   <div key={p.name} className="bp-row bp-out-row" style={{ top: HEADER + paramEntries.length * INPUT_H + i * OUT_H }}>
                     <span className="bp-row-label">{p.label}</span>
-                    {val != null && <span className="bp-row-val mono" title={val}>{val}</span>}
+                    {showType
+                      ? <span className="bp-row-type">{p.type === 'instance' ? '对象' : '列表'}</span>
+                      : !nonValue && val != null && <span className="bp-row-val mono" title={val}>{val}</span>}
                     {val == null && viewNode?.kind === 'calc' && viewNode.outputs[p.name] != null && (
                       <span className="bp-row-val mono" title={isMappedAddress(viewNode.outputs[p.name]) ? valueText(viewNode.outputs[p.name]) : String(viewNode.outputs[p.name])}>
                         {valueText(viewNode.outputs[p.name])}
