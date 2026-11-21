@@ -124,8 +124,20 @@ export default function PackStore({ storeUrl, packs, onStoreUrl, onInstall, onOp
     setEntryError(null);
     setNotice(null);
     try {
-      const { source } = await fetchStorePack(currentUrl, entry.path);
-      const r = await onInstall({ entry, source, storeUrl: currentUrl });
+      const fetchSource = async (cacheBust: boolean) => {
+        const path = cacheBust
+          ? `${entry.path}${entry.path.includes('?') ? '&' : '?'}v=${Date.now()}`
+          : entry.path;
+        return (await fetchStorePack(currentUrl, path)).source;
+      };
+      let source = await fetchSource(false);
+      let r = await onInstall({ entry, source, storeUrl: currentUrl });
+      // jsDelivr can briefly serve the previous pack source after the index
+      // has already moved. Retry once with a cache-busting URL before giving up.
+      if (!r.ok && /哈希不匹配/.test(r.error ?? '')) {
+        source = await fetchSource(true);
+        r = await onInstall({ entry, source, storeUrl: currentUrl });
+      }
       if (!r.ok) throw new Error(r.error ?? '安装失败');
       setNotice(`${entry.name} v${entry.version} ${r.updated ? '已更新' : '已安装'}`);
     } catch (e) {

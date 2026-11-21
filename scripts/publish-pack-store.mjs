@@ -52,11 +52,19 @@ function parseGitHubRepo(repo) {
 }
 
 /** 推送后刷新 jsDelivr 的 @branch 缓存；失败只警告，不影响发布。 */
-async function purgeJsDelivr(repo, branch) {
+async function purgeJsDelivr(repo, branch, files = []) {
   const gh = parseGitHubRepo(repo);
   if (!gh) return;
   const base = `https://purge.jsdelivr.net/gh/${gh.owner}/${gh.repo}@${branch}`;
-  for (const path of ['/*', '/index.json']) {
+  // A wildcard purge alone can leave nested pack files stale. Purge every
+  // changed file explicitly so the index and its pack sources move together.
+  const paths = new Set(['/*', '/index.json']);
+  for (const file of files) {
+    const clean = String(file).replace(/\\/g, '/').replace(/^\/+/, '');
+    if (!clean || clean === '.git' || clean.startsWith('.git/')) continue;
+    paths.add('/' + clean.split('/').map(encodeURIComponent).join('/'));
+  }
+  for (const path of paths) {
     try {
       const res = await fetch(`${base}${path}`, { signal: AbortSignal.timeout(15_000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -111,6 +119,11 @@ async function main() {
   });
 
   const status = git(clone, ['status', '--porcelain'], { capture: true }).trim();
+  const changed = status.split('\n').map((line) => {
+    const raw = line.slice(3).trim();
+    const arrow = raw.indexOf(' -> ');
+    return arrow >= 0 ? raw.slice(arrow + 4) : raw;
+  }).filter(Boolean);
   if (!status) {
     console.log('✓ 商店仓库已经是 store/ 的最新内容，无需提交');
     return;
@@ -133,7 +146,7 @@ async function main() {
   console.log(`→ 推送到 ${args.repo} ${args.branch}`);
   git(clone, ['push', 'origin', `HEAD:${args.branch}`]);
   console.log('✓ 商店已发布');
-  if (!args.noPurge) await purgeJsDelivr(args.repo, args.branch);
+  if (!args.noPurge) await purgeJsDelivr(args.repo, args.branch, changed);
 }
 
 try {
