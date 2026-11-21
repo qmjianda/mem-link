@@ -60,13 +60,13 @@ function usageText(def: NodeDef): string[] {
     return [
       `数据源接 File 节点；${def.offset ? '文件偏移' : 'address'} 填第一项位置。`,
       'count 没有默认值时必须接一个数量输入；固定数量已在节点里写好。',
-      '输出 list、count 和 elem:N；elem:N 可继续接元素解析或字段跟随。',
+      '输出 list 和 count；画布不再铺 elem:N，请接「元素解析」的列表输入，或用「⤢ 全部」在结构树里查看。',
     ];
   }
   return [
     '数据源接 File 节点；address 填第一项偏移。',
     '下一项地址由 pack 的 next 规则计算；遇到结束值、越界或环会停止。',
-    '输出 list、count 和 elem:N；elem:N 可继续接元素解析或字段跟随。',
+    '输出 list 和 count；画布不再铺 elem:N，请接「元素解析」或用「⤢ 全部」在结构树里查看。',
   ];
 }
 
@@ -163,7 +163,7 @@ export default function NodeHelp({ pack, nodeId, onClose, onOpenReference }: Pro
                 {!ports.inputs.length && !ports.outputs.length && <div className="bp-empty">没有端口</div>}
               </div>
               {(def.kind === 'list' || def.kind === 'array') && (
-                <div className="bp-help-note">求值后还会动态出现 <code>elem:0</code>…<code>elem:N</code> 输出端口。</div>
+                <div className="bp-help-note">节点卡只显示字段名和集合数量；展开集合内容请用「元素解析」或结构树。</div>
               )}
             </section>
 

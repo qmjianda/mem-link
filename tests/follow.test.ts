@@ -46,8 +46,8 @@ describe('followHint', () => {
     expect(followTypeIssue('index')).toContain('元素下标不是地址');
     expect(followTypeIssue('address')).toBeUndefined();
   });
-  it('列表端口提示展开后双击单个元素', () => {
-    expect(followHint([inst(0x1000)])).toContain('展开后双击单个元素');
+  it('列表端口提示改用元素解析或结构树', () => {
+    expect(followHint([inst(0x1000)])).toMatch(/元素解析|结构树/);
   });
 
   it('缓冲区端口提示双击 base', () => {

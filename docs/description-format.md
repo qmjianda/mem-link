@@ -280,7 +280,7 @@ calcNode({
 - 文件头 `phoff` / `phnum` → 程序头表；
 - 文件头 `shoff` / `shnum` → 节头表。
 
-表节点可以是 ELF pack 提供的 `programHeaders64/32`、`sectionHeaders64/32`，也可以在旧 pack 下自动回退为内置 `arrayread`（位置来源=文件偏移，结构来源为对应 pack 类型）。节点卡默认折叠嵌套字段，避免 `ident.magic` 等端口占满画布。
+表节点可以是 ELF pack 提供的 `programHeaders64/32`、`sectionHeaders64/32`，也可以在旧 pack 下自动回退为内置 `arrayread`（位置来源=文件偏移，结构来源为对应 pack 类型）。节点卡只显示字段名和集合数量，不再铺 `elem:N` / 嵌套字段端口；展开内容用「元素解析」或结构树。
 
 ## 7. 图求值
 

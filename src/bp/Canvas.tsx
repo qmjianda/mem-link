@@ -152,10 +152,7 @@ const INPUT_H = 25;
 const OUT_H = 23;
 const ITEM_H = 21;
 const NODE_W = NODE_WIDTH;
-/** element ports shown before the "expand" button */
-const VISIBLE_ELEMENTS = 4;
 const ARROW_TYPES = Object.keys(PORT_COLORS) as PortType[];
-const EXPAND_H = 20;
 
 interface PortPos {
   name: string;
@@ -175,11 +172,9 @@ interface Meta {
   /** all visible output ports, static first, then visible element ports */
   outputs: PortPos[];
   staticCount: number;
+  /** Only legacy/directly wired child ports are drawn; nested contents stay in the structure tree. */
   elements: PortPos[];
-  elementCount: number;
   dynTop: number;
-  expandTop: number;
-  expandable: boolean;
   footerTop: number;
   footer: string;
   footerError: boolean;
@@ -215,7 +210,6 @@ function elementIndex(port: string): number | undefined {
 function metaFor(
   node: BPNode,
   result: BPResult,
-  expanded: boolean,
   connected: Set<string> | undefined,
   portsOverride?: { inputs: PortSpec[]; outputs: PortSpec[] },
 ): Meta {
@@ -240,8 +234,6 @@ function metaFor(
     y: HEADER + i * INPUT_H + INPUT_H / 2, context: p.context,
   }));
   const view = result.views.get(node.id);
-  const structLike = view?.kind === 'struct' || view?.kind === 'element';
-  const defaultVisible = structLike ? 0 : VISIBLE_ELEMENTS;
   const statics = all.outputs.filter((p) => !p.dynamic);
   const dyn = all.outputs.filter((p) => p.dynamic);
   const outTop = HEADER + elementInputs.length * INPUT_H;
@@ -250,10 +242,10 @@ function metaFor(
   }));
 
   const dynTop = outTop + statics.length * OUT_H + 4;
-  // A wired element port always stays visible, even when the list is collapsed.
-  const visibleDyn = expanded
-    ? dyn
-    : dyn.filter((p, i) => i < defaultVisible || connected?.has(p.name));
+  // Nested/collection contents are not expanded on the canvas. A port that was
+  // already wired stays visible so old graphs keep their edges; everything else
+  // is reached through 元素解析 or the structure tree.
+  const visibleDyn = dyn.filter((p) => connected?.has(p.name));
   const elements: PortPos[] = visibleDyn.map((p, i) => ({
     name: p.name,
     type: p.type,
@@ -265,17 +257,16 @@ function metaFor(
   }));
   outputRows.push(...elements);
 
-  const expandable = dyn.length > defaultVisible;
-  const expandTop = dynTop + elements.length * ITEM_H;
-  const footerTop = expandTop + (expandable ? EXPAND_H : 0);
+  const footerTop = dynTop + elements.length * ITEM_H;
 
   const containerView = view?.kind === 'list' || view?.kind === 'array' ? view : undefined;
   const isContainer = !!containerView;
   let footer = '';
   let footerError = false;
   if (containerView) {
+    footer = `共 ${containerView.count} 项`;
     const hidden = containerView.count - dyn.length;
-    if (hidden > 0) footer += `还有 ${hidden} 项`;
+    if (hidden > 0) footer += ` · 还有 ${hidden} 项`;
     if (view?.kind === 'list' && view.cycle) footer += `${footer ? ' · ' : ''}回环`;
     if (containerView.trunc) {
       const where = containerView.trunc.unit === 'address'
@@ -303,10 +294,7 @@ function metaFor(
     outputs: outputRows,
     staticCount: statics.length,
     elements,
-    elementCount: dyn.length,
     dynTop,
-    expandTop,
-    expandable,
     footerTop,
     footer,
     footerError,
@@ -404,7 +392,6 @@ export default function Canvas({
   /** 标注节点拖动改尺寸时的实时尺寸（不写文档，松手一次提交） */
   const [noteDrag, setNoteDrag] = useState<{ id: string; w: number; h: number } | null>(null);
   const [marqueeHits, setMarqueeHits] = useState<Set<string>>(new Set());
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const hostRef = useRef<HTMLDivElement>(null);
   const didFit = useRef(false);
   /** 画布容器尺寸（裁剪与缩放锚点都要用） */
@@ -479,19 +466,10 @@ export default function Canvas({
         }
         ports = { inputs, outputs };
       }
-      m.set(n.id, metaFor(n, result, expanded.has(n.id), connected.get(n.id), ports));
+      m.set(n.id, metaFor(n, result, connected.get(n.id), ports));
     }
     return m;
-  }, [nodes, edges, result, expanded, connected, disabledPacks, packs]);
-
-  const toggleExpand = (id: string) => {
-    setExpanded((old) => {
-      const next = new Set(old);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
+  }, [nodes, edges, result, connected, disabledPacks, packs]);
 
   // 容器尺寸：裁剪矩形与「100%」都以画布实际像素为准
   useEffect(() => {
@@ -1330,8 +1308,7 @@ export default function Canvas({
             ? `数据源继承链：${src.chain.map((id) => nodeLabels.get(id) ?? id).join(' → ')}`
             : undefined;
           const paramEntries = m.inputs;
-          const isExpanded = expanded.has(node.id);
-          const hasElements = m.elementCount > 0;
+          const hasElements = m.elements.length > 0;
           // 所属 pack 被禁用：节点保留在原位，只标注错误态（不删除数据）
           const packOff = !!node.packId && !!disabledPacks?.has(node.packId);
           return (
@@ -1569,18 +1546,6 @@ export default function Canvas({
                   </div>
                 );
               })}
-
-              {lod === 'full' && m.expandable && (
-                <button
-                  className="bp-expand"
-                  style={{ top: m.expandTop }}
-                  onPointerDown={(e) => { e.stopPropagation(); toggleExpand(node.id); }}
-                >
-                  {isExpanded ? '收起' : viewNode?.kind === 'struct' || viewNode?.kind === 'element'
-                    ? `展开嵌套字段 ${m.elementCount} 个`
-                    : `展开全部 ${m.elementCount} 个元素端口`}
-                </button>
-              )}
 
               {lod === 'full' && (m.footer || (openable && m.isContainer)) && (
                 <div className={m.footerError ? 'bp-node-err' : 'bp-node-foot'} style={{ top: m.footerTop }}>

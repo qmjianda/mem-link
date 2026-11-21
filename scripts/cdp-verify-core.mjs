@@ -206,6 +206,30 @@ async function main() {
     return true;
   };
 
+  const connectPorts = async (fromNode, fromPort, toNode, toPort) => {
+    const from = await evaluate(`(() => {
+      const el = document.querySelector('[data-node-id="${fromNode}"] [data-port="${fromPort}"][data-side="out"]');
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    })()`);
+    const to = await evaluate(`(() => {
+      const el = document.querySelector('[data-node-id="${toNode}"] [data-port="${toPort}"][data-side="in"]');
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    })()`);
+    if (!from || !to) return false;
+    await mouse('mousePressed', from.x, from.y);
+    await mouse('mouseMoved', from.x + 20, from.y + 20);
+    await sleep(80);
+    await mouse('mouseMoved', to.x, to.y);
+    await sleep(150);
+    await mouse('mouseReleased', to.x, to.y);
+    await sleep(450);
+    return true;
+  };
+
   const setParam = async (label, value) => evaluate(`(() => {
     const row = [...document.querySelectorAll('label.bp-param')]
       .find((l) => l.querySelector('span')?.textContent === ${JSON.stringify(label)});
@@ -225,24 +249,27 @@ async function main() {
   check('设置地址 0x100', addrSet);
   await sleep(500);
 
-  // 节点卡默认只展示前 4 个元素端口；展开后检查完整 8 项。
-  await evaluate(`document.querySelector('[data-node-id="${arrayId}"] .bp-expand')?.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}))`);
-  await sleep(200);
-  const arrayRows = await evaluate(`document.querySelector('[data-node-id="${arrayId}"]')?.querySelectorAll('.bp-element-row').length ?? 0`);
-  check('0x100 解析出 8 个 Entry', arrayRows === 8, `${arrayRows} 行`);
-
-  await click(`[data-node-id="${arrayId}"] .bp-element-row`);
-  await sleep(320);
-  const fields = await evaluate(`(() => {
-    const rows = [...document.querySelectorAll('.bp-ft .ft-row')].map((tr) => ({
-      name: tr.querySelector('.ft-name')?.textContent,
-      val: tr.querySelector('.ft-val')?.textContent,
-    }));
-    return rows;
+  const arrayInfo = await evaluate(`(() => {
+    const el = document.querySelector('[data-node-id="${arrayId}"]');
+    return { rows: el?.querySelectorAll('.bp-element-row').length ?? 0, text: el?.textContent ?? '' };
   })()`);
-  const nameRow = fields.find((f) => f.name === 'name');
-  check('检查器列出 Entry 字段', fields.length >= 6, fields.map((f) => f.name).join(','));
-  check('Entry#0 的 name = free-0', String(nameRow?.val).replace(/^"|"$/g, '') === 'free-0', JSON.stringify(nameRow));
+  check('数组节点不铺元素行，只显示集合数量',
+    arrayInfo.rows === 0 && /共 8 项/.test(arrayInfo.text), `${arrayInfo.rows} 行`);
+
+  await click(`[data-node-id="${arrayId}"] .bp-node-foot-link`);
+  await sleep(400);
+  const treeRows = await evaluate(`document.querySelectorAll('.bp-tree-row').length`);
+  check('结构树打开并显示数组内容', treeRows >= 8, `${treeRows} 行`);
+  await evaluate(`(() => {
+    const row = [...document.querySelectorAll('.bp-tree-row')]
+      .find((r) => r.querySelector('.bp-tree-name')?.textContent.includes('[0]'));
+    row?.querySelector('.bp-tree-chev')?.click();
+  })()`);
+  await sleep(300);
+  const treeText = await evaluate(`document.querySelector('.bp-tree')?.innerText ?? ''`);
+  check('结构树展开 Entry#0 显示 free-0', treeText.includes('free-0'), treeText.slice(0, 140));
+  await click('button[aria-label="关闭结构视图"]');
+  await sleep(200);
 
   /* ------------------------------------ 4. 沿 next 走完整条链（4 项，0x130 起） */
   const listId = await addFromPalette('Entry 链表');
@@ -259,61 +286,9 @@ async function main() {
       badge: !!el.querySelector('.bp-node-badge'),
     };
   })()`);
-  check('链表从 0x130 走完 4 项（2→5→1→7）', listInfo?.rows === 4, JSON.stringify(listInfo?.rows));
+  check('链表节点不铺元素行，只显示集合数量',
+    listInfo?.rows === 0 && /共 4 项/.test(listInfo?.text ?? ''), JSON.stringify(listInfo?.rows));
   check('链表求值无节点错误', listInfo?.badge === false, String(listInfo?.badge));
-
-  /* --------------------------------------- 5. 从 next 字段跟随到下一元素地址 */
-  await click(`[data-node-id="${listId}"] .bp-element-row`);
-  await sleep(320);
-  const nextRow = await evaluate(`(() => {
-    const tr = [...document.querySelectorAll('.bp-ft .ft-row')].find(r => r.querySelector('.ft-name')?.textContent === 'next');
-    if (!tr) return null;
-    const b = tr.getBoundingClientRect();
-    return { x: b.left + b.width / 2, y: b.top + b.height / 2 };
-  })()`);
-  check('链表首元素可展开 next 字段', !!nextRow, JSON.stringify(nextRow));
-  // 先点一下行把高亮钉住：工具条在悬停时插入，鼠标移开行就会消失。
-  await mouse('mousePressed', nextRow.x, nextRow.y);
-  await mouse('mouseReleased', nextRow.x, nextRow.y);
-  await sleep(220);
-  const followBtn = await rect('.bp-ft-btn.go');
-  check('next 字段出现「在此解析」按钮', !!followBtn);
-  const btnTitle = await evaluate(`document.querySelector('.bp-ft-btn.go')?.getAttribute('title') ?? ''`);
-  check('按钮按转换后的地址 0x178 跟随', /0x178/.test(btnTitle), String(btnTitle));
-  await mouse('mousePressed', followBtn.x, followBtn.y);
-  await mouse('mouseReleased', followBtn.x, followBtn.y);
-  await sleep(400);
-  const overlay = await evaluate(`(() => {
-    const el = document.querySelector('.bp-follow');
-    return el ? { head: el.querySelector('.bp-follow-head b')?.textContent,
-      smart: el.querySelector('.bp-follow-smart')?.textContent } : null;
-  })()`);
-  check('跟随浮层指向 0x178', overlay?.head === '0x178', JSON.stringify(overlay));
-  const beforeNodes = await evaluate(`document.querySelectorAll('.bp-node').length`);
-  await chord('Enter', 'Enter', 13);
-  await sleep(450);
-  const created = await evaluate(`(() => {
-    const nodes = [...document.querySelectorAll('.bp-node')];
-    const el = nodes.at(-1);
-    return {
-      count: nodes.length,
-      id: el?.dataset.nodeId,
-      kind: el?.dataset.nodeKind,
-      title: el?.querySelector('.bp-node-title')?.textContent,
-      text: el?.textContent ?? '',
-    };
-  })()`);
-  check('Enter 在 0x178 新建元素解析节点',
-    created?.count === beforeNodes + 1 && created.kind === 'element', JSON.stringify(created));
-  check('新节点标题为「元素 · Entry」', created?.title === '元素 · Entry', String(created?.title));
-  await click(`[data-node-id="${created?.id}"] .bp-node-head`);
-  await sleep(320);
-  const addrText = await evaluate(`(() => {
-    const row = [...document.querySelectorAll('.bp-inspector .bp-kv')]
-      .find((r) => r.querySelector('span')?.textContent === '地址');
-    return row?.querySelector('b')?.textContent ?? '';
-  })()`);
-  check('新节点地址为 0x178', addrText === '0x178', String(addrText));
 
   /* ------------------------------------------------------- 6. 控制台无错误 */
   const bad = events.filter((e) => e.method === 'Log.entryAdded'

@@ -294,51 +294,26 @@ async function main() {
   await sleep(100);
 
   /* --------------------------------- 6e. 逆向主链路：跟随地址与导航历史 */
-  // 回归：元素端口的值是 InstanceView（不是 number），双击必须取它的 addr；
-  // 曾经只认 number，导致提示「该值不是缓冲区内的有效地址」。
-  const elemPort = await evaluate(`(() => {
-    const el = document.querySelector('[data-node-id="n_sq"] .bp-element-row [data-port^="elem:"][data-side="out"]');
+  // 节点卡不再铺 elem:N 行；集合内容用元素解析或结构树查看。
+  const elemRows = await evaluate(`document.querySelectorAll('[data-node-id="n_sq"] .bp-element-row').length`);
+  check('节点卡不铺未接线的元素行', elemRows <= 1, `${elemRows} 行（仅保留已接线）`);
+  const listPort = await evaluate(`(() => {
+    const el = document.querySelector('[data-node-id="n_sq"] .bp-out-row [data-port="list"][data-side="out"]');
     if (!el) return null;
     const r = el.getBoundingClientRect();
-    const x = r.left + r.width / 2, y = r.top + r.height / 2;
-    const hit = document.elementFromPoint(x, y);
-    return { x, y, port: el.getAttribute('data-port'), reachable: !!hit && (hit === el || hit.contains(el)) };
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
   })()`);
-  check('元素端口已渲染且可命中', !!elemPort && elemPort.reachable, JSON.stringify(elemPort));
-  if (elemPort && elemPort.reachable) {
-    const dbl = async () => {
-      await mouse('mousePressed', elemPort.x, elemPort.y, { clickCount: 1 });
-      await mouse('mouseReleased', elemPort.x, elemPort.y, { clickCount: 1 });
-      await mouse('mousePressed', elemPort.x, elemPort.y, { clickCount: 2 });
-      await mouse('mouseReleased', elemPort.x, elemPort.y, { clickCount: 2 });
-      await sleep(200);
-    };
-    await dbl();
-    const elemFollow = await evaluate(`document.querySelector('.bp-follow')?.textContent ?? ''`);
-    check('双击元素端口按元素地址打开跟随浮层',
-      /在此地址解析/.test(elemFollow) && /0x1000/.test(elemFollow),
-      String(elemFollow).slice(0, 80));
-    await chord('Escape', 'Escape', 27);
-    await sleep(140);
-
-    const listPort = await evaluate(`(() => {
-      const el = document.querySelector('[data-node-id="n_sq"] .bp-out-row [data-port="list"][data-side="out"]');
-      if (!el) return null;
-      const r = el.getBoundingClientRect();
-      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-    })()`);
-    if (listPort) {
-      await mouse('mousePressed', listPort.x, listPort.y, { clickCount: 1 });
-      await mouse('mouseReleased', listPort.x, listPort.y, { clickCount: 1 });
-      await mouse('mousePressed', listPort.x, listPort.y, { clickCount: 2 });
-      await mouse('mouseReleased', listPort.x, listPort.y, { clickCount: 2 });
-      await sleep(200);
-      const hint = await evaluate(`document.querySelector('.toast')?.textContent ?? ''`);
-      const stillOpen = await evaluate(`!!document.querySelector('.bp-follow')`);
-      check('列表端口双击给出「展开后双击单个元素」提示',
-        !stillOpen && /展开后双击单个元素/.test(hint), String(hint).slice(0, 80));
-      await sleep(1400); // 等 toast 退场，避免影响后续断言
-    }
+  if (listPort) {
+    await mouse('mousePressed', listPort.x, listPort.y, { clickCount: 1 });
+    await mouse('mouseReleased', listPort.x, listPort.y, { clickCount: 1 });
+    await mouse('mousePressed', listPort.x, listPort.y, { clickCount: 2 });
+    await mouse('mouseReleased', listPort.x, listPort.y, { clickCount: 2 });
+    await sleep(200);
+    const hint = await evaluate(`document.querySelector('.toast')?.textContent ?? ''`);
+    const stillOpen = await evaluate(`!!document.querySelector('.bp-follow')`);
+    check('列表端口双击提示改用元素解析/结构树',
+      !stillOpen && /元素解析|结构树/.test(hint), String(hint).slice(0, 80));
+    await sleep(1400);
   }
 
   const basePort = await evaluate(`(() => {

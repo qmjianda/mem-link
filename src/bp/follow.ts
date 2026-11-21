@@ -34,7 +34,7 @@ export function followAddress(value: unknown): AddressInt | null {
 /** 为什么这个端口不能跟随（null 表示可以跟随）。 */
 export function followHint(value: unknown): string {
   if (typeof value === 'number' || typeof value === 'bigint' || isInstanceView(value)) return '地址计算结果无效';
-  if (Array.isArray(value)) return '列表端口有多个元素地址——展开后双击单个元素';
+  if (Array.isArray(value)) return '列表包含多个元素——接「元素解析」或用结构树查看单个元素';
   if (isBufferValue(value)) return '缓冲区端口不是单个地址——请双击 base 端口';
   if (typeof value === 'string') return '字符串不是地址';
   if (typeof value === 'boolean') return '布尔值不是地址';

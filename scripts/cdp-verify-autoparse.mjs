@@ -107,11 +107,20 @@ try {
   assert.ok(/文件偏移\s*64/.test(program) && /数量\s*2/.test(program), program.slice(0, 160));
   console.log('PASS  程序头表自动接到 phoff/phnum 并读出 2 项');
 
-  await ready(`!!document.querySelector('[data-node-id="n101"] .bp-expand')`, '嵌套字段折叠入口');
-  assert.ok((await evaluate(`document.querySelector('[data-node-id="n101"] .bp-expand')?.textContent ?? ''`)).includes('展开嵌套字段'));
-  await evaluate(`document.querySelector('[data-node-id="n101"] .bp-expand')?.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}))`);
-  await ready(`document.querySelector('[data-node-id="n101"]')?.innerText.includes('ident.magic')`, '展开嵌套字段');
-  console.log('PASS  节点卡默认折叠嵌套字段，展开后可见 ident.magic');
+  assert.equal(await evaluate(`document.querySelectorAll('.bp-expand').length`), 0);
+  assert.equal(await evaluate(`document.querySelectorAll('[data-node-id="n103"] .bp-element-row').length`), 0);
+  assert.ok((await evaluate(`document.querySelector('[data-node-id="n103"] .bp-node-foot')?.textContent ?? ''`)).includes('共 2 项'));
+  assert.ok(!(await evaluate(`document.querySelector('[data-node-id="n101"]')?.innerText ?? ''`)).includes('ident.magic'));
+  await evaluate(`document.querySelector('[data-node-id="n101"] .bp-node-open')?.click()`);
+  await ready(`!!document.querySelector('.bp-tree')`, '打开结构树');
+  assert.ok((await evaluate(`document.querySelector('.bp-tree')?.innerText ?? ''`)).includes('ident'));
+  await evaluate(`(() => {
+    const row = [...document.querySelectorAll('.bp-tree-row')]
+      .find((r) => r.querySelector('.bp-tree-name')?.textContent.includes('ident'));
+    row?.querySelector('.bp-tree-chev')?.click();
+  })()`);
+  await ready(`document.querySelector('.bp-tree')?.innerText.includes('魔数')`, '结构树展开 ident');
+  console.log('PASS  节点卡只保留字段名，集合/嵌套内容在结构树中查看');
 
   assert.deepEqual(errors, []);
   console.log('\nOK  autoparse verification passed');

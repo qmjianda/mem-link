@@ -638,12 +638,6 @@ button.bp-fold:hover { color: var(--text); border-color: var(--line-2); backgrou
 .bp-element-i { min-width: 0; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent); font-size: 9px; }
 .bp-element-hint { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); font-size: 9px; }
 .bp-port.out.sm { width: 8px; height: 8px; margin-top: -4px; }
-.bp-expand {
-  position: absolute; left: 9px; right: 9px; height: 18px; padding: 0;
-  border: 0; border-top: 1px dashed var(--line); background: transparent;
-  color: var(--accent); font: inherit; font-size: 9px; cursor: pointer; text-align: left;
-}
-.bp-expand:hover { color: var(--text); }
 .bp-node-foot { position: absolute; left: 9px; right: 9px; font-size: 9px; color: var(--amber); padding-top: 5px; word-break: break-word; }
 .bp-node-foot-link {
   margin-left: 6px; padding: 0; border: 0; background: transparent;
