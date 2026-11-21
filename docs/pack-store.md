@@ -102,9 +102,10 @@ purge 接口刷新 `@main` 缓存。拉取失败时会依次回退到 GitHub Pag
 > [`.agents/skills/mem-link-pack-authoring/SKILL.md`](../.agents/skills/mem-link-pack-authoring/SKILL.md)：
 > 它记录了 endian、保留字、空类型、数组括号、辅助节点与发布的已知坑。
 >
-> 许可分层：手工 pack 为 MIT；Nybble 派生 pack 按上游声明可自由使用/再分发；
-> ImHex 派生 pack 为 **GPL-2.0-or-later**，与 mem-link 根目录的专有许可分开。
-> 完整文本见 [`store/licenses/GPL-2.0-or-later.txt`](../store/licenses/GPL-2.0-or-later.txt)
+> 许可分层：手工 pack 为 MIT；Nybble 派生 pack 按上游 README 声明可自由
+> 使用/再分发（除非该 pack 另有说明）；ImHex 派生 pack 为 **GPL-2.0-only**
+> （上游识别为 GPL-2.0，不是 or-later），与 mem-link 根目录的专有许可分开。
+> 完整文本见 [`store/licenses/GPL-2.0-only.txt`](../store/licenses/GPL-2.0-only.txt)
 > 与 [`store/NOTICE.md`](../store/NOTICE.md)。
 
 当前 `store/` 有 377 个 pack：

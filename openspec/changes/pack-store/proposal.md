@@ -29,5 +29,5 @@ mem-link 的 pack 一直靠用户自己找、自己下载 `.bp.ts`、再拖进�
 - **应用**：新增 `src/bp/store.ts`、`src/bp/PackStore.tsx`；`BlueprintApp` 挂载浮层与安装提交；`LoadedPack`/`BPDoc`/持久化增加可选 `store` 元数据；`Palette` 与顶栏增加入口。
 - **内容**：主仓库新增 `store/`；独立仓库 `mem-link-packs` 由 `scripts/publish-pack-store.mjs` 发布。
 - **联网边界**：只有打开商店、安装/更新时发起网络请求；其它解析与求值保持本地。已安装内容离线可用。
-- **许可**：手工 pack MIT；Nybble 派生按上游声明；ImHex 派生 GPL-2.0-or-later，单独保留许可文本。
+- **许可**：手工 pack MIT；Nybble 派生按上游声明；ImHex 派生 GPL-2.0-only，单独保留许可文本。
 - **测试**：`tests/store-packs.test.ts` 加载全部 377 个 pack；`tests/pack-store.test.ts` 覆盖 URL、索引、版本、哈希、镜像回退；持久化测试覆盖 `store` 元数据往返。

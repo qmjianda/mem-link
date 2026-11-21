@@ -9,7 +9,9 @@ import reactHooks from 'eslint-plugin-react-hooks';
  */
 export default tseslint.config(
   {
-    ignores: ['dist/**', 'node_modules/**', '.cache/**', 'samples/**', 'scripts/**'],
+    // store/ 是独立发布的 pack 子项目：生成文件多、许可与格式检查由
+    // store/scripts/build-index.mjs 与 tests/store-packs.test.ts 负责。
+    ignores: ['dist/**', 'node_modules/**', '.cache/**', 'samples/**', 'scripts/**', 'store/**'],
   },
   ...tseslint.configs.recommended,
   {

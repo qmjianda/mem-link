@@ -109,10 +109,28 @@ pnpm packs:publish     # 同步到独立商店仓库（需先 gh auth）
 ```
 
 `store/` 下手工 pack 为 MIT；Nybble 派生 pack 按上游声明可自由使用/再分发；
-ImHex 派生 pack 为 **GPL-2.0-or-later**（与仓库根目录的专有许可分开），完整文本
+ImHex 派生 pack 为 **GPL-2.0-only**（与仓库根目录的专有许可分开），完整文本
 与来源见 [`store/NOTICE.md`](store/NOTICE.md)。
 
 详见 [`docs/pack-store.md`](docs/pack-store.md)。
+
+### 许可与第三方组件
+
+- **主程序**：`src/`、`tests/`、`scripts/`、`docs/`、`samples/` 等按仓库根目录
+  [`LICENSE`](LICENSE) 分发；仓库可见不等于获得使用授权。
+- **Pack 商店内容**：`store/` 与主程序分开授权。手工 pack 为 MIT；Nybble
+  派生 pack 按上游声明使用/再分发；ImHex 派生 pack 为 **GPL-2.0-only**
+  （上游实际为 GPL-2.0，不是 `or-later`），完整文本见
+  [`store/licenses/GPL-2.0-only.txt`](store/licenses/GPL-2.0-only.txt)，来源与
+  修改说明见 [`store/NOTICE.md`](store/NOTICE.md)。
+- **运行时第三方组件**：构建产物内联了 React、ReactDOM、Scheduler、Sucrase、
+  `@jridgewell/*`、`lines-and-columns`（均为 MIT）。完整版权与许可文本见
+  [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)。
+- **构建/测试工具**：Vite、esbuild、Vitest、ESLint、typescript-eslint 等
+  （MIT），TypeScript（Apache-2.0），同样列在
+  [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) 中。
+- **名称**：ImHex、Nybble 及各文件格式名称属于各自权利人；本项目仅用于说明
+  格式来源，不代表隶属或背书。
 
 **不写 pack 的用法**：载入转储后添加「读结构」，在检查器新建结构布局、填写字段名、偏移和类型。数组及链表可引用同一布局；改字段名不会断开连线。试读选中字节、切换进制／时间／枚举／标志位都不改变图。需要把某个位接出去时，在布局中定义具名位段。
 

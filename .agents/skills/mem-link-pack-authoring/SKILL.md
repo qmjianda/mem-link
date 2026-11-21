@@ -155,7 +155,7 @@ node store/scripts/port-imhex.mjs --root store --src .cache/ImHex-Patterns-maste
 
 - ImHex 是 C 风格语言，先保护字符串/注释，再剥属性/函数/预处理。
 - 动态控制流处停止静态布局，但保留已确定前缀。
-- 每个 ImHex 派生 pack 的 `license` 必须是 `GPL-2.0-or-later`，并保留 `source.path`。
+- 每个 ImHex 派生 pack 的 `license` 必须是 `GPL-2.0-only`，并保留 `source.path`。
 
 ### 4.3 校验
 
@@ -185,7 +185,7 @@ node scripts/publish-pack-store.mjs          # 推送 + 自动 purge jsDelivr
 
 - 手工 pack：MIT。
 - Nybble registry：上游声明可自由使用/再分发；保留 `meta.source` 与 `author`。
-- ImHex-Patterns：GPL-2.0-or-later；保留 `store/licenses/GPL-2.0-or-later.txt` 与每个 pack 的上游路径。
+- ImHex-Patterns：GPL-2.0-only；保留 `store/licenses/GPL-2.0-only.txt` 与每个 pack 的上游路径。
 - 不得把 GPL 派生 pack 重新标成 MIT；不得删除来源注释。
 
 ## 6. 文件地图
@@ -213,6 +213,6 @@ tests/pack-store.test.ts        URL/索引/哈希/镜像
 - [ ] `meta.json` 有 `coverage`、`source`、许可、作者；有辅助节点时写 `helpers`。
 - [ ] `index.json` 与 pack 一致，SHA-256/大小已更新。
 - [ ] 商店 UI 显示辅助节点数量，而不是只显示“部分布局”。
-- [ ] 来源/许可未被改写；ImHex 派生仍是 GPL-2.0-or-later。
+- [ ] 来源/许可未被改写；ImHex 派生仍是 GPL-2.0-only。
 - [ ] 发布后 jsDelivr 返回的 pack 数正确。
 - [ ] 主仓库改动未擅自提交；商店仓库推送与 purge 已完成。
