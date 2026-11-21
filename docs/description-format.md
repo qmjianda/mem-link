@@ -268,6 +268,8 @@ calcNode({
 | 校验 | `checksum`、`assert` | 计算校验和、判断相等或闭区间 |
 | 辅助 | `number`、`string`、`note`、`expr` | 常量、便签与数值表达式 |
 
+**端口颜色**：所有端口、连线和节点库圆点使用同一套类型色：数值（青）、地址（蓝）、对象（紫）、列表（橙）、字节（黄）、文本（粉）、数据源（灰）、布尔（绿）。节点库圆点表示该节点的主要输出类型；开始拖线时兼容端口会亮起，其他端口变暗。
+
 **结构来源**：`structread` / `arrayread` / `listread` 的结构选择器同时列出本图布局和已启用 pack 的类型。`structureId` 是唯一参数：布局为 `layout/<id>`，pack 类型为 `pack/<encodedPackId>/<encodedTypeName>`。
 
 ## 6.1 一键解析（ELF）

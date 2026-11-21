@@ -15,6 +15,7 @@ import { formatKeys } from './keys';
 import { parseOffsetChain } from './builtins';
 import { elementFollowItem, type FollowItem, type FollowTypeHint } from './follow';
 import { addressHex, type AddressInt } from './precision';
+import { portColor } from './portColors';
 import type { BufferValue } from './types';
 import { useModalFocus } from './ModalFocus';
 
@@ -59,6 +60,17 @@ interface Props {
   onPreview?: (offsets: bigint[], width: 4 | 8, buffer?: BufferValue) => FollowPreview | null;
   onPick: (item: FollowItem, offsets: bigint[], width: 4 | 8, buffer?: BufferValue) => void;
   onClose: () => void;
+}
+
+function followDot(item: FollowItem): string {
+  switch (item.group) {
+    case '结构体': case '集合': case '推荐': return portColor('instance');
+    case '链表': case '数组': return portColor('list');
+    case '定位': return portColor('address');
+    case '校验': return portColor('boolean');
+    case '数据源': return portColor('buffer');
+    default: return portColor('number');
+  }
 }
 
 export default function FollowPicker({
@@ -291,7 +303,7 @@ export default function FollowPicker({
                     onPointerEnter={() => { if (pointerMoved.current) setActive(i); }}
                     onClick={() => pick(item)}
                   >
-                    <span className="bp-pal-dot" data-kind="解析" />
+                    <span className="bp-pal-dot" style={{ background: followDot(item) }} />
                     <span className="bp-quick-label">{item.label}</span>
                     <em>{item.detail}</em>
                   </div>
@@ -311,7 +323,7 @@ export default function FollowPicker({
                   onPointerEnter={() => { if (pointerMoved.current) setActive(i); }}
                   onClick={() => pick(item)}
                 >
-                  <span className="bp-pal-dot" data-kind="解析" />
+                  <span className="bp-pal-dot" style={{ background: followDot(item) }} />
                   <span className="bp-quick-label">{item.label}</span>
                   <em>{item.detail}</em>
                 </button>

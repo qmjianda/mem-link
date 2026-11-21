@@ -550,6 +550,7 @@ async function main() {
     const el = [...document.querySelectorAll('.bp-pal-item')]
       .find(b => b.textContent.includes('标注'));
     if (!el) return null;
+    el.scrollIntoView({ block: 'center' });
     const r = el.getBoundingClientRect();
     return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
   })()`);
@@ -880,6 +881,7 @@ async function main() {
     const el = [...document.querySelectorAll('.bp-pal-item')]
       .find(b => b.textContent.includes('读数值'));
     if (!el) return null;
+    el.scrollIntoView({ block: 'center' });
     const r = el.getBoundingClientRect();
     return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
   })()`);

@@ -101,7 +101,7 @@ export default function QuickAdd({ packs, onPick, onHelp, onClose }: Props) {
               onPointerEnter={() => setActive(i)}
               onClick={() => pick(item)}
             >
-              <span className="bp-pal-dot" data-kind={item.kind} />
+              <span className="bp-pal-dot" data-kind={item.kind} style={{ background: item.color }} title={`主要输出：${item.colorLabel}`} />
               <span className="bp-quick-label">{item.label}</span>
               <em>{item.kind}</em>
               {item.packId && <i>{packNames.get(item.packId) ?? item.packId}</i>}

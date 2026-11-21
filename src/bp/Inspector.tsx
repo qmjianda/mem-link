@@ -15,6 +15,7 @@ import type { StructureRegistry } from './structure';
 import type { LayoutUsageIndex } from './designer/usage';
 import StructureSummary from './StructureSummary';
 import InterpretValue, { ByteProbe } from './InterpretValue';
+import { portColor, portTypeLabel } from './portColors';
 
 interface Props {
   packs: Map<string, BlueprintPack>;
@@ -944,7 +945,10 @@ export default function Inspector({
                       const iv = result.inputs.get(node.id)?.[p.name];
                       return (
                         <label key={p.name} className="bp-param">
-                          <span>{p.label}</span>
+                          <span className="bp-param-label">
+                            <i className="bp-type-dot" style={{ background: portColor(p.type) }} title={portTypeLabel(p.type)} />
+                            {p.label}
+                          </span>
                           {iv?.wired ? (
                             <span className="bp-insp-wired">
                               <span className="mono" title={iv.from ? `来自 ${iv.from.label}` : '来自上游'}>

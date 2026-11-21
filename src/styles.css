@@ -15,6 +15,16 @@
   --red: #f2707a;
   --violet: #a78bfa;
   --blue: #61a8f5;
+  --type-number: #4ed8c0;
+  --type-address: #61a8f5;
+  --type-offset: #7dd3fc;
+  --type-index: #38bdf8;
+  --type-string: #f472b6;
+  --type-bytes: #f0b45f;
+  --type-boolean: #a3e635;
+  --type-instance: #a78bfa;
+  --type-list: #f59e0b;
+  --type-buffer: #94a3b8;
   --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, "Liberation Mono", monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
 }
@@ -1449,3 +1459,39 @@ button.bp-hist.bp-nav { font-size: 17px; line-height: 1; }
 .bp-autoparse-btn:hover { border-color: var(--accent); background: rgba(78, 216, 192, 0.13); }
 .bp-autoparse-btn b { font-size: 11px; font-weight: 650; }
 .bp-autoparse-btn span { color: var(--dim); font-size: 9px; line-height: 1.4; }
+
+/* Port type language: one color/label everywhere. */
+.bp-type-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 9px;
+  padding: 0 10px 7px;
+  color: var(--dim);
+  font-size: 9px;
+}
+.bp-type-legend-title { color: var(--text-2); font-weight: 600; }
+.bp-type-legend span { display: inline-flex; align-items: center; gap: 3px; }
+.bp-type-legend i, .bp-type-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+.bp-param-label { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
+.bp-port.ok { box-shadow: 0 0 0 4px rgba(255, 255, 255, .34), 0 0 14px rgba(255, 255, 255, .22); transform: scale(1.35); }
+.bp-port.no { opacity: .2; filter: saturate(.4); }
+.bp-pending-hint {
+  position: absolute;
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 270px;
+  padding: 5px 7px;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  background: rgba(15, 20, 28, .94);
+  color: var(--text-2);
+  font-size: 9px;
+  line-height: 1.4;
+  pointer-events: none;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, .35);
+}
+.bp-pending-hint i { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+.bp-pending-hint b { color: var(--text); font-weight: 600; }

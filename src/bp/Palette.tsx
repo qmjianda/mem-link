@@ -5,6 +5,7 @@ import type { LoadedPack } from './docstate';
 import { isPackEnabled } from './docstate';
 import type { PackImpact } from './packops';
 import { IconChevron } from '../ui/icons';
+import { BUILTIN_PRIMARY_TYPE, PORT_LEGEND, nodePrimaryType, portColor, portTypeLabel } from './portColors';
 
 /** 文档层定义，这里只做转出，避免组件之间互相依赖 */
 export type { LoadedPack };
@@ -34,7 +35,12 @@ interface Props {
   onHelp: (packId: string, nodeId: string) => void;
 }
 
-export interface PalItem { packId: string; nodeId: string; label: string; kind: string; hint?: string }
+export interface PalItem {
+  packId: string; nodeId: string; label: string; kind: string; hint?: string;
+  /** Primary output type, used for the node-library color dot. */
+  color: string;
+  colorLabel: string;
+}
 
 interface Group {
   key: string;
@@ -51,15 +57,20 @@ export function kindName(def: NodeDef): string {
 
 /** 内置节点 + 每个 pack 的节点清单（节点库与快速添加共用同一份） */
 export function nodeItemsOf(packs: LoadedPack[]): PalItem[] {
-  const out: PalItem[] = BUILTIN_DEFS.map((d) => ({
-    packId: '', nodeId: d.id, label: d.label, kind: d.group, hint: d.hint,
-  }));
+  const out: PalItem[] = BUILTIN_DEFS.map((d) => {
+    const type = BUILTIN_PRIMARY_TYPE[d.id] ?? 'number';
+    return {
+      packId: '', nodeId: d.id, label: d.label, kind: d.group, hint: d.hint,
+      color: portColor(type), colorLabel: portTypeLabel(type),
+    };
+  });
   for (const p of packs) {
     if (!isPackEnabled(p)) continue;   // 禁用的 pack 不出现在快速添加里
     for (const [key, def] of Object.entries(p.pack.nodes)) {
+      const type = nodePrimaryType(def.kind);
       out.push({
         packId: p.id, nodeId: key, label: def.label ?? key, kind: kindName(def),
-        hint: def.description,
+        hint: def.description, color: portColor(type), colorLabel: portTypeLabel(type),
       });
     }
   }
@@ -92,13 +103,18 @@ export default function Palette({
       items: builtins.filter((i) => i.kind === name),
     }));
     for (const p of packs) {
-      const items = Object.entries(p.pack.nodes).map(([key, def]) => ({
-        packId: p.id,
-        nodeId: key,
-        label: def.label ?? key,
-        kind: kindName(def),
-        hint: def.description,
-      }));
+      const items = Object.entries(p.pack.nodes).map(([key, def]) => {
+        const type = nodePrimaryType(def.kind);
+        return {
+          packId: p.id,
+          nodeId: key,
+          label: def.label ?? key,
+          kind: kindName(def),
+          hint: def.description,
+          color: portColor(type),
+          colorLabel: portTypeLabel(type),
+        };
+      });
       out.push({
         key: p.id,
         title: p.name,
@@ -144,6 +160,12 @@ export default function Palette({
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
+      </div>
+      <div className="bp-type-legend" title="端口颜色表示数据类型；接线时兼容端口会高亮，其他会变暗">
+        <span className="bp-type-legend-title">端口颜色</span>
+        {PORT_LEGEND.map((t) => (
+          <span key={t.type}><i style={{ background: portColor(t.type) }} />{t.label}</span>
+        ))}
       </div>
       <div className="bp-pal-body">
         <div className="bp-pack-import">
@@ -271,7 +293,7 @@ export default function Palette({
                         }}
                         onClick={() => { if (!shouldIgnoreAdd()) onAdd(i.packId, i.nodeId); }}
                       >
-                        <span className="bp-pal-dot" data-kind={i.kind} />
+                        <span className="bp-pal-dot" data-kind={i.kind} style={{ background: i.color }} title={`主要输出：${i.colorLabel}`} />
                         <span className="bp-pal-label">{i.label}</span>
                         <span className="bp-pal-kind">{i.kind}</span>
                       </button>

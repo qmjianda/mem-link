@@ -7,6 +7,7 @@ import { addressHex, isExactPort, isMappedAddress } from './precision';
 import { isByteSpan } from './binary-read';
 import { focusFromTruncation, type TreeFocus } from './tree';
 import { builtinSubtitle } from './builtins';
+import { BUILTIN_PRIMARY_TYPE, PORT_COLORS, nodePrimaryType, portColor, portConnectHint, portTypeLabel } from './portColors';
 import { portsFor } from './eval';
 import {
   clampNoteH, clampNoteW, isNoteNode, noteSize, noteTextHeight, NOTE_DEFAULT_H,
@@ -153,6 +154,7 @@ const ITEM_H = 21;
 const NODE_W = NODE_WIDTH;
 /** element ports shown before the "expand" button */
 const VISIBLE_ELEMENTS = 4;
+const ARROW_TYPES = Object.keys(PORT_COLORS) as PortType[];
 const EXPAND_H = 20;
 
 interface PortPos {
@@ -313,6 +315,12 @@ function metaFor(
   };
 }
 
+function nodeAccent(node: BPNode, packs: Map<string, BlueprintPack>): string {
+  if (!node.packId) return portColor(BUILTIN_PRIMARY_TYPE[node.nodeId] ?? 'number');
+  const def = packs.get(node.packId)?.nodes[node.nodeId];
+  return def ? portColor(nodePrimaryType(def.kind)) : 'var(--accent)';
+}
+
 function valueText(v: unknown): string {
   if (v == null) return '∅';
   if (isMappedAddress(v)) return addressHex(v.value);
@@ -345,18 +353,6 @@ function contextSourceTitle(src?: SourceInfo): string {
   }
 }
 
-function typeColor(t: PortType): string {
-  switch (t) {
-    case 'number': return 'var(--accent)';
-    case 'string': return 'var(--violet)';
-    case 'bytes': return 'var(--amber)';
-    case 'boolean': return '#7dd3fc';
-    case 'list': return '#f0b45f';
-    case 'instance': return '#c4b5fd';
-    case 'buffer': return '#94a3b8';
-    default: return '#94a3b8';
-  }
-}
 
 /**
  * 节点标题就地重命名：Enter / 失焦提交一次，Esc 取消。
@@ -1248,9 +1244,11 @@ export default function Canvas({
         )}
         <svg className="bp-edges" width={4000} height={3000} aria-hidden>
           <defs>
-            <marker id="bp-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-              <path d="M 0 0 L 10 5 L 0 10 z" fill="#4ed8c0" />
-            </marker>
+            {ARROW_TYPES.map((t) => (
+              <marker key={t} id={`bp-arrow-${t}`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill={portColor(t)} />
+              </marker>
+            ))}
           </defs>
           {edges.map((e) => {
             if (!visibleEdges.has(e.id)) return null;
@@ -1267,12 +1265,12 @@ export default function Canvas({
                   data-edge-from={`${e.from.node}:${e.from.port}`}
                   data-edge-to={`${e.to.node}:${e.to.port}`}
                   className={`bp-edge ${hot ? 'hot' : ''}${isPrimary ? ' primary' : ''} ${e.to.port === 'buffer' ? 'ctx' : ''}`}
-                  style={{ stroke: typeColor(a.p.type) }}
-                  markerEnd={lod === 'minimal' ? undefined : 'url(#bp-arrow)'}
+                  style={{ stroke: portColor(a.p.type) }}
+                  markerEnd={lod === 'minimal' ? undefined : `url(#bp-arrow-${a.p.type})`}
                   onPointerDown={edgeDown(e.id)}
                 />
-                <circle data-edge-cap="a" cx={a.x} cy={a.y} r={2.6} fill={typeColor(a.p.type)} />
-                <circle data-edge-cap="b" cx={b.x} cy={b.y} r={2.6} fill={typeColor(b.p.type)} />
+                <circle data-edge-cap="a" cx={a.x} cy={a.y} r={2.6} fill={portColor(a.p.type)} />
+                <circle data-edge-cap="b" cx={b.x} cy={b.y} r={2.6} fill={portColor(b.p.type)} />
               </g>
             );
           })}
@@ -1289,6 +1287,14 @@ export default function Canvas({
             );
           })()}
         </svg>
+
+        {pending && (
+          <div className="bp-pending-hint" style={{ left: mouse.x + 14, top: mouse.y + 14 }}>
+            <i style={{ background: portColor(pending.type) }} />
+            <b>{portTypeLabel(pending.type)}</b>
+            <span>{portConnectHint(pending.type) || '松开接兼容端口'}</span>
+          </div>
+        )}
 
         {nodes.map((node) => {
           if (!visible.has(node.id)) return null;
@@ -1346,7 +1352,7 @@ export default function Canvas({
               }}
             >
               <div className="bp-node-head" onPointerDown={nodeHeadDown(node)}>
-                <span className="bp-node-dot" />
+                <span className="bp-node-dot" style={{ background: nodeAccent(node, packs) }} />
                 {renameId === node.id ? (
                   <NodeTitleInput
                     key={node.id}
@@ -1392,8 +1398,8 @@ export default function Canvas({
                       className={`bp-port in ${p.context ? 'ctx' : ''}${portHint(p, 'in', node.id)}`}
                       data-port={p.name}
                       data-side="in"
-                      style={{ top: p.y, background: typeColor(p.type) }}
-                      title={`输入 ${p.label}（${p.type}）`}
+                      style={{ top: p.y, background: portColor(p.type) }}
+                      title={`输入 ${p.label}（${portTypeLabel(p.type)} · ${p.type}）${portConnectHint(p.type) ? ` · ${portConnectHint(p.type)}` : ''}`}
                       onPointerDown={(e) => { e.stopPropagation(); portDown(node, p, 'in', e.clientX, e.clientY); }}
                     />
                   ))}
@@ -1403,8 +1409,8 @@ export default function Canvas({
                       className={`bp-port out${p.dynamic ? ' sm' : ''}${portHint(p, 'out', node.id)}`}
                       data-port={p.name}
                       data-side="out"
-                      style={{ top: p.y, background: typeColor(p.type) }}
-                      title={`输出 ${p.label}（${p.type}）· 双击跟随地址`}
+                      style={{ top: p.y, background: portColor(p.type) }}
+                      title={`输出 ${p.label}（${portTypeLabel(p.type)} · ${p.type}）${portConnectHint(p.type) ? ` · ${portConnectHint(p.type)}` : ' · 双击跟随地址'}`}
                       onPointerDown={(e) => { e.stopPropagation(); portDown(node, p, 'out', e.clientX, e.clientY); }}
                       onDoubleClick={followPort(node, p.name)}
                     />
@@ -1459,8 +1465,8 @@ export default function Canvas({
                         className={`bp-port in ${p.context ? 'ctx' : ''}${portHint(p, 'in', node.id)}`}
                         data-port={p.name}
                         data-side="in"
-                        style={{ background: typeColor(p.type) }}
-                        title={p.context ? '数据源：只有携带文件的来源能接；留空沿上游继承 · 双击跟随' : `输入 ${p.label}（${p.type}）· 双击跟随`}
+                        style={{ background: portColor(p.type) }}
+                        title={p.context ? '数据源：只有携带文件的来源能接；留空沿上游继承 · 双击跟随' : `输入 ${p.label}（${portTypeLabel(p.type)} · ${p.type}）${portConnectHint(p.type) ? ` · ${portConnectHint(p.type)}` : ' · 双击跟随'}`}
                         onPointerDown={(e) => { e.stopPropagation(); portDown(node, p, 'in', e.clientX, e.clientY); }}
                         onDoubleClick={followInPort(node, p.name)}
                       />
@@ -1496,7 +1502,9 @@ export default function Canvas({
                         onChange={(e) => onParam(node.id, p.name, e.target.value)}
                       />
                     ) : (
-                      <span className="bp-row-type">{p.type === 'instance' ? '接元素端口' : p.type}</span>
+                      <span className="bp-row-type" title={p.type}>
+                        {portTypeLabel(p.type)} · {p.type === 'instance' ? '接元素解析' : p.type === 'list' ? '接元素解析/取项' : '待连线'}
+                      </span>
                     )}
                   </div>
                 );
@@ -1525,8 +1533,8 @@ export default function Canvas({
                       className={`bp-port out${portHint(p, 'out', node.id)}`}
                       data-port={p.name}
                       data-side="out"
-                      title={`输出 ${p.label}（${p.type}）${p.type === 'instance' ? ' · 对象：接元素解析，或展开下方嵌套字段' : ' · 双击跟随地址'}`}
-                      style={{ background: typeColor(p.type) }}
+                      title={`输出 ${p.label}（${portTypeLabel(p.type)} · ${p.type}）${portConnectHint(p.type) ? ` · ${portConnectHint(p.type)}` : ' · 双击跟随地址'}`}
+                      style={{ background: portColor(p.type) }}
                       onPointerDown={(e) => { e.stopPropagation(); portDown(node, p, 'out', e.clientX, e.clientY); }}
                       onDoubleClick={followPort(node, p.name)}
                     />
@@ -1553,8 +1561,8 @@ export default function Canvas({
                       className={`bp-port out sm${portHint(p, 'out', node.id)}`}
                       data-port={p.name}
                       data-side="out"
-                      title={`输出 ${p.label} · 双击跟随地址`}
-                      style={{ background: typeColor(p.type) }}
+                      title={`输出 ${p.label}（${portTypeLabel(p.type)} · ${p.type}）${portConnectHint(p.type) ? ` · ${portConnectHint(p.type)}` : ' · 双击跟随地址'}`}
+                      style={{ background: portColor(p.type) }}
                       onPointerDown={(e) => { e.stopPropagation(); portDown(node, p, 'out', e.clientX, e.clientY); }}
                       onDoubleClick={followPort(node, p.name)}
                     />

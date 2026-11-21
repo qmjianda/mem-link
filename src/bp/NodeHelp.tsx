@@ -12,6 +12,7 @@ import { portsFor } from './eval';
 import type { BPNode, NodeDef, PortSpec } from './types';
 import { isPackEnabled, type LoadedPack } from './docstate';
 import { IconExternal, IconX } from '../ui/icons';
+import { portColor, portTypeLabel } from './portColors';
 
 interface Props {
   pack: LoadedPack;
@@ -143,8 +144,9 @@ export default function NodeHelp({ pack, nodeId, onClose, onOpenReference }: Pro
                 {ports.inputs.map((p) => (
                   <div className="bp-help-port" key={`in:${p.name}`}>
                     <span className="bp-help-dir in">入</span>
+                    <i className="bp-type-dot" style={{ background: portColor(p.type) }} title={portTypeLabel(p.type)} />
                     <b className="mono">{p.label ?? p.name}</b>
-                    <em className="mono">{p.type}</em>
+                    <em className="mono">{portTypeLabel(p.type)} · {p.type}</em>
                     {p.context && <i>数据源</i>}
                     {p.hint && <small>{p.hint}</small>}
                   </div>
@@ -152,8 +154,9 @@ export default function NodeHelp({ pack, nodeId, onClose, onOpenReference }: Pro
                 {ports.outputs.map((p) => (
                   <div className="bp-help-port" key={`out:${p.name}`}>
                     <span className="bp-help-dir out">出</span>
+                    <i className="bp-type-dot" style={{ background: portColor(p.type) }} title={portTypeLabel(p.type)} />
                     <b className="mono">{p.label ?? p.name}</b>
-                    <em className="mono">{p.type}</em>
+                    <em className="mono">{portTypeLabel(p.type)} · {p.type}</em>
                     {p.hint && <small>{p.hint}</small>}
                   </div>
                 ))}
